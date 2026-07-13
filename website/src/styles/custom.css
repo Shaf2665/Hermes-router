@@ -14,3 +14,50 @@
 .hero {
 	--overlay-blurple: color-mix(in srgb, var(--sl-color-accent) 18%, transparent);
 }
+
+.app-shot-grid {
+	display: grid;
+	grid-template-columns: minmax(0, 1.45fr) minmax(220px, 0.55fr);
+	gap: 1rem;
+	align-items: start;
+	margin: 1rem 0 2rem;
+}
+
+.app-shot {
+	margin: 1.25rem 0;
+}
+
+.app-shot-grid .app-shot {
+	margin: 0;
+}
+
+.app-shot img {
+	display: block;
+	width: 100%;
+	height: auto;
+	border: 1px solid var(--sl-color-gray-5);
+	border-radius: 8px;
+	background: #0f1117;
+	box-shadow: 0 20px 60px color-mix(in srgb, #000 32%, transparent);
+}
+
+.app-shot figcaption {
+	margin-top: 0.5rem;
+	color: var(--sl-color-gray-3);
+	font-size: var(--sl-text-sm);
+	line-height: 1.45;
+}
+
+.app-shot--medium {
+	max-width: 520px;
+}
+
+.app-shot--wide {
+	max-width: 960px;
+}
+
+@media (max-width: 760px) {
+	.app-shot-grid {
+		grid-template-columns: 1fr;
+	}
+}

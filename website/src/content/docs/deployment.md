@@ -464,7 +464,7 @@ dashboard — provider health, request log, cache stats, and per-key usage. It a
 proxy key once and remembers it in the browser. With Docker the mapped port (`-p 8319:8319`)
 already exposes it to your host. Running on a remote box bound to `HOST=127.0.0.1`? Tunnel it:
 `ssh -L 8319:127.0.0.1:8319 user@server`, then open `http://localhost:8319/` locally. See
-[monitoring.md](/monitoring/) for the full dashboard tour.
+[Monitoring](/monitoring/) for the full dashboard tour.
 
 ---
 

@@ -3,6 +3,8 @@ title: "Monitoring"
 description: "The built-in web dashboard, hr status, Prometheus /metrics, and the /v1/status and /v1/logs endpoints."
 ---
 
+import dashboardOverview from '../../assets/dashboard-overview.webp';
+
 ## Web dashboard
 
 The router serves a built-in **browser dashboard** — no install, no extra service. It ships
@@ -13,6 +15,16 @@ in a browser:
 http://localhost:8319/          # redirects to the dashboard
 http://localhost:8319/dashboard
 ```
+
+<figure class="app-shot app-shot--wide">
+  <img
+    src={dashboardOverview.src}
+    alt="Hermes Router browser dashboard showing router readiness, setup checklist, usage totals, cache hit rate, and provider health cards."
+    loading="eager"
+    decoding="async"
+  />
+  <figcaption>The browser dashboard gives a live view of readiness, usage, cache, and provider health.</figcaption>
+</figure>
 
 On first load it asks for your proxy API key (one of `PROXY_API_KEYS` — see
 [below](#proxy-api-keys--the-dashboard-key) if you don't have one yet) and remembers it in the

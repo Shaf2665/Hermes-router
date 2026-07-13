@@ -15,6 +15,8 @@ hero:
 ---
 
 import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import dashboardOverview from '../../assets/dashboard-overview.webp';
+import vscodePanel from '../../assets/vscode-panel.webp';
 
 ## Why hermes-router?
 
@@ -22,6 +24,29 @@ Free AI tiers are generous but rate-limited. hermes-router sits between your app
 of free providers (Gemini, OpenRouter, Groq, and more). When one hits its limit, it
 automatically falls back to the next — so your app keeps working instead of erroring out.
 Point any OpenAI **or** Anthropic client at it and nothing else changes.
+
+## See it in action
+
+<div class="app-shot-grid">
+  <figure class="app-shot">
+    <img
+      src={dashboardOverview.src}
+      alt="Hermes Router browser dashboard showing setup status, provider health, usage totals, cache hit rate, and provider cards."
+      loading="eager"
+      decoding="async"
+    />
+    <figcaption>Browser dashboard for provider health, key setup, usage, cache, and live routing status.</figcaption>
+  </figure>
+  <figure class="app-shot app-shot--tall">
+    <img
+      src={vscodePanel.src}
+      alt="Hermes Router VS Code extension panel showing ready keys, errors, tokens, spend, cache, and providers needing attention."
+      loading="lazy"
+      decoding="async"
+    />
+    <figcaption>VS Code panel for checking the router without leaving your editor.</figcaption>
+  </figure>
+</div>
 
 <CardGrid>
   <Card title="Never hit a rate limit" icon="rocket">
@@ -55,6 +80,8 @@ can follow the path straight through from zero to a running, monitored agent.
 
 Already comfortable? Jump to **[How it works](/architecture/)** for the internals or the
 **[VS Code Extension](/vscode-extension/)** to manage the router from your editor.
+
+This documentation website is hosted on **[Vercel](https://vercel.com/)**.
 
 ## Quick start
 
