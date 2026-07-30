@@ -69,6 +69,7 @@ subscription) logins are stored separately under `codex_accounts` (via
 | `HOST` | `0.0.0.0` | Bind address. Set `127.0.0.1` to listen on localhost only (recommended on a shared/VPS host — reach it via localhost or an SSH tunnel). Keep `0.0.0.0` for Docker. |
 | `PROXY_API_KEYS` | *(auto-generated)* | Comma-separated keys your app uses to authenticate — and the key needed to open the web dashboard. If left unset (or on the `.env.example` placeholder), the router generates a real random key on first boot and saves it back to `.env`, logging it once. Add more from the dashboard's **Access Keys** page, or set your own here. |
 | `ROUTER_AUTH_FILE` | `./auth.json` | Where keys are stored |
+| `HERMES_INSTANCES_FILE` | `./instances.json` | Where the dashboard's Instances registry is stored. It may contain generated instance proxy keys and copied provider keys, so keep it private and never commit it. |
 | `CACHE_TTL_SECONDS` | `300` | Response cache lifetime (`0` disables). Entries are namespaced per API key, so different `PROXY_API_KEYS` never share a cached answer — safe for multi-tenant use |
 | `LOG_LEVEL` | `INFO` | Logging verbosity |
 | `METRICS_REQUIRE_AUTH` | `0` | Require the proxy key on `/metrics` (`1` to enable) |
@@ -99,6 +100,41 @@ Sensible defaults — most users never touch these.
 | `BREAKER_MIN_SAMPLES` | `4` | Minimum samples before the breaker can trip |
 | `BREAKER_ERROR_RATE` | `0.5` | Health-failure fraction that trips the breaker |
 | `BREAKER_COOLDOWN` | `60` | Seconds the breaker stays open before re-probing |
+
+### Instance manager settings
+
+The web dashboard's **Instances** page stores its registry in `HERMES_INSTANCES_FILE`. A registry
+entry can be either:
+
+- **external** — a name, base URL, and optional proxy key for a router you started elsewhere
+- **docker** — a Docker image, host/container port mapping, generated or supplied proxy key, and
+  env vars for a managed container
+
+The file is written as JSON with `0600` permissions where possible and is listed in `.gitignore`.
+Treat it like `auth.json`: it can include secrets.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `HERMES_INSTANCES_FILE` | `./instances.json` | Registry file for monitored and Docker-managed instances |
+| `HERMES_INSTANCE_IMAGE` | `hermes-router:latest` | Docker image used when the dashboard launches a managed instance |
+| `HERMES_INSTANCE_CONTAINER_PORT` | `8319` | Port inside the managed container |
+| `HERMES_INSTANCE_DOCKER_PREFIX` | `hermes-router` | Prefix for generated Docker container names |
+
+When creating a Docker instance, the dashboard can copy selected existing provider keys from the
+manager router into the child container. The browser only receives provider names and key counts;
+the backend reads the real keys server-side from `auth.json` and `.env`, then writes the matching
+container env vars, for example:
+
+| Provider | Env var copied into the instance |
+|---|---|
+| `gemini` | `GEMINI_API_KEYS` |
+| `openrouter` | `OPENROUTER_API_KEYS` |
+| `github_models` | `GITHUB_MODELS_TOKENS` |
+| `openai` | `OPENAI_API_KEYS` |
+| `anthropic` | `ANTHROPIC_API_KEYS` |
+
+Manual env vars entered in the dashboard's Docker settings are merged with copied keys. If both
+set the same env var, the copied provider keys win for that provider.
 
 ### Per-key budgets & rate limits
 
