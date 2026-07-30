@@ -22,10 +22,11 @@ Quick start:
   python router.py
 """
 
-import json, os, time, threading, logging, hashlib, hmac, itertools, re, sqlite3, subprocess, secrets
+import json, os, time, threading, logging, hashlib, hmac, itertools, re, sqlite3, subprocess, secrets, uuid
 from pathlib import Path
 from collections import deque, OrderedDict, defaultdict
 from flask import Flask, request, jsonify, Response, stream_with_context, redirect
+from urllib.parse import urlparse, urlunparse
 import requests
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -141,6 +142,10 @@ if ROTATION_MODE not in ("round-robin", "sequential"):
 STATE_FILE        = Path(os.environ.get("ROUTER_STATE_FILE", "./router_state.json"))
 STATE_TTL_HOURS   = int(os.environ.get("ROUTER_STATE_TTL_HOURS", 24))  # 0 = re-probe every start
 AUTH_FILE         = Path(os.environ.get("ROUTER_AUTH_FILE", "./auth.json"))  # router's own key store
+INSTANCE_FILE     = Path(os.environ.get("HERMES_INSTANCES_FILE", "./instances.json"))
+INSTANCE_DOCKER_IMAGE = os.environ.get("HERMES_INSTANCE_IMAGE", "hermes-router:latest")
+INSTANCE_CONTAINER_PORT = int(os.environ.get("HERMES_INSTANCE_CONTAINER_PORT", "8319"))
+INSTANCE_DOCKER_PREFIX = os.environ.get("HERMES_INSTANCE_DOCKER_PREFIX", "hermes-router")
 # In-memory request log: last N requests kept in a ring buffer. Pure RAM, no disk
 # writes. Set REQUEST_LOG_SIZE=0 to disable. Exposed via GET /v1/logs.
 REQUEST_LOG_SIZE  = max(0, int(os.environ.get("REQUEST_LOG_SIZE", "500")))
@@ -976,6 +981,312 @@ def _trigger_restart(delay_s: float = 1.2) -> None:
             log.error(f"restart trigger failed: {e}")
 
     threading.Timer(delay_s, _go).start()
+
+
+# ── Instance registry / Docker launcher ────────────────────────────────────────
+# Instances let one "manager" router keep track of other Hermes Router processes.
+# External instances are just monitored by base URL. Managed instances are Docker
+# containers created by this process when the host has Docker available.
+
+_INSTANCE_LOCK = threading.Lock()
+
+
+def _utc_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _slug(s: str) -> str:
+    s = re.sub(r"[^a-zA-Z0-9_.-]+", "-", s.strip().lower()).strip("-")
+    return s[:48] or "instance"
+
+
+def _read_instances_doc() -> dict:
+    if not INSTANCE_FILE.exists():
+        return {"instances": []}
+    try:
+        doc = json.loads(INSTANCE_FILE.read_text())
+    except Exception as e:
+        log.warning(f"Could not read {INSTANCE_FILE}: {e}")
+        return {"instances": []}
+    if not isinstance(doc, dict):
+        return {"instances": []}
+    instances = doc.get("instances")
+    if not isinstance(instances, list):
+        doc["instances"] = []
+    return doc
+
+
+def _write_instances_doc(doc: dict) -> None:
+    INSTANCE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    INSTANCE_FILE.write_text(json.dumps(doc, indent=2) + "\n")
+    try:
+        os.chmod(INSTANCE_FILE, 0o600)
+    except OSError:
+        pass
+
+
+def _normalize_instance_base_url(raw: str | None, host_port: int | None = None) -> tuple[str | None, str | None]:
+    value = (raw or "").strip()
+    if not value and host_port:
+        value = f"http://localhost:{host_port}/v1"
+    if not value:
+        return None, "missing 'base_url'"
+    parsed = urlparse(value if "://" in value else "http://" + value)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return None, "base_url must be an http(s) URL"
+    path = parsed.path.rstrip("/")
+    if not path:
+        path = "/v1"
+    clean = parsed._replace(path=path, params="", query="", fragment="")
+    return urlunparse(clean), None
+
+
+def _instance_health_url(base_url: str) -> str:
+    parsed = urlparse(base_url)
+    path = parsed.path.rstrip("/")
+    if path.endswith("/v1"):
+        path = path[:-3].rstrip("/")
+    clean = parsed._replace(path=(path + "/health") if path else "/health",
+                            params="", query="", fragment="")
+    return urlunparse(clean)
+
+
+def _instance_models_url(base_url: str) -> str:
+    return base_url.rstrip("/") + "/models"
+
+
+def _mask_secret(value: str | None) -> dict:
+    if not value:
+        return {"configured": False, "tail": ""}
+    return {"configured": True, "tail": value[-6:]}
+
+
+def _instance_public(entry: dict, *, include_live: bool = True) -> dict:
+    out = {k: v for k, v in entry.items() if k not in ("api_key", "env")}
+    out["api_key"] = _mask_secret(entry.get("api_key"))
+    env = entry.get("env") if isinstance(entry.get("env"), dict) else {}
+    out["env"] = {
+        "count": len(env),
+        "keys": sorted(env.keys()),
+        "secret_keys": sorted(k for k in env if "KEY" in k or "TOKEN" in k or "SECRET" in k),
+    }
+    if include_live:
+        out["live"] = _probe_instance(entry)
+        if entry.get("mode") == "docker":
+            out["docker"] = _docker_state(entry)
+    return out
+
+
+def _find_instance(doc: dict, instance_id: str) -> tuple[int, dict | None]:
+    for i, entry in enumerate(doc.get("instances", [])):
+        if entry.get("id") == instance_id:
+            return i, entry
+    return -1, None
+
+
+def _parse_port(value, field: str, default: int | None = None) -> tuple[int | None, str | None]:
+    if value in (None, ""):
+        return default, None
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        return None, f"{field} must be a whole number"
+    if port < 1 or port > 65535:
+        return None, f"{field} must be between 1 and 65535"
+    return port, None
+
+
+def _parse_instance_env(value) -> tuple[dict, str | None]:
+    if value in (None, ""):
+        return {}, None
+    if not isinstance(value, dict):
+        return {}, "'env' must be an object of environment variables"
+    out = {}
+    for k, v in value.items():
+        key = str(k or "").strip()
+        val = str(v or "").strip()
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", key):
+            return {}, f"invalid env var name: {key}"
+        if key in {"HOST", "PORT", "ROUTER_AUTH_FILE", "ROUTER_STATE_FILE", "CACHE_DB_PATH"}:
+            return {}, f"{key} is managed by the instance launcher"
+        if any(c in val for c in "\n\r\0"):
+            return {}, f"{key} must be a single-line value"
+        if val:
+            out[key] = val
+    return out, None
+
+
+def _build_instance_from_body(body: dict, existing: dict | None = None) -> tuple[dict | None, str | None]:
+    existing = existing or {}
+    mode = str(body.get("mode", existing.get("mode", "external")) or "external").strip().lower()
+    if mode not in ("external", "docker"):
+        return None, "mode must be 'external' or 'docker'"
+
+    host_port, err = _parse_port(body.get("host_port", existing.get("host_port")), "host_port")
+    if err:
+        return None, err
+    container_port, err = _parse_port(
+        body.get("container_port", existing.get("container_port", INSTANCE_CONTAINER_PORT)),
+        "container_port",
+        INSTANCE_CONTAINER_PORT,
+    )
+    if err:
+        return None, err
+    if mode == "docker" and not host_port:
+        return None, "host_port is required for docker instances"
+
+    base_url, err = _normalize_instance_base_url(body.get("base_url", existing.get("base_url")), host_port)
+    if err:
+        return None, err
+
+    name = str(body.get("name", existing.get("name", "")) or "").strip()[:80]
+    if not name:
+        return None, "missing 'name'"
+    if any(c in name for c in "\n\r"):
+        return None, "name must not contain newlines"
+
+    api_key = str(body.get("api_key", existing.get("api_key", "")) or "").strip()
+    if any(c in api_key for c in "\n\r\0"):
+        return None, "api_key must be a single-line value"
+    if mode == "docker" and not api_key:
+        api_key = _generate_proxy_key()
+
+    env, err = _parse_instance_env(body.get("env", existing.get("env", {})))
+    if err:
+        return None, err
+
+    instance_id = existing.get("id") or uuid.uuid4().hex[:12]
+    image = str(body.get("image", existing.get("image", INSTANCE_DOCKER_IMAGE)) or INSTANCE_DOCKER_IMAGE).strip()
+    if any(c in image for c in "\n\r\0"):
+        return None, "image must be a single-line value"
+    container_name = str(body.get("container_name", existing.get("container_name", "")) or "").strip()
+    if not container_name:
+        container_name = f"{INSTANCE_DOCKER_PREFIX}-{_slug(name)}-{instance_id[:6]}"
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", container_name):
+        return None, "container_name contains unsupported characters"
+
+    now = _utc_now()
+    entry = {
+        "id": instance_id,
+        "name": name,
+        "mode": mode,
+        "base_url": base_url,
+        "api_key": api_key,
+        "host_port": host_port,
+        "container_port": container_port,
+        "image": image,
+        "container_name": container_name,
+        "env": env,
+        "created_at": existing.get("created_at") or now,
+        "updated_at": now,
+    }
+    return entry, None
+
+
+def _probe_instance(entry: dict) -> dict:
+    base_url = entry.get("base_url") or ""
+    started = time.time()
+    result = {"status": "unknown", "health_ok": False, "auth_ok": None,
+              "latency_ms": None, "message": ""}
+    try:
+        resp = _HTTP.get(_instance_health_url(base_url), timeout=1.5)
+        result["latency_ms"] = round((time.time() - started) * 1000, 1)
+        result["health_ok"] = resp.status_code == 200
+        result["status"] = "healthy" if resp.status_code == 200 else "unhealthy"
+        result["message"] = f"health HTTP {resp.status_code}"
+    except Exception as e:
+        result["latency_ms"] = round((time.time() - started) * 1000, 1)
+        result["status"] = "unreachable"
+        result["message"] = str(e)[:160]
+        return result
+
+    api_key = entry.get("api_key") or ""
+    if api_key:
+        try:
+            mr = _HTTP.get(_instance_models_url(base_url),
+                           headers={"Authorization": "Bearer " + api_key},
+                           timeout=1.5)
+            result["auth_ok"] = mr.status_code == 200
+            if mr.status_code == 401:
+                result["status"] = "auth_error"
+                result["message"] = "health ok, API key rejected"
+            elif mr.status_code != 200:
+                result["message"] = f"health ok, models HTTP {mr.status_code}"
+        except Exception as e:
+            result["auth_ok"] = False
+            result["message"] = f"health ok, models check failed: {str(e)[:120]}"
+    return result
+
+
+def _docker_cmd(args: list[str], timeout: float = 15.0) -> tuple[bool, str, int]:
+    try:
+        proc = subprocess.run(["docker", *args], capture_output=True, text=True, timeout=timeout)
+    except FileNotFoundError:
+        return False, "Docker CLI not found on this host.", 127
+    except subprocess.TimeoutExpired:
+        return False, "Docker command timed out.", 124
+    output = (proc.stdout or proc.stderr or "").strip()
+    return proc.returncode == 0, output, proc.returncode
+
+
+def _docker_state(entry: dict) -> dict:
+    name = entry.get("container_name") or ""
+    ok, out, code = _docker_cmd(["inspect", "-f", "{{.State.Status}}|{{.State.Running}}", name], timeout=5)
+    if not ok:
+        return {"available": code != 127, "exists": False, "running": False,
+                "status": "missing" if code != 127 else "unavailable", "message": out}
+    parts = out.split("|")
+    status = parts[0] if parts else "unknown"
+    running = len(parts) > 1 and parts[1].strip().lower() == "true"
+    return {"available": True, "exists": True, "running": running, "status": status, "message": ""}
+
+
+def _docker_run_instance(entry: dict) -> tuple[bool, str]:
+    env = dict(entry.get("env") or {})
+    if entry.get("api_key"):
+        env["PROXY_API_KEYS"] = entry["api_key"]
+    env.update({
+        "HOST": "0.0.0.0",
+        "PORT": str(entry.get("container_port") or INSTANCE_CONTAINER_PORT),
+        "ROUTER_AUTH_FILE": "/data/auth.json",
+        "ROUTER_STATE_FILE": "/data/router_state.json",
+        "CACHE_DB_PATH": "/data/cache.db",
+    })
+    volume = f"{entry['container_name']}-data:/data"
+    args = [
+        "run", "-d",
+        "--name", entry["container_name"],
+        "--label", "com.hermes-router.managed=true",
+        "-p", f"{entry['host_port']}:{entry['container_port']}",
+        "-v", volume,
+    ]
+    for k, v in sorted(env.items()):
+        args += ["-e", f"{k}={v}"]
+    args.append(entry.get("image") or INSTANCE_DOCKER_IMAGE)
+    ok, out, _ = _docker_cmd(args, timeout=30)
+    return ok, out
+
+
+def _docker_action(entry: dict, action: str) -> tuple[bool, str]:
+    if entry.get("mode") != "docker":
+        return False, "This instance is registered as external; Docker actions are unavailable."
+    state = _docker_state(entry)
+    if action == "start":
+        if not state.get("available"):
+            return False, state.get("message") or "Docker unavailable."
+        if not state.get("exists"):
+            return _docker_run_instance(entry)
+        ok, out, _ = _docker_cmd(["start", entry["container_name"]], timeout=15)
+        return ok, out
+    if action == "stop":
+        ok, out, _ = _docker_cmd(["stop", entry["container_name"]], timeout=20)
+        return ok, out
+    if action == "restart":
+        if state.get("exists"):
+            ok, out, _ = _docker_cmd(["restart", entry["container_name"]], timeout=20)
+            return ok, out
+        return _docker_run_instance(entry)
+    return False, f"unknown Docker action: {action}"
 
 # ── Credential pool ────────────────────────────────────────────────────────────
 
@@ -3436,6 +3747,41 @@ tr:hover td{background:rgba(108,140,255,.04)}
 .config-msg.ok{color:var(--green)}
 .config-msg.err{color:var(--red)}
 .default-hint{font-size:10px;color:var(--muted)}
+.config-form textarea{
+  background:var(--surface2);border:1px solid var(--border);border-radius:6px;
+  color:var(--text);padding:7px 10px;font-size:12px;font-family:monospace;outline:none;
+  min-height:86px;resize:vertical}
+.config-form textarea:focus{border-color:var(--accent)}
+.instance-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;padding:12px}
+.instance-card{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px}
+.instance-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.btn.primary{background:rgba(108,140,255,.16);border-color:var(--accent);color:var(--text);font-weight:600}
+.btn.danger:hover{border-color:var(--red);color:var(--red)}
+.mode-switch{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.mode-option{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;
+  text-align:left;padding:10px;border-radius:8px;border:1px solid var(--border);
+  background:var(--surface2);color:var(--text);font-family:inherit;cursor:pointer}
+.mode-option.active{border-color:var(--accent);background:rgba(108,140,255,.12)}
+.mode-option strong{display:block;font-size:12px;margin-bottom:3px}
+.mode-option span{display:block;font-size:11px;color:var(--muted);line-height:1.35}
+.mode-dot{width:9px;height:9px;border-radius:50%;margin-top:3px;background:var(--border);flex:0 0 auto}
+.mode-option.active .mode-dot{background:var(--accent);box-shadow:0 0 6px var(--accent)}
+.instance-form{padding:14px;display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,.85fr);gap:14px}
+@media(max-width:900px){.instance-form{grid-template-columns:1fr}.mode-switch{grid-template-columns:1fr}}
+.instance-form-col{display:flex;flex-direction:column;gap:10px}
+.field-hint{font-size:10.5px;color:var(--muted);line-height:1.35;margin-top:-3px}
+.field-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.field-line label{margin:0}
+.port-map{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:end}
+.port-arrow{color:var(--muted);font-size:15px;padding-bottom:9px}
+.instance-advanced{border:1px solid var(--border);border-radius:8px;background:rgba(15,17,23,.2)}
+.instance-advanced summary{cursor:pointer;padding:9px 10px;color:var(--muted);font-size:11px;
+  text-transform:uppercase;letter-spacing:.4px;list-style:none}
+.instance-advanced summary::-webkit-details-marker{display:none}
+.instance-advanced .advanced-body{padding:0 10px 10px;display:flex;flex-direction:column;gap:8px}
+.instance-empty{display:flex;align-items:center;justify-content:center;min-height:90px;color:var(--muted)}
+.instance-empty strong{color:var(--text);font-weight:600}
+.hidden-field{display:none!important}
 
 /* ── log table ── */
 #log-wrap{max-height:340px;overflow-y:auto}
@@ -3472,6 +3818,7 @@ tr:hover td{background:rgba(108,140,255,.04)}
     <nav class="sidebar-nav" id="sidebar-nav">
       <button class="nav-item active" data-page="overview" onclick="showPage('overview')">Overview</button>
       <button class="nav-item" data-page="providers" onclick="showPage('providers')"><span>Providers</span><span class="nav-dot" id="nav-dot-providers"></span></button>
+      <button class="nav-item" data-page="instances" onclick="showPage('instances')">Instances</button>
       <button class="nav-item" data-page="keys" onclick="showPage('keys')">Provider Keys</button>
       <button class="nav-item" data-page="access" onclick="showPage('access')">Access Keys</button>
       <button class="nav-item" data-page="models" onclick="showPage('models')">Models</button>
@@ -3581,6 +3928,106 @@ tr:hover td{background:rgba(108,140,255,.04)}
             </table>
           </div>
         </details>
+      </section>
+
+      <!-- ── Instances ────────────────────────────────────────────────────── -->
+      <section class="page" id="page-instances">
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Instance Manager</span><span class="muted">external or Docker-managed routers</span></div>
+          <div class="instance-grid" id="instance-summary-grid"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Add Instance</span></div>
+          <div class="instance-form">
+            <div class="instance-form-col config-form">
+              <label>Mode</label>
+              <div class="mode-switch">
+                <button type="button" class="mode-option active" id="mode-external" onclick="setInstanceMode('external')">
+                  <span><strong>Connect existing</strong><span>Track a router that is already running.</span></span><i class="mode-dot"></i>
+                </button>
+                <button type="button" class="mode-option" id="mode-docker" onclick="setInstanceMode('docker')">
+                  <span><strong>Launch Docker</strong><span>Create a managed router on a host port.</span></span><i class="mode-dot"></i>
+                </button>
+              </div>
+              <select id="inst-mode" class="hidden-field" onchange="onInstanceModeChange()">
+                <option value="external">external</option>
+                <option value="docker">docker</option>
+              </select>
+
+              <label>Name</label>
+              <input id="inst-name" type="text" placeholder="agent-a">
+
+              <label>OpenAI base URL</label>
+              <input id="inst-base-url" type="text" placeholder="http://localhost:8320/v1">
+              <div class="field-hint" id="inst-base-hint">Agents use this as their base URL.</div>
+
+              <div id="inst-port-fields">
+                <label>Port mapping</label>
+                <div class="port-map">
+                  <div>
+                    <div class="field-hint">Host</div>
+                    <input id="inst-host-port" type="number" min="1" max="65535" placeholder="8320">
+                  </div>
+                  <div class="port-arrow">to</div>
+                  <div>
+                    <div class="field-hint">Container</div>
+                    <input id="inst-container-port" type="number" min="1" max="65535" value="8319">
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="instance-form-col config-form">
+              <label id="inst-key-label">Router access key</label>
+              <input id="inst-api-key" type="password" placeholder="sk-router-..." autocomplete="off">
+              <div class="field-hint" id="inst-key-hint">Used only to verify authenticated endpoints.</div>
+
+              <details class="instance-advanced" id="inst-docker-options">
+                <summary>Docker settings</summary>
+                <div class="advanced-body">
+                  <label>Image</label>
+                  <input id="inst-image" type="text" value="hermes-router:latest">
+                  <label>Provider env vars</label>
+                  <textarea id="inst-env" spellcheck="false" placeholder="GEMINI_API_KEYS=...\nOPENAI_API_KEYS=..."></textarea>
+                </div>
+              </details>
+
+              <div class="row">
+                <button class="btn primary" id="inst-save-btn" onclick="createInstance(false)">Register instance</button>
+                <button class="btn" id="inst-start-btn" onclick="createInstance(true)">Create & Start</button>
+              </div>
+              <div class="config-msg" id="inst-msg"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel" id="new-instance-key-panel" style="display:none">
+          <div class="panel-header"><span class="panel-title">Generated Instance Key</span></div>
+          <div class="panel-body pad">
+            <p class="muted" style="margin-bottom:8px">This Docker instance was assigned a proxy API key. Use it with agents that call this instance.</p>
+            <div class="config-form">
+              <div class="row">
+                <input id="new-instance-key-value" type="text" readonly class="mono" style="flex:1">
+                <button class="btn" onclick="copyInstanceKey()" style="flex:0 0 auto">Copy</button>
+                <button class="btn" onclick="dismissInstanceKey()" style="flex:0 0 auto">Done</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Instances</span></div>
+          <div class="panel-body">
+            <table>
+              <thead><tr>
+                <th>Name</th><th>Mode</th><th>Base URL</th><th>Health</th>
+                <th>Docker</th><th>Key</th><th>Env</th><th>Actions</th>
+              </tr></thead>
+              <tbody id="instances-tbody"></tbody>
+            </table>
+          </div>
+        </div>
       </section>
 
       <!-- ── Provider Keys ────────────────────────────────────────────────── -->
@@ -3780,13 +4227,14 @@ tr:hover td{background:rgba(108,140,255,.04)}
 <script>
 // ── state ──────────────────────────────────────────────────────────────────────
 let apiKey = localStorage.getItem('hermes_dash_key') || '';
-let statusData = null, usageData = null, logsData = [], accessKeysData = [];
+let statusData = null, usageData = null, logsData = [], accessKeysData = [], instancesData = [];
 let editingKeyTail = null;
+let autoInstanceBaseUrl = false;
 let INTERVAL = 5000;
 let timer = null;
 
 // ── sidebar navigation ───────────────────────────────────────────────────────
-const PAGES = ['overview', 'providers', 'keys', 'access', 'models', 'addons', 'logs'];
+const PAGES = ['overview', 'providers', 'instances', 'keys', 'access', 'models', 'addons', 'logs'];
 
 function showPage(name) {
   if (!PAGES.includes(name)) name = 'overview';
@@ -3804,6 +4252,9 @@ function showPage(name) {
     const h = (location.hash || '').replace('#', '');
     if (PAGES.includes(h)) showPage(h);
   });
+  onInstanceModeChange();
+  document.getElementById('inst-host-port').addEventListener('input', () => updateDockerBaseUrl());
+  document.getElementById('inst-base-url').addEventListener('input', () => { autoInstanceBaseUrl = false; });
   if (apiKey) { document.getElementById('key-gate').classList.add('hidden'); start(); }
   document.getElementById('key-input').addEventListener('keydown', e => { if (e.key==='Enter') submitKey(); });
 })();
@@ -3836,6 +4287,7 @@ async function refresh() {
       fetch('/v1/usage',  {headers:h}),
       fetch(logUrl,       {headers:h}),
       fetch('/v1/config/proxy-keys', {headers:h}),
+      fetch('/v1/instances', {headers:h}),
     ]);
     // fetch() only rejects on network errors, not on HTTP 4xx/5xx — so a bad key
     // (401) would otherwise parse to an error body and render as all-zeros. Detect
@@ -3849,8 +4301,10 @@ async function refresh() {
     }
     if (resps.some(r => !r.ok)) { setHeader(false, 'HTTP ' + (resps.find(r=>!r.ok)||{}).status); return; }
 
-    const [s, u, l, ak] = await Promise.all(resps.map(r => r.json()));
-    statusData = s; usageData = u; logsData = l.entries || []; accessKeysData = ak.keys || [];
+    const [s, u, l, ak, inst] = await Promise.all(resps.map(r => r.json()));
+    statusData = s; usageData = u; logsData = l.entries || [];
+    accessKeysData = ak.keys || [];
+    instancesData = inst.instances || [];
     renderAll();
     setHeader(true);
   } catch(e) {
@@ -3937,6 +4391,7 @@ function renderAll() {
   renderRotationForm();
   renderStats();
   renderProviderCards();
+  renderInstances();
   renderProviders();
   renderLogs();
   renderCache();
@@ -4039,6 +4494,203 @@ function renderProviderCards() {
       <div class="provider-meta"><span>${ready} ready key${ready===1?'':'s'}</span><span>${fmt.ms(p.stats?.avg_latency_ms)}</span></div>
     </div>`;
   }).join('');
+}
+
+// ── instances ────────────────────────────────────────────────────────────────
+function renderInstances() {
+  const summary = document.getElementById('instance-summary-grid');
+  const tbody = document.getElementById('instances-tbody');
+  if (!summary || !tbody) return;
+  const total = instancesData.length;
+  const healthy = instancesData.filter(i => i.live?.status === 'healthy').length;
+  const managed = instancesData.filter(i => i.mode === 'docker').length;
+  const running = instancesData.filter(i => i.docker?.running).length;
+  summary.innerHTML = [
+    ['Registered', fmt.num(total), 'routers tracked by this dashboard'],
+    ['Healthy', `${healthy}/${total || 0}`, 'health endpoint reachable'],
+    ['Docker managed', fmt.num(managed), `${running} running container${running===1?'':'s'}`],
+  ].map(([label,value,sub]) => `<div class="instance-card">
+    <div class="quick-label">${label}</div><div class="quick-value">${value}</div><div class="quick-sub">${sub}</div>
+  </div>`).join('');
+
+  if (!instancesData.length) {
+    tbody.innerHTML = '<tr><td colspan="8"><div class="instance-empty"><div><strong>No instances yet</strong><br><span>Connect an existing router or launch a Docker router above.</span></div></div></td></tr>';
+    return;
+  }
+  tbody.innerHTML = instancesData.map(i => {
+    const live = i.live || {};
+    const docker = i.docker || {};
+    const healthCls = live.status === 'healthy' ? 'pill-ok' : live.status === 'auth_error' ? 'pill-warn' : 'pill-err';
+    const dockerPill = i.mode !== 'docker'
+      ? '<span class="pill pill-grey">external</span>'
+      : docker.running
+        ? '<span class="pill pill-ok">running</span>'
+        : docker.exists
+          ? `<span class="pill pill-warn">${esc(docker.status || 'stopped')}</span>`
+          : `<span class="pill pill-grey">${esc(docker.status || 'not created')}</span>`;
+    const env = i.env || {};
+    const actions = i.mode === 'docker'
+      ? `<button class="btn" onclick="instanceAction('${i.id}','start')">Start</button>
+         <button class="btn" onclick="instanceAction('${i.id}','restart')">Restart</button>
+         <button class="btn" onclick="instanceAction('${i.id}','stop')">Stop</button>
+         <button class="btn danger" onclick="deleteInstance('${i.id}', true)">Delete</button>`
+      : `<button class="btn danger" onclick="deleteInstance('${i.id}', false)">Delete</button>`;
+    return `<tr>
+      <td><strong>${esc(i.name)}</strong><br><span class="mono muted">${esc(i.id)}</span></td>
+      <td>${esc(i.mode)}</td>
+      <td class="mono"><a style="color:var(--accent)" href="${attr(i.base_url)}" target="_blank" rel="noreferrer">${esc(i.base_url)}</a></td>
+      <td><span class="pill ${healthCls}" title="${attr(live.message || '')}">${esc(live.status || 'unknown')}</span></td>
+      <td>${dockerPill}</td>
+      <td class="mono muted">${i.api_key?.configured ? '...' + esc(i.api_key.tail) : 'none'}</td>
+      <td class="muted" title="${attr((env.keys||[]).join(', '))}">${fmt.num(env.count || 0)} var${(env.count||0)===1?'':'s'}</td>
+      <td><div class="instance-actions">${actions}</div></td>
+    </tr>`;
+  }).join('');
+}
+
+function setInstanceMode(mode) {
+  document.getElementById('inst-mode').value = mode;
+  onInstanceModeChange();
+}
+
+function onInstanceModeChange() {
+  const mode = document.getElementById('inst-mode').value;
+  const base = document.getElementById('inst-base-url');
+  const image = document.getElementById('inst-image');
+  const env = document.getElementById('inst-env');
+  const external = mode === 'external';
+  document.getElementById('mode-external').classList.toggle('active', external);
+  document.getElementById('mode-docker').classList.toggle('active', !external);
+  document.getElementById('inst-port-fields').classList.toggle('hidden-field', external);
+  document.getElementById('inst-docker-options').classList.toggle('hidden-field', external);
+  document.getElementById('inst-start-btn').classList.toggle('hidden-field', external);
+  document.getElementById('inst-save-btn').textContent = external ? 'Register instance' : 'Create instance';
+  if (mode === 'docker') {
+    image.disabled = false;
+    env.disabled = false;
+    base.placeholder = 'auto from host port';
+    document.getElementById('inst-base-hint').textContent = 'Filled from the host port unless you override it.';
+    document.getElementById('inst-key-label').textContent = 'Instance access key';
+    document.getElementById('inst-key-hint').textContent = 'Leave blank to generate one for this container.';
+    document.getElementById('inst-api-key').placeholder = 'generated if blank';
+    updateDockerBaseUrl();
+  } else {
+    image.disabled = true;
+    env.disabled = true;
+    base.placeholder = 'http://localhost:8320/v1';
+    document.getElementById('inst-base-hint').textContent = 'Agents use this as their base URL.';
+    document.getElementById('inst-key-label').textContent = 'Router access key';
+    document.getElementById('inst-key-hint').textContent = 'Used to verify authenticated endpoints.';
+    document.getElementById('inst-api-key').placeholder = 'sk-router-...';
+  }
+}
+
+function updateDockerBaseUrl() {
+  if (document.getElementById('inst-mode').value !== 'docker') return;
+  const port = document.getElementById('inst-host-port').value.trim();
+  const base = document.getElementById('inst-base-url');
+  if (!port) return;
+  if (!base.value.trim() || autoInstanceBaseUrl) {
+    base.value = `http://localhost:${port}/v1`;
+    autoInstanceBaseUrl = true;
+  }
+}
+
+function parseInstanceEnv() {
+  const raw = document.getElementById('inst-env').value;
+  const env = {};
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const idx = trimmed.indexOf('=');
+    if (idx < 1) throw new Error('Env lines must be KEY=value.');
+    const key = trimmed.slice(0, idx).trim();
+    const value = trimmed.slice(idx + 1).trim();
+    env[key] = value;
+  }
+  return env;
+}
+
+async function createInstance(start) {
+  let env = {};
+  try { env = parseInstanceEnv(); }
+  catch(e) { setMsg('inst-msg', e.message, false); return; }
+  const mode = document.getElementById('inst-mode').value;
+  if (mode === 'external') env = {};
+  const name = document.getElementById('inst-name').value.trim();
+  const baseUrl = document.getElementById('inst-base-url').value.trim();
+  const hostPort = document.getElementById('inst-host-port').value.trim();
+  if (!name) { setMsg('inst-msg', 'Name this instance first.', false); return; }
+  if (mode === 'external' && !baseUrl) { setMsg('inst-msg', 'Enter the router base URL.', false); return; }
+  if (mode === 'docker' && !hostPort) { setMsg('inst-msg', 'Choose a host port for the Docker router.', false); return; }
+  const body = {
+    name,
+    mode,
+    base_url: baseUrl,
+    host_port: hostPort,
+    container_port: document.getElementById('inst-container-port').value,
+    image: document.getElementById('inst-image').value,
+    api_key: document.getElementById('inst-api-key').value,
+    env,
+    start,
+  };
+  try {
+    const r = await fetch('/v1/instances', {
+      method: 'POST',
+      headers: {'Authorization':'Bearer '+apiKey, 'Content-Type':'application/json'},
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (!r.ok) { setMsg('inst-msg', d.error?.message || 'Failed to save instance.', false); return; }
+    ['inst-name','inst-base-url','inst-host-port','inst-api-key','inst-env'].forEach(id => document.getElementById(id).value = '');
+    autoInstanceBaseUrl = false;
+    setMsg('inst-msg', d.action && !d.action.ok ? 'Saved, but Docker start failed: ' + d.action.message : 'Instance saved.', true);
+    if (d.generated_api_key) {
+      document.getElementById('new-instance-key-value').value = d.generated_api_key;
+      document.getElementById('new-instance-key-panel').style.display = 'block';
+    }
+    await refresh();
+  } catch(e) { setMsg('inst-msg', 'Network error: ' + e.message, false); }
+}
+
+async function instanceAction(id, action) {
+  try {
+    const r = await fetch(`/v1/instances/${id}/${action}`, {
+      method: 'POST',
+      headers: {'Authorization':'Bearer '+apiKey},
+    });
+    const d = await r.json();
+    if (!r.ok || !d.ok) { alert(d.message || d.error?.message || 'Instance action failed.'); return; }
+    await refresh();
+  } catch(e) { alert('Network error: ' + e.message); }
+}
+
+async function deleteInstance(id, managed) {
+  const msg = managed
+    ? 'Delete this instance from the registry and remove its Docker container?'
+    : 'Delete this instance from the registry?';
+  if (!confirm(msg)) return;
+  const qs = managed ? '?remove_container=1' : '';
+  try {
+    const r = await fetch('/v1/instances/' + id + qs, {
+      method: 'DELETE',
+      headers: {'Authorization':'Bearer '+apiKey},
+    });
+    const d = await r.json();
+    if (!r.ok) { alert(d.error?.message || 'Failed to delete instance.'); return; }
+    await refresh();
+  } catch(e) { alert('Network error: ' + e.message); }
+}
+
+function copyInstanceKey() {
+  const el = document.getElementById('new-instance-key-value');
+  el.select();
+  navigator.clipboard?.writeText(el.value).catch(() => document.execCommand('copy'));
+}
+
+function dismissInstanceKey() {
+  document.getElementById('new-instance-key-panel').style.display = 'none';
+  document.getElementById('new-instance-key-value').value = '';
 }
 
 // ── stat cards ────────────────────────────────────────────────────────────────
@@ -5480,6 +6132,116 @@ def config_delete_proxy_key(tail):
     _env_write_line("PROXY_API_KEYS", ",".join(live_keys))
     _delete_proxy_key_meta(key)
     return jsonify({"key_tail": tail, "revoked": True, "restart_required": True})
+
+
+@app.route("/v1/instances")
+def list_instances():
+    """List registered Hermes Router instances and live health/Docker state.
+    Secrets are never returned; callers only see key tails and env var names."""
+    err = _auth_check()
+    if err:
+        return err
+    with _INSTANCE_LOCK:
+        doc = _read_instances_doc()
+        entries = list(doc.get("instances", []))
+    return jsonify({"instances": [_instance_public(e) for e in entries]})
+
+
+@app.route("/v1/instances", methods=["POST"])
+def create_instance():
+    """Register an external instance or define/start a managed Docker instance.
+    Body: {name, mode, base_url, host_port, container_port, image, api_key, env,
+    start}. Docker mode generates an API key when api_key is omitted."""
+    err = _auth_check()
+    if err:
+        return err
+    body = request.get_json(force=True, silent=True) or {}
+    entry, verr = _build_instance_from_body(body)
+    if verr:
+        return jsonify({"error": {"message": verr, "type": "invalid_request_error"}}), 400
+    with _INSTANCE_LOCK:
+        doc = _read_instances_doc()
+        doc.setdefault("instances", []).append(entry)
+        _write_instances_doc(doc)
+
+    action_result = None
+    if entry["mode"] == "docker" and bool(body.get("start")):
+        ok, msg = _docker_action(entry, "start")
+        action_result = {"ok": ok, "message": msg}
+    provided_api_key = str(body.get("api_key") or "").strip()
+    return jsonify({
+        "instance": _instance_public(entry),
+        "generated_api_key": entry["api_key"] if entry["mode"] == "docker" and not provided_api_key else None,
+        "action": action_result,
+    }), 201
+
+
+@app.route("/v1/instances/<instance_id>", methods=["POST"])
+def update_instance(instance_id):
+    """Update a registered instance. Fields omitted from the body keep their
+    previous values. Existing Docker containers are not recreated automatically."""
+    err = _auth_check()
+    if err:
+        return err
+    body = request.get_json(force=True, silent=True) or {}
+    with _INSTANCE_LOCK:
+        doc = _read_instances_doc()
+        idx, current = _find_instance(doc, instance_id)
+        if current is None:
+            return jsonify({"error": {"message": f"unknown instance: {instance_id}",
+                                      "type": "invalid_request_error"}}), 404
+        entry, verr = _build_instance_from_body(body, current)
+        if verr:
+            return jsonify({"error": {"message": verr, "type": "invalid_request_error"}}), 400
+        doc["instances"][idx] = entry
+        _write_instances_doc(doc)
+    return jsonify({"instance": _instance_public(entry)})
+
+
+@app.route("/v1/instances/<instance_id>", methods=["DELETE"])
+def delete_instance(instance_id):
+    """Remove an instance from the registry. Pass ?remove_container=1 to also
+    remove a managed Docker container."""
+    err = _auth_check()
+    if err:
+        return err
+    remove_container = request.args.get("remove_container", "").lower() in ("1", "true", "yes")
+    removed = None
+    with _INSTANCE_LOCK:
+        doc = _read_instances_doc()
+        idx, entry = _find_instance(doc, instance_id)
+        if entry is None:
+            return jsonify({"error": {"message": f"unknown instance: {instance_id}",
+                                      "type": "invalid_request_error"}}), 404
+        removed = doc["instances"].pop(idx)
+        _write_instances_doc(doc)
+
+    action_result = None
+    if remove_container and removed.get("mode") == "docker":
+        ok, msg, _ = _docker_cmd(["rm", "-f", removed["container_name"]], timeout=20)
+        action_result = {"ok": ok, "message": msg}
+    return jsonify({"deleted": True, "id": instance_id, "action": action_result})
+
+
+@app.route("/v1/instances/<instance_id>/<action>", methods=["POST"])
+def instance_action(instance_id, action):
+    """Start, stop, or restart a managed Docker instance."""
+    err = _auth_check()
+    if err:
+        return err
+    if action not in ("start", "stop", "restart"):
+        return jsonify({"error": {"message": "action must be start, stop, or restart",
+                                  "type": "invalid_request_error"}}), 400
+    with _INSTANCE_LOCK:
+        doc = _read_instances_doc()
+        _, entry = _find_instance(doc, instance_id)
+    if entry is None:
+        return jsonify({"error": {"message": f"unknown instance: {instance_id}",
+                                  "type": "invalid_request_error"}}), 404
+    ok, msg = _docker_action(entry, action)
+    if not ok:
+        return jsonify({"ok": False, "message": msg, "instance": _instance_public(entry)}), 409
+    return jsonify({"ok": True, "message": msg, "instance": _instance_public(entry)})
 
 
 @app.route("/v1/status")

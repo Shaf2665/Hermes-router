@@ -49,6 +49,7 @@ def router_server(tmp_path):
         "PROXY_API_KEYS": AUTH_KEY,
         "ROUTER_AUTH_FILE": str(tmp_path / "auth.json"),
         "ROUTER_STATE_FILE": str(tmp_path / "router_state.json"),
+        "HERMES_INSTANCES_FILE": str(tmp_path / "instances.json"),
         "CACHE_DB_PATH": str(tmp_path / "cache.db"),
         "CACHE_PERSIST": "0",
         "AUTO_DISCOVER_MODELS": "0",
@@ -104,6 +105,7 @@ def test_dashboard_login_navigation_and_safe_actions(router_server, page):
 
     for label, page_id in [
         ("Providers", "providers"),
+        ("Instances", "instances"),
         ("Provider Keys", "keys"),
         ("Access Keys", "access"),
         ("Models", "models"),
@@ -113,6 +115,22 @@ def test_dashboard_login_navigation_and_safe_actions(router_server, page):
     ]:
         page.get_by_role("button", name=label).click()
         assert "active" in page.locator(f"#page-{page_id}").get_attribute("class")
+
+    page.get_by_role("button", name="Instances").click()
+    expect(page.locator("#instances-tbody")).to_contain_text("No instances yet")
+    page.locator("#mode-docker").click()
+    page.locator("#inst-host-port").fill("8320")
+    expect(page.locator("#inst-base-url")).to_have_value("http://localhost:8320/v1")
+    expect(page.locator("#inst-start-btn")).to_be_visible()
+    page.locator("#mode-external").click()
+    expect(page.locator("#inst-port-fields")).not_to_be_visible()
+    page.locator("#inst-name").fill("local dashboard")
+    page.locator("#inst-base-url").fill(f"{router_server}/v1")
+    page.locator("#inst-api-key").fill(AUTH_KEY)
+    page.get_by_role("button", name="Register instance").click()
+    expect(page.locator("#instances-tbody")).to_contain_text("local dashboard")
+    expect(page.locator("#instances-tbody")).to_contain_text("healthy")
+    expect(page.locator("#instances-tbody")).to_contain_text("...k-test")
 
     page.get_by_role("button", name="Access Keys").click()
     expect(page.locator("#access-keys-tbody")).to_contain_text("...k-test")
