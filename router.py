@@ -3755,6 +3755,33 @@ tr:hover td{background:rgba(108,140,255,.04)}
 .instance-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;padding:12px}
 .instance-card{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px}
 .instance-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.btn.primary{background:rgba(108,140,255,.16);border-color:var(--accent);color:var(--text);font-weight:600}
+.btn.danger:hover{border-color:var(--red);color:var(--red)}
+.mode-switch{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.mode-option{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;
+  text-align:left;padding:10px;border-radius:8px;border:1px solid var(--border);
+  background:var(--surface2);color:var(--text);font-family:inherit;cursor:pointer}
+.mode-option.active{border-color:var(--accent);background:rgba(108,140,255,.12)}
+.mode-option strong{display:block;font-size:12px;margin-bottom:3px}
+.mode-option span{display:block;font-size:11px;color:var(--muted);line-height:1.35}
+.mode-dot{width:9px;height:9px;border-radius:50%;margin-top:3px;background:var(--border);flex:0 0 auto}
+.mode-option.active .mode-dot{background:var(--accent);box-shadow:0 0 6px var(--accent)}
+.instance-form{padding:14px;display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,.85fr);gap:14px}
+@media(max-width:900px){.instance-form{grid-template-columns:1fr}.mode-switch{grid-template-columns:1fr}}
+.instance-form-col{display:flex;flex-direction:column;gap:10px}
+.field-hint{font-size:10.5px;color:var(--muted);line-height:1.35;margin-top:-3px}
+.field-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.field-line label{margin:0}
+.port-map{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:end}
+.port-arrow{color:var(--muted);font-size:15px;padding-bottom:9px}
+.instance-advanced{border:1px solid var(--border);border-radius:8px;background:rgba(15,17,23,.2)}
+.instance-advanced summary{cursor:pointer;padding:9px 10px;color:var(--muted);font-size:11px;
+  text-transform:uppercase;letter-spacing:.4px;list-style:none}
+.instance-advanced summary::-webkit-details-marker{display:none}
+.instance-advanced .advanced-body{padding:0 10px 10px;display:flex;flex-direction:column;gap:8px}
+.instance-empty{display:flex;align-items:center;justify-content:center;min-height:90px;color:var(--muted)}
+.instance-empty strong{color:var(--text);font-weight:600}
+.hidden-field{display:none!important}
 
 /* ── log table ── */
 #log-wrap{max-height:340px;overflow-y:auto}
@@ -3912,39 +3939,63 @@ tr:hover td{background:rgba(108,140,255,.04)}
 
         <div class="panel">
           <div class="panel-header"><span class="panel-title">Add Instance</span></div>
-          <div class="page-intro" style="padding:12px 14px 0">Register an existing Hermes Router by base URL, or create a managed Docker instance with a host port mapped to the container port.</div>
-          <div class="config-grid">
-            <div class="config-form">
+          <div class="instance-form">
+            <div class="instance-form-col config-form">
+              <label>Mode</label>
+              <div class="mode-switch">
+                <button type="button" class="mode-option active" id="mode-external" onclick="setInstanceMode('external')">
+                  <span><strong>Connect existing</strong><span>Track a router that is already running.</span></span><i class="mode-dot"></i>
+                </button>
+                <button type="button" class="mode-option" id="mode-docker" onclick="setInstanceMode('docker')">
+                  <span><strong>Launch Docker</strong><span>Create a managed router on a host port.</span></span><i class="mode-dot"></i>
+                </button>
+              </div>
+              <select id="inst-mode" class="hidden-field" onchange="onInstanceModeChange()">
+                <option value="external">external</option>
+                <option value="docker">docker</option>
+              </select>
+
               <label>Name</label>
               <input id="inst-name" type="text" placeholder="agent-a">
-              <label>Mode</label>
-              <select id="inst-mode" onchange="onInstanceModeChange()">
-                <option value="external">Register existing router</option>
-                <option value="docker">Managed Docker container</option>
-              </select>
+
               <label>OpenAI base URL</label>
               <input id="inst-base-url" type="text" placeholder="http://localhost:8320/v1">
-              <div class="row">
-                <div>
-                  <label>Host port</label>
-                  <input id="inst-host-port" type="number" min="1" max="65535" placeholder="8320">
-                </div>
-                <div>
-                  <label>Container port</label>
-                  <input id="inst-container-port" type="number" min="1" max="65535" value="8319">
+              <div class="field-hint" id="inst-base-hint">Agents use this as their base URL.</div>
+
+              <div id="inst-port-fields">
+                <label>Port mapping</label>
+                <div class="port-map">
+                  <div>
+                    <div class="field-hint">Host</div>
+                    <input id="inst-host-port" type="number" min="1" max="65535" placeholder="8320">
+                  </div>
+                  <div class="port-arrow">to</div>
+                  <div>
+                    <div class="field-hint">Container</div>
+                    <input id="inst-container-port" type="number" min="1" max="65535" value="8319">
+                  </div>
                 </div>
               </div>
             </div>
-            <div class="config-form">
-              <label>Docker image</label>
-              <input id="inst-image" type="text" value="hermes-router:latest">
-              <label>Router access key</label>
-              <input id="inst-api-key" type="password" placeholder="leave blank to generate for Docker" autocomplete="off">
-              <label>Instance env vars</label>
-              <textarea id="inst-env" spellcheck="false" placeholder="GEMINI_API_KEYS=...\nOPENAI_API_KEYS=..."></textarea>
+
+            <div class="instance-form-col config-form">
+              <label id="inst-key-label">Router access key</label>
+              <input id="inst-api-key" type="password" placeholder="sk-router-..." autocomplete="off">
+              <div class="field-hint" id="inst-key-hint">Used only to verify authenticated endpoints.</div>
+
+              <details class="instance-advanced" id="inst-docker-options">
+                <summary>Docker settings</summary>
+                <div class="advanced-body">
+                  <label>Image</label>
+                  <input id="inst-image" type="text" value="hermes-router:latest">
+                  <label>Provider env vars</label>
+                  <textarea id="inst-env" spellcheck="false" placeholder="GEMINI_API_KEYS=...\nOPENAI_API_KEYS=..."></textarea>
+                </div>
+              </details>
+
               <div class="row">
-                <button class="btn" onclick="createInstance(false)">Save instance</button>
-                <button class="btn" onclick="createInstance(true)">Save & Start</button>
+                <button class="btn primary" id="inst-save-btn" onclick="createInstance(false)">Register instance</button>
+                <button class="btn" id="inst-start-btn" onclick="createInstance(true)">Create & Start</button>
               </div>
               <div class="config-msg" id="inst-msg"></div>
             </div>
@@ -4178,6 +4229,7 @@ tr:hover td{background:rgba(108,140,255,.04)}
 let apiKey = localStorage.getItem('hermes_dash_key') || '';
 let statusData = null, usageData = null, logsData = [], accessKeysData = [], instancesData = [];
 let editingKeyTail = null;
+let autoInstanceBaseUrl = false;
 let INTERVAL = 5000;
 let timer = null;
 
@@ -4201,6 +4253,8 @@ function showPage(name) {
     if (PAGES.includes(h)) showPage(h);
   });
   onInstanceModeChange();
+  document.getElementById('inst-host-port').addEventListener('input', () => updateDockerBaseUrl());
+  document.getElementById('inst-base-url').addEventListener('input', () => { autoInstanceBaseUrl = false; });
   if (apiKey) { document.getElementById('key-gate').classList.add('hidden'); start(); }
   document.getElementById('key-input').addEventListener('keydown', e => { if (e.key==='Enter') submitKey(); });
 })();
@@ -4460,7 +4514,7 @@ function renderInstances() {
   </div>`).join('');
 
   if (!instancesData.length) {
-    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:18px">No instances registered yet</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8"><div class="instance-empty"><div><strong>No instances yet</strong><br><span>Connect an existing router or launch a Docker router above.</span></div></div></td></tr>';
     return;
   }
   tbody.innerHTML = instancesData.map(i => {
@@ -4479,8 +4533,8 @@ function renderInstances() {
       ? `<button class="btn" onclick="instanceAction('${i.id}','start')">Start</button>
          <button class="btn" onclick="instanceAction('${i.id}','restart')">Restart</button>
          <button class="btn" onclick="instanceAction('${i.id}','stop')">Stop</button>
-         <button class="btn" onclick="deleteInstance('${i.id}', true)">Delete</button>`
-      : `<button class="btn" onclick="deleteInstance('${i.id}', false)">Delete</button>`;
+         <button class="btn danger" onclick="deleteInstance('${i.id}', true)">Delete</button>`
+      : `<button class="btn danger" onclick="deleteInstance('${i.id}', false)">Delete</button>`;
     return `<tr>
       <td><strong>${esc(i.name)}</strong><br><span class="mono muted">${esc(i.id)}</span></td>
       <td>${esc(i.mode)}</td>
@@ -4494,16 +4548,51 @@ function renderInstances() {
   }).join('');
 }
 
+function setInstanceMode(mode) {
+  document.getElementById('inst-mode').value = mode;
+  onInstanceModeChange();
+}
+
 function onInstanceModeChange() {
   const mode = document.getElementById('inst-mode').value;
-  const image = document.getElementById('inst-image');
   const base = document.getElementById('inst-base-url');
+  const image = document.getElementById('inst-image');
+  const env = document.getElementById('inst-env');
+  const external = mode === 'external';
+  document.getElementById('mode-external').classList.toggle('active', external);
+  document.getElementById('mode-docker').classList.toggle('active', !external);
+  document.getElementById('inst-port-fields').classList.toggle('hidden-field', external);
+  document.getElementById('inst-docker-options').classList.toggle('hidden-field', external);
+  document.getElementById('inst-start-btn').classList.toggle('hidden-field', external);
+  document.getElementById('inst-save-btn').textContent = external ? 'Register instance' : 'Create instance';
   if (mode === 'docker') {
     image.disabled = false;
-    if (!base.value.trim()) base.placeholder = 'auto from host port, e.g. http://localhost:8320/v1';
+    env.disabled = false;
+    base.placeholder = 'auto from host port';
+    document.getElementById('inst-base-hint').textContent = 'Filled from the host port unless you override it.';
+    document.getElementById('inst-key-label').textContent = 'Instance access key';
+    document.getElementById('inst-key-hint').textContent = 'Leave blank to generate one for this container.';
+    document.getElementById('inst-api-key').placeholder = 'generated if blank';
+    updateDockerBaseUrl();
   } else {
     image.disabled = true;
+    env.disabled = true;
     base.placeholder = 'http://localhost:8320/v1';
+    document.getElementById('inst-base-hint').textContent = 'Agents use this as their base URL.';
+    document.getElementById('inst-key-label').textContent = 'Router access key';
+    document.getElementById('inst-key-hint').textContent = 'Used to verify authenticated endpoints.';
+    document.getElementById('inst-api-key').placeholder = 'sk-router-...';
+  }
+}
+
+function updateDockerBaseUrl() {
+  if (document.getElementById('inst-mode').value !== 'docker') return;
+  const port = document.getElementById('inst-host-port').value.trim();
+  const base = document.getElementById('inst-base-url');
+  if (!port) return;
+  if (!base.value.trim() || autoInstanceBaseUrl) {
+    base.value = `http://localhost:${port}/v1`;
+    autoInstanceBaseUrl = true;
   }
 }
 
@@ -4526,11 +4615,19 @@ async function createInstance(start) {
   let env = {};
   try { env = parseInstanceEnv(); }
   catch(e) { setMsg('inst-msg', e.message, false); return; }
+  const mode = document.getElementById('inst-mode').value;
+  if (mode === 'external') env = {};
+  const name = document.getElementById('inst-name').value.trim();
+  const baseUrl = document.getElementById('inst-base-url').value.trim();
+  const hostPort = document.getElementById('inst-host-port').value.trim();
+  if (!name) { setMsg('inst-msg', 'Name this instance first.', false); return; }
+  if (mode === 'external' && !baseUrl) { setMsg('inst-msg', 'Enter the router base URL.', false); return; }
+  if (mode === 'docker' && !hostPort) { setMsg('inst-msg', 'Choose a host port for the Docker router.', false); return; }
   const body = {
-    name: document.getElementById('inst-name').value,
-    mode: document.getElementById('inst-mode').value,
-    base_url: document.getElementById('inst-base-url').value,
-    host_port: document.getElementById('inst-host-port').value,
+    name,
+    mode,
+    base_url: baseUrl,
+    host_port: hostPort,
     container_port: document.getElementById('inst-container-port').value,
     image: document.getElementById('inst-image').value,
     api_key: document.getElementById('inst-api-key').value,
@@ -4546,6 +4643,7 @@ async function createInstance(start) {
     const d = await r.json();
     if (!r.ok) { setMsg('inst-msg', d.error?.message || 'Failed to save instance.', false); return; }
     ['inst-name','inst-base-url','inst-host-port','inst-api-key','inst-env'].forEach(id => document.getElementById(id).value = '');
+    autoInstanceBaseUrl = false;
     setMsg('inst-msg', d.action && !d.action.ok ? 'Saved, but Docker start failed: ' + d.action.message : 'Instance saved.', true);
     if (d.generated_api_key) {
       document.getElementById('new-instance-key-value').value = d.generated_api_key;
