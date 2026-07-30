@@ -1,6 +1,7 @@
 # Environment / credentials — never commit real keys
 .env
 auth.json
+instances.json
 
 # Runtime state (probe results / ratings cache) — regenerated on start
 router_state.json
