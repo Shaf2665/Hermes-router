@@ -456,6 +456,40 @@ def _parse_retry_after(value, default: int = 60) -> int:
         return default
 
 
+# ── Per-provider exclude list ─────────────────────────────────────────────────
+
+
+def _excluded_models(provider_name: str) -> set[str]:
+    """Case-insensitive exact model IDs listed in {PROVIDER}_EXCLUDE_MODELS.
+
+    Excluded models are stripped from a provider's active roster whether
+    they come from config or auto-discovery.
+    """
+    raw = os.environ.get(f"{provider_name.upper()}_EXCLUDE_MODELS", "")
+    return {m.strip().lower() for m in raw.split(",") if m.strip()}
+
+
+def _filter_excluded(provider_name: str, models: list[str]) -> list[str]:
+    """Drop models blocked by {PROVIDER}_EXCLUDE_MODELS (exact, case-insensitive)."""
+    excl = _excluded_models(provider_name)
+    if not excl:
+        return models
+    return [m for m in models if m.lower() not in excl]
+
+
+def _provider_models(provider: dict) -> list[str]:
+    """Usable model IDs for a provider. Empty means skip for routing/probes.
+
+    Prefer an explicit ``models`` list (including empty after exclude filtering)
+    over falling back to ``model``, so ``models=[]`` / ``model=""`` does not
+    become a phantom candidate with an empty model string.
+    """
+    if "models" in provider:
+        return [m for m in (provider.get("models") or []) if m]
+    m = provider.get("model") or ""
+    return [m] if m else []
+
+
 # ── Provider definitions ───────────────────────────────────────────────────────
 
 def _build_providers() -> list[dict]:
@@ -672,8 +706,13 @@ def _build_providers() -> list[dict]:
     # entry is the "primary" model used for probing, rating, and status display.
     for p in providers:
         models = [m.strip() for m in str(p.get("model", "")).split(",") if m.strip()]
-        p["models"] = models or [p.get("model", "")]
-        p["model"]  = p["models"][0]
+        models = models or [p.get("model", "")]
+        filtered = _filter_excluded(p["name"], models)
+        if models and not filtered:
+            log.warning(f"{p['name']}: all models excluded via "
+                        f"{p['name'].upper()}_EXCLUDE_MODELS — provider has no usable models")
+        p["models"] = filtered
+        p["model"]  = filtered[0] if filtered else ""
 
     # Per-provider "skip when the request is too big" ceiling. Some free tiers
     # reject large payloads outright, so trying them with a big prompt just wastes
@@ -1148,22 +1187,22 @@ def _refresh_discovered_models(provider: dict, key: str, pool_ref) -> None:
         log.info(f"[ratings]   {name}: model discovery skipped by default")
         return
     free_only = name in _FREE_ONLY_DISCOVERY
-    discovered = _discover_models(provider, key, free_only=free_only)
+    discovered = _filter_excluded(name, _discover_models(provider, key, free_only=free_only))
     if not discovered:
         return
 
-    configured = list(provider.get("models") or [provider["model"]])
+    configured = _provider_models(provider)
     discovered_set = set(discovered)
     # Prune only when doing so still leaves a configured model; otherwise the
     # existing invalid-model repair path can try to recover a primary model.
-    kept = [m for m in configured if m in discovered_set]
+    kept = _filter_excluded(name, [m for m in configured if m in discovered_set])
     if not kept:
         kept = discovered[:1]
     # Never drop valid configured models; only bound appended discoveries.
     extras = [m for m in discovered if m not in kept]
     append_limit = max(0, AUTO_DISCOVER_MODEL_LIMIT - len(kept))
     refreshed = list(dict.fromkeys(kept + extras[:append_limit]))
-    if refreshed == configured:
+    if not refreshed or refreshed == configured:
         return
 
     provider["models"] = refreshed
@@ -1406,7 +1445,7 @@ def _get_smart_ordered(providers: list, complexity: int, est_tokens: int = 0,
     rotated = providers[offset:] + providers[:offset]
     candidates = [{"provider": p, "model": m, "list_index": i}
                   for p in rotated
-                  for i, m in enumerate(p.get("models") or [p["model"]])]
+                  for i, m in enumerate(_provider_models(p))]
     return sorted(candidates, key=_key)
 
 
@@ -1465,7 +1504,7 @@ def _initialize_ratings(providers: list, pool_ref):
             # is fresh AND still covers every configured provider and model.
             age = time.time() - cached_doc.get("last_updated_ts", 0)
             models_covered = all((p["name"], m) in _model_state
-                                 for p in providers for m in (p.get("models") or [p["model"]]))
+                                 for p in providers for m in _provider_models(p))
             discovery_requested = any(_provider_model_discovery_enabled(p) for p in providers)
             if (not discovery_requested
                     and STATE_TTL_HOURS > 0 and age < STATE_TTL_HOURS * 3600
@@ -1495,11 +1534,17 @@ def _initialize_ratings(providers: list, pool_ref):
         if not key:
             new_state[name] = {"rating": _rate_model(p["model"]), "model": p["model"],
                                 "available": False, "latency_ms": 0, "overridden": False}
-            for m in (p.get("models") or [p["model"]]):
+            for m in _provider_models(p):
                 new_model_state[(name, m)] = {"rating": _rate_model(m),
                                               "supports_tools": False, "reasoning": False}
             continue
         _refresh_discovered_models(p, key, pool_ref)
+        if not _provider_models(p):
+            new_state[name] = {"rating": _rate_model(p.get("model") or ""),
+                                "model": p.get("model") or "",
+                                "available": False, "latency_ms": 0, "overridden": False}
+            log.info(f"[ratings]   {name}: skipped — no usable models")
+            continue
         ok, latency, actual, probe_status = _probe_provider(p, key)
         # A primary model can be rate-limited, missing tools, or otherwise rejected
         # while the provider/key is still usable for other configured models.
@@ -1516,7 +1561,7 @@ def _initialize_ratings(providers: list, pool_ref):
             pool_ref.rename_model(name, original, actual)
         # Per-model capabilities for the whole list (primary = models[0] = actual).
         # Reuse a cached entry when present so adding one model doesn't re-probe all.
-        for m in (p.get("models") or [actual]):
+        for m in _provider_models(p) or ([actual] if actual else []):
             caps = cached_models.get((name, m)) or _resolve_caps(p, key, m, caps_probe_ok)
             new_model_state[(name, m)] = caps
             log.info(f"[ratings]   {name}/{m}: rating={caps['rating']} "
@@ -1565,9 +1610,9 @@ class CredentialPool:
         # spreading across configured keys, not just that rotation "should" work.
         self.key_requests: dict = defaultdict(int)
         for p in providers:
-            models = list(p.get("models") or [p.get("model", "")])
+            models = _provider_models(p)
             if p.get("embed_model"):
-                models.append(p["embed_model"])   # embeddings get their own bucket
+                models = list(models) + [p["embed_model"]]   # embeddings get their own bucket
             self.pools[p["name"]] = {
                 m: deque({"key": k, "cool_until": 0.0} for k in p["keys"])
                 for m in dict.fromkeys(models)     # de-dupe, preserve order

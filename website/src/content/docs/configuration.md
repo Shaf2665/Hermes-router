@@ -95,6 +95,7 @@ Sensible defaults — most users never touch these.
 | `FAST_ROUTE_THRESHOLD` | `0` | If >0, requests under this many tokens prefer low-latency providers first (`0` disables) |
 | `AUTO_DISCOVER_MODELS` | `0` | If `1`, fetch configured providers' `/models` lists at startup, prune listed models that disappeared, and append the best discovered models |
 | `AUTO_DISCOVER_MODEL_LIMIT` | `8` | Max models kept per provider when `AUTO_DISCOVER_MODELS=1` |
+| `{PROVIDER}_EXCLUDE_MODELS` | — | Comma-separated model IDs to block for a provider (case-insensitive). Excluded models are stripped from config and discovery, e.g. `OPENROUTER_EXCLUDE_MODELS=some/model:free` |
 | `ROUTER_MODEL_ID` | `hermes-router` | The model name clients send (the router maps it to each provider's real model) |
 | `ROUTER_STATE_FILE` | `./router_state.json` | Where provider ratings/capabilities are cached between restarts (use `/tmp/...` on read-only hosts like HF Spaces) |
 | `ROUTER_STATE_TTL_HOURS` | `24` | How long the cached probe state is trusted before re-probing (`0` = re-probe every start) |
@@ -241,6 +242,23 @@ This is opt-in because some gateways expose paid or very large catalogs. Known m
 free/paid gateways are filtered to free model ids where possible, and very large/special
 providers such as Hugging Face are skipped unless you opt in per provider with
 `HUGGINGFACE_AUTO_DISCOVER_MODELS=1`.
+
+### Per-provider exclude list
+
+To permanently block specific model IDs for a provider — even when listed in
+`{PROVIDER}_MODEL` or re-added by auto-discovery — set `{PROVIDER}_EXCLUDE_MODELS`:
+
+```bash
+OPENROUTER_EXCLUDE_MODELS=some/unwanted-model:free
+MISTRAL_EXCLUDE_MODELS=mistral-tiny
+SAMBANOVA_EXCLUDE_MODELS=gemma-4-31B-it
+```
+
+Excluded models are matched case-insensitively (exact ID only, no globs). The
+filter applies both to your configured model list and to any extras appended by
+auto-discovery. If every model for a provider is excluded, the provider is shown
+in status but skipped for routing until at least one usable model is configured,
+and a warning is logged at startup.
 
 ## Key rotation mode
 
