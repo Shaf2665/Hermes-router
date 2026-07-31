@@ -132,6 +132,15 @@ def test_dashboard_login_navigation_and_safe_actions(router_server, page):
     expect(page.locator("#instances-tbody")).to_contain_text("healthy")
     expect(page.locator("#instances-tbody")).to_contain_text("...k-test")
 
+    page.locator("#inst-name").fill("broken dashboard")
+    page.locator("#inst-base-url").fill("http://127.0.0.1:9/v1")
+    page.get_by_role("button", name="Register instance").click()
+    expect(page.locator("#instances-tbody")).to_contain_text("broken dashboard")
+    expect(page.locator("#instances-tbody")).to_contain_text("unreachable")
+    expect(page.locator("#instance-summary-grid")).to_contain_text("1 unreachable")
+    expect(page.locator("#nav-dot-instances")).to_have_class("nav-dot bad")
+    expect(page.locator("#inst-msg")).to_contain_text("unreachable")
+
     page.get_by_role("button", name="Access Keys").click()
     expect(page.locator("#access-keys-tbody")).to_contain_text("...k-test")
 

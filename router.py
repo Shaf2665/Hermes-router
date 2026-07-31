@@ -3814,6 +3814,7 @@ tr:hover td{background:rgba(108,140,255,.04)}
 .config-msg{font-size:11px;min-height:16px}
 .config-msg.ok{color:var(--green)}
 .config-msg.err{color:var(--red)}
+.config-msg.warn{color:var(--yellow)}
 .default-hint{font-size:10px;color:var(--muted)}
 .config-form textarea{
   background:var(--surface2);border:1px solid var(--border);border-radius:6px;
@@ -3822,6 +3823,8 @@ tr:hover td{background:rgba(108,140,255,.04)}
 .config-form textarea:focus{border-color:var(--accent)}
 .instance-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;padding:12px}
 .instance-card{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px}
+.instance-card.warn{border-color:rgba(250,204,21,.45)}
+.instance-card.bad{border-color:rgba(248,113,113,.45)}
 .instance-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
 .btn.primary{background:rgba(108,140,255,.16);border-color:var(--accent);color:var(--text);font-weight:600}
 .btn.danger:hover{border-color:var(--red);color:var(--red)}
@@ -3886,7 +3889,7 @@ tr:hover td{background:rgba(108,140,255,.04)}
     <nav class="sidebar-nav" id="sidebar-nav">
       <button class="nav-item active" data-page="overview" onclick="showPage('overview')">Overview</button>
       <button class="nav-item" data-page="providers" onclick="showPage('providers')"><span>Providers</span><span class="nav-dot" id="nav-dot-providers"></span></button>
-      <button class="nav-item" data-page="instances" onclick="showPage('instances')">Instances</button>
+      <button class="nav-item" data-page="instances" onclick="showPage('instances')"><span>Instances</span><span class="nav-dot" id="nav-dot-instances"></span></button>
       <button class="nav-item" data-page="keys" onclick="showPage('keys')">Provider Keys</button>
       <button class="nav-item" data-page="access" onclick="showPage('access')">Access Keys</button>
       <button class="nav-item" data-page="models" onclick="showPage('models')">Models</button>
@@ -4459,6 +4462,7 @@ function keyDots(keys) {
 function renderAll() {
   renderPlainOverview();
   renderNavHealth();
+  renderInstanceNavHealth();
   renderRotationForm();
   renderStats();
   renderProviderCards();
@@ -4481,6 +4485,23 @@ function renderNavHealth() {
   const totalErr = vals.reduce((a,p) => a + (p.stats?.errors || 0), 0);
   const errRate = totalReq ? totalErr / totalReq * 100 : 0;
   dot.className = 'nav-dot' + (openBreakers ? ' bad' : errRate > 5 ? ' warn' : '');
+}
+
+function instanceHealthCounts() {
+  const total = instancesData.length;
+  const healthy = instancesData.filter(i => i.live?.status === 'healthy').length;
+  const unreachable = instancesData.filter(i => i.live?.status === 'unreachable').length;
+  const authErrors = instancesData.filter(i => i.live?.status === 'auth_error').length;
+  const unknown = instancesData.filter(i => !i.live?.status || i.live.status === 'unknown').length;
+  const unhealthy = Math.max(0, total - healthy);
+  return {total, healthy, unhealthy, unreachable, authErrors, unknown};
+}
+
+function renderInstanceNavHealth() {
+  const dot = document.getElementById('nav-dot-instances');
+  if (!dot) return;
+  const c = instanceHealthCounts();
+  dot.className = 'nav-dot' + (c.unreachable || c.authErrors ? ' bad' : c.unhealthy ? ' warn' : '');
 }
 
 function renderRotationForm() {
@@ -4572,15 +4593,30 @@ function renderInstances() {
   const summary = document.getElementById('instance-summary-grid');
   const tbody = document.getElementById('instances-tbody');
   if (!summary || !tbody) return;
-  const total = instancesData.length;
-  const healthy = instancesData.filter(i => i.live?.status === 'healthy').length;
+  const health = instanceHealthCounts();
   const managed = instancesData.filter(i => i.mode === 'docker').length;
   const running = instancesData.filter(i => i.docker?.running).length;
+  const attentionText = health.unreachable
+    ? `${health.unreachable} unreachable`
+    : health.authErrors
+      ? `${health.authErrors} auth issue${health.authErrors===1?'':'s'}`
+      : health.unhealthy
+        ? `${health.unhealthy} need attention`
+        : 'none';
+  const attentionSub = health.unreachable
+    ? 'health endpoint not reachable'
+    : health.authErrors
+      ? 'health ok, key rejected'
+      : health.unknown
+        ? 'waiting for first probe'
+        : 'all registered instances reachable';
+  const attentionClass = health.unreachable || health.authErrors ? 'bad' : health.unhealthy ? 'warn' : '';
   summary.innerHTML = [
-    ['Registered', fmt.num(total), 'routers tracked by this dashboard'],
-    ['Healthy', `${healthy}/${total || 0}`, 'health endpoint reachable'],
-    ['Docker managed', fmt.num(managed), `${running} running container${running===1?'':'s'}`],
-  ].map(([label,value,sub]) => `<div class="instance-card">
+    ['Registered', fmt.num(health.total), 'routers tracked by this dashboard', ''],
+    ['Healthy', `${health.healthy}/${health.total || 0}`, 'health endpoint reachable', health.unhealthy ? 'warn' : ''],
+    ['Needs attention', attentionText, attentionSub, attentionClass],
+    ['Docker managed', fmt.num(managed), `${running} running container${running===1?'':'s'}`, ''],
+  ].map(([label,value,sub,cls]) => `<div class="instance-card ${cls}">
     <div class="quick-label">${label}</div><div class="quick-value">${value}</div><div class="quick-sub">${sub}</div>
   </div>`).join('');
 
@@ -4719,12 +4755,20 @@ async function createInstance(start) {
     ['inst-name','inst-base-url','inst-host-port','inst-api-key','inst-env'].forEach(id => document.getElementById(id).value = '');
     document.querySelectorAll('#inst-copy-provider-keys input:checked').forEach(el => el.checked = false);
     autoInstanceBaseUrl = false;
-    setMsg('inst-msg', d.action && !d.action.ok ? 'Saved, but Docker start failed: ' + d.action.message : 'Instance saved.', true);
     if (d.generated_api_key) {
       document.getElementById('new-instance-key-value').value = d.generated_api_key;
       document.getElementById('new-instance-key-panel').style.display = 'block';
     }
     await refresh();
+    const saved = instancesData.find(i => i.id === d.instance?.id);
+    const savedStatus = saved?.live?.status;
+    if (d.action && !d.action.ok) {
+      setWarnMsg('inst-msg', 'Saved, but Docker start failed: ' + d.action.message);
+    } else if (savedStatus && savedStatus !== 'healthy') {
+      setWarnMsg('inst-msg', `Instance saved, but it is ${savedStatus}.`);
+    } else {
+      setMsg('inst-msg', 'Instance saved.', true);
+    }
   } catch(e) { setMsg('inst-msg', 'Network error: ' + e.message, false); }
 }
 
@@ -4997,6 +5041,12 @@ function setMsg(id, text, ok) {
   const el = document.getElementById(id);
   el.textContent = text;
   el.className = 'config-msg ' + (ok ? 'ok' : 'err');
+}
+
+function setWarnMsg(id, text) {
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = 'config-msg warn';
 }
 
 async function addKey() {
