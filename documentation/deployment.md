@@ -457,11 +457,23 @@ Expected: a JSON reply with the model's answer inside `choices[0].message.conten
 (OpenAI SDK, Anthropic SDK, etc.).
 
 **4. Open the dashboard.** Browse to **`http://localhost:8319/`** for the live monitoring
-dashboard — provider health, request log, cache stats, and per-key usage. It asks for your
-proxy key once and remembers it in the browser. With Docker the mapped port (`-p 8319:8319`)
-already exposes it to your host. Running on a remote box bound to `HOST=127.0.0.1`? Tunnel it:
-`ssh -L 8319:127.0.0.1:8319 user@server`, then open `http://localhost:8319/` locally. See
-[monitoring.md](monitoring.md) for the full dashboard tour.
+dashboard — provider health, request log, cache stats, per-key usage, and the **Instances** tab.
+It asks for your proxy key once and remembers it in the browser. With Docker the mapped port
+(`-p 8319:8319`) already exposes it to your host. Running on a remote box bound to
+`HOST=127.0.0.1`? Tunnel it: `ssh -L 8319:127.0.0.1:8319 user@server`, then open
+`http://localhost:8319/` locally. See [monitoring.md](monitoring.md) for the full dashboard tour.
+
+The **Instances** tab can register other already-running routers, or launch Docker-managed
+routers on additional host ports such as `8320` and `8321`. To use the Docker launch flow, the
+manager host needs Docker access and an image matching `HERMES_INSTANCE_IMAGE` (default
+`hermes-router:latest`). If you are working from a clone, build it once:
+
+```bash
+docker build -t hermes-router:latest .
+```
+
+For packaged installs, either tag/pull the image name you want and set `HERMES_INSTANCE_IMAGE`,
+or create instances manually with Docker and register them as **Connect existing**.
 
 ---
 

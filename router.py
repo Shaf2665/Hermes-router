@@ -792,6 +792,26 @@ KEY_SETTABLE_PROVIDERS = [
     "opencode", "opencode_go", "openai", "anthropic",
 ]
 
+PROVIDER_KEY_ENV = {
+    "gemini": "GEMINI_API_KEYS",
+    "openrouter": "OPENROUTER_API_KEYS",
+    "sambanova": "SAMBANOVA_API_KEYS",
+    "github_models": "GITHUB_MODELS_TOKENS",
+    "cerebras": "CEREBRAS_API_KEYS",
+    "groq": "GROQ_API_KEYS",
+    "mistral": "MISTRAL_API_KEYS",
+    "cohere": "COHERE_API_KEYS",
+    "zai": "GLM_API_KEYS",
+    "naga": "NAGA_API_KEYS",
+    "nvidia": "NVIDIA_API_KEYS",
+    "huggingface": "HUGGINGFACE_API_KEYS",
+    "kimi": "KIMI_API_KEYS",
+    "opencode": "OPENCODE_API_KEYS",
+    "opencode_go": "OPENCODE_GO_API_KEYS",
+    "openai": "OPENAI_API_KEYS",
+    "anthropic": "ANTHROPIC_API_KEYS",
+}
+
 # Providers whose model(s) can be overridden — a superset of the above (codex and
 # local don't take a key here, but do have a settable model).
 PROVIDER_MODEL_ENV = {
@@ -1116,6 +1136,47 @@ def _parse_instance_env(value) -> tuple[dict, str | None]:
     return out, None
 
 
+def _keys_for_instance_copy(provider: str) -> list[str]:
+    env_var = PROVIDER_KEY_ENV.get(provider)
+    if not env_var:
+        return []
+    auth_keys = _load_auth_json().get(provider, [])
+    seen, out = set(), []
+    for key in [*auth_keys, *_keys(env_var)]:
+        if key and key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out
+
+
+def _provider_key_counts_for_instance_copy() -> dict:
+    return {p: len(_keys_for_instance_copy(p)) for p in KEY_SETTABLE_PROVIDERS}
+
+
+def _parse_copy_provider_keys(value) -> tuple[list[str], str | None]:
+    if value in (None, ""):
+        return [], None
+    if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+        return [], "'copy_provider_keys' must be a list of provider names"
+    requested = list(dict.fromkeys(x.strip() for x in value if x.strip()))
+    unknown = [p for p in requested if p not in PROVIDER_KEY_ENV]
+    if unknown:
+        return [], f"unknown provider(s): {', '.join(unknown)}"
+    missing = [p for p in requested if not _keys_for_instance_copy(p)]
+    if missing:
+        return [], f"no existing key(s) available for: {', '.join(missing)}"
+    return requested, None
+
+
+def _copy_provider_keys_env(providers: list[str]) -> dict:
+    out = {}
+    for provider in providers:
+        keys = _keys_for_instance_copy(provider)
+        if keys:
+            out[PROVIDER_KEY_ENV[provider]] = ",".join(keys)
+    return out
+
+
 def _build_instance_from_body(body: dict, existing: dict | None = None) -> tuple[dict | None, str | None]:
     existing = existing or {}
     mode = str(body.get("mode", existing.get("mode", "external")) or "external").strip().lower()
@@ -1154,6 +1215,12 @@ def _build_instance_from_body(body: dict, existing: dict | None = None) -> tuple
     env, err = _parse_instance_env(body.get("env", existing.get("env", {})))
     if err:
         return None, err
+    copy_provider_keys, err = _parse_copy_provider_keys(body.get("copy_provider_keys", existing.get("copy_provider_keys", [])))
+    if err:
+        return None, err
+    if copy_provider_keys and mode != "docker":
+        return None, "copy_provider_keys is only available for docker instances"
+    env.update(_copy_provider_keys_env(copy_provider_keys))
 
     instance_id = existing.get("id") or uuid.uuid4().hex[:12]
     image = str(body.get("image", existing.get("image", INSTANCE_DOCKER_IMAGE)) or INSTANCE_DOCKER_IMAGE).strip()
@@ -1177,6 +1244,7 @@ def _build_instance_from_body(body: dict, existing: dict | None = None) -> tuple
         "image": image,
         "container_name": container_name,
         "env": env,
+        "copy_provider_keys": copy_provider_keys,
         "created_at": existing.get("created_at") or now,
         "updated_at": now,
     }
@@ -3746,6 +3814,7 @@ tr:hover td{background:rgba(108,140,255,.04)}
 .config-msg{font-size:11px;min-height:16px}
 .config-msg.ok{color:var(--green)}
 .config-msg.err{color:var(--red)}
+.config-msg.warn{color:var(--yellow)}
 .default-hint{font-size:10px;color:var(--muted)}
 .config-form textarea{
   background:var(--surface2);border:1px solid var(--border);border-radius:6px;
@@ -3754,6 +3823,8 @@ tr:hover td{background:rgba(108,140,255,.04)}
 .config-form textarea:focus{border-color:var(--accent)}
 .instance-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;padding:12px}
 .instance-card{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px}
+.instance-card.warn{border-color:rgba(250,204,21,.45)}
+.instance-card.bad{border-color:rgba(248,113,113,.45)}
 .instance-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
 .btn.primary{background:rgba(108,140,255,.16);border-color:var(--accent);color:var(--text);font-weight:600}
 .btn.danger:hover{border-color:var(--red);color:var(--red)}
@@ -3818,7 +3889,7 @@ tr:hover td{background:rgba(108,140,255,.04)}
     <nav class="sidebar-nav" id="sidebar-nav">
       <button class="nav-item active" data-page="overview" onclick="showPage('overview')">Overview</button>
       <button class="nav-item" data-page="providers" onclick="showPage('providers')"><span>Providers</span><span class="nav-dot" id="nav-dot-providers"></span></button>
-      <button class="nav-item" data-page="instances" onclick="showPage('instances')">Instances</button>
+      <button class="nav-item" data-page="instances" onclick="showPage('instances')"><span>Instances</span><span class="nav-dot" id="nav-dot-instances"></span></button>
       <button class="nav-item" data-page="keys" onclick="showPage('keys')">Provider Keys</button>
       <button class="nav-item" data-page="access" onclick="showPage('access')">Access Keys</button>
       <button class="nav-item" data-page="models" onclick="showPage('models')">Models</button>
@@ -3988,6 +4059,9 @@ tr:hover td{background:rgba(108,140,255,.04)}
                 <div class="advanced-body">
                   <label>Image</label>
                   <input id="inst-image" type="text" value="hermes-router:latest">
+                  <label>Use existing router keys</label>
+                  <div class="field-hint">Selected provider keys are copied into this instance at creation time.</div>
+                  <div class="scope-grid" id="inst-copy-provider-keys"></div>
                   <label>Provider env vars</label>
                   <textarea id="inst-env" spellcheck="false" placeholder="GEMINI_API_KEYS=...\nOPENAI_API_KEYS=..."></textarea>
                 </div>
@@ -4388,6 +4462,7 @@ function keyDots(keys) {
 function renderAll() {
   renderPlainOverview();
   renderNavHealth();
+  renderInstanceNavHealth();
   renderRotationForm();
   renderStats();
   renderProviderCards();
@@ -4410,6 +4485,23 @@ function renderNavHealth() {
   const totalErr = vals.reduce((a,p) => a + (p.stats?.errors || 0), 0);
   const errRate = totalReq ? totalErr / totalReq * 100 : 0;
   dot.className = 'nav-dot' + (openBreakers ? ' bad' : errRate > 5 ? ' warn' : '');
+}
+
+function instanceHealthCounts() {
+  const total = instancesData.length;
+  const healthy = instancesData.filter(i => i.live?.status === 'healthy').length;
+  const unreachable = instancesData.filter(i => i.live?.status === 'unreachable').length;
+  const authErrors = instancesData.filter(i => i.live?.status === 'auth_error').length;
+  const unknown = instancesData.filter(i => !i.live?.status || i.live.status === 'unknown').length;
+  const unhealthy = Math.max(0, total - healthy);
+  return {total, healthy, unhealthy, unreachable, authErrors, unknown};
+}
+
+function renderInstanceNavHealth() {
+  const dot = document.getElementById('nav-dot-instances');
+  if (!dot) return;
+  const c = instanceHealthCounts();
+  dot.className = 'nav-dot' + (c.unreachable || c.authErrors ? ' bad' : c.unhealthy ? ' warn' : '');
 }
 
 function renderRotationForm() {
@@ -4501,15 +4593,30 @@ function renderInstances() {
   const summary = document.getElementById('instance-summary-grid');
   const tbody = document.getElementById('instances-tbody');
   if (!summary || !tbody) return;
-  const total = instancesData.length;
-  const healthy = instancesData.filter(i => i.live?.status === 'healthy').length;
+  const health = instanceHealthCounts();
   const managed = instancesData.filter(i => i.mode === 'docker').length;
   const running = instancesData.filter(i => i.docker?.running).length;
+  const attentionText = health.unreachable
+    ? `${health.unreachable} unreachable`
+    : health.authErrors
+      ? `${health.authErrors} auth issue${health.authErrors===1?'':'s'}`
+      : health.unhealthy
+        ? `${health.unhealthy} need attention`
+        : 'none';
+  const attentionSub = health.unreachable
+    ? 'health endpoint not reachable'
+    : health.authErrors
+      ? 'health ok, key rejected'
+      : health.unknown
+        ? 'waiting for first probe'
+        : 'all registered instances reachable';
+  const attentionClass = health.unreachable || health.authErrors ? 'bad' : health.unhealthy ? 'warn' : '';
   summary.innerHTML = [
-    ['Registered', fmt.num(total), 'routers tracked by this dashboard'],
-    ['Healthy', `${healthy}/${total || 0}`, 'health endpoint reachable'],
-    ['Docker managed', fmt.num(managed), `${running} running container${running===1?'':'s'}`],
-  ].map(([label,value,sub]) => `<div class="instance-card">
+    ['Registered', fmt.num(health.total), 'routers tracked by this dashboard', ''],
+    ['Healthy', `${health.healthy}/${health.total || 0}`, 'health endpoint reachable', health.unhealthy ? 'warn' : ''],
+    ['Needs attention', attentionText, attentionSub, attentionClass],
+    ['Docker managed', fmt.num(managed), `${running} running container${running===1?'':'s'}`, ''],
+  ].map(([label,value,sub,cls]) => `<div class="instance-card ${cls}">
     <div class="quick-label">${label}</div><div class="quick-value">${value}</div><div class="quick-sub">${sub}</div>
   </div>`).join('');
 
@@ -4632,6 +4739,9 @@ async function createInstance(start) {
     image: document.getElementById('inst-image').value,
     api_key: document.getElementById('inst-api-key').value,
     env,
+    copy_provider_keys: mode === 'docker'
+      ? [...document.querySelectorAll('#inst-copy-provider-keys input:checked')].map(el => el.value)
+      : [],
     start,
   };
   try {
@@ -4643,13 +4753,22 @@ async function createInstance(start) {
     const d = await r.json();
     if (!r.ok) { setMsg('inst-msg', d.error?.message || 'Failed to save instance.', false); return; }
     ['inst-name','inst-base-url','inst-host-port','inst-api-key','inst-env'].forEach(id => document.getElementById(id).value = '');
+    document.querySelectorAll('#inst-copy-provider-keys input:checked').forEach(el => el.checked = false);
     autoInstanceBaseUrl = false;
-    setMsg('inst-msg', d.action && !d.action.ok ? 'Saved, but Docker start failed: ' + d.action.message : 'Instance saved.', true);
     if (d.generated_api_key) {
       document.getElementById('new-instance-key-value').value = d.generated_api_key;
       document.getElementById('new-instance-key-panel').style.display = 'block';
     }
     await refresh();
+    const saved = instancesData.find(i => i.id === d.instance?.id);
+    const savedStatus = saved?.live?.status;
+    if (d.action && !d.action.ok) {
+      setWarnMsg('inst-msg', 'Saved, but Docker start failed: ' + d.action.message);
+    } else if (savedStatus && savedStatus !== 'healthy') {
+      setWarnMsg('inst-msg', `Instance saved, but it is ${savedStatus}.`);
+    } else {
+      setMsg('inst-msg', 'Instance saved.', true);
+    }
   } catch(e) { setMsg('inst-msg', 'Network error: ' + e.message, false); }
 }
 
@@ -4871,6 +4990,7 @@ async function loadConfigProviders() {
     modelSel.innerHTML = configProviders.model_settable.map(p => `<option value="${p}">${p}</option>`).join('');
     onModelProviderChange();
     renderProviderScopePicker();
+    renderInstanceCopyKeyPicker();
     renderAccessKeys();   // re-render now that provider names/counts are known
   } catch(e) { /* dashboard still usable without this */ }
 }
@@ -4891,6 +5011,22 @@ function renderProviderScopePicker() {
   grid.innerHTML = renderScopeCheckboxes([]);
 }
 
+function renderInstanceCopyKeyPicker() {
+  const grid = document.getElementById('inst-copy-provider-keys');
+  if (!grid) return;
+  const counts = configProviders?.copyable_provider_keys || {};
+  const names = Object.keys(counts).filter(name => counts[name] > 0)
+    .sort((a,b) => counts[b] - counts[a] || a.localeCompare(b));
+  if (!names.length) {
+    grid.innerHTML = '<div class="field-hint">No configured provider keys are available to copy yet.</div>';
+    return;
+  }
+  grid.innerHTML = names.map(name => {
+    const n = counts[name] || 0;
+    return `<label class="scope-item"><input type="checkbox" value="${attr(name)}"> ${esc(name)}<span class="cnt">${n} key${n===1?'':'s'}</span></label>`;
+  }).join('');
+}
+
 function onModelProviderChange() {
   if (!configProviders) return;
   const p = document.getElementById('cfg-model-provider').value;
@@ -4905,6 +5041,12 @@ function setMsg(id, text, ok) {
   const el = document.getElementById(id);
   el.textContent = text;
   el.className = 'config-msg ' + (ok ? 'ok' : 'err');
+}
+
+function setWarnMsg(id, text) {
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = 'config-msg warn';
 }
 
 async function addKey() {
@@ -5860,6 +6002,7 @@ def config_providers():
         # informational context for the Access Keys page's provider picker, not
         # an enforced quota split (see monitoring docs on provider scoping).
         "key_counts": {p["name"]: len(p.get("keys", [])) for p in PROVIDERS},
+        "copyable_provider_keys": _provider_key_counts_for_instance_copy(),
     })
 
 

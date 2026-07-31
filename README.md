@@ -23,7 +23,8 @@ already talks to either works unchanged — just point it at hermes-router inste
 failover · smart routing (sends each request to the cheapest model that can handle it) ·
 **local models** (Ollama / LM Studio) with cloud fallback · tool calling · embeddings ·
 response caching (incl. optional **semantic** cache) · **per-key budgets & rate limits** ·
-**built-in web dashboard** (just open `http://localhost:8319/`) · **usage analytics**
+**built-in web dashboard** (just open `http://localhost:8319/`) · **multi-instance
+manager** (monitor existing routers or launch Docker-backed routers) · **usage analytics**
 (`/v1/usage`) with **cost/spend tracking** · circuit breaker for unhealthy providers ·
 Prometheus `/metrics` · **runs as a reboot-surviving service** (`hr service`) · toggle
 optional features with `hr features` · one structured `auth.json` for all your keys.
@@ -51,7 +52,7 @@ The docs read in order, from zero experience to a running, monitored agent:
 
 **Operate & extend:**
 
-- **[Monitoring](documentation/monitoring.md)** — **web dashboard** (`/dashboard`), `hr status`, Prometheus `/metrics`, `/v1/status` (tokens, spend)
+- **[Monitoring](documentation/monitoring.md)** — **web dashboard** (`/dashboard`), **Instances** manager, `hr status`, Prometheus `/metrics`, `/v1/status` (tokens, spend)
 - **[VS Code Extension](documentation/vscode-extension.md)** — monitor & manage the router, and use it as a model in Copilot Chat
 
 ---
@@ -141,7 +142,8 @@ curl http://localhost:8319/health
 ```
 
 Or open **`http://localhost:8319/`** in a browser for the live monitoring dashboard —
-provider health, request log, cache stats, and per-key usage (it'll ask for your proxy key).
+provider health, request log, cache stats, per-key usage, and an **Instances** tab for
+tracking other Hermes routers or launching Docker-backed ones (it'll ask for your proxy key).
 
 ### Quick start
 

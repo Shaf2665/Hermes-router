@@ -20,6 +20,8 @@ splits it into pages, refreshed every 5 seconds:
   setup checklist, and summary stats (requests, tokens, spend, cache hit-rate, error rate)
 - **Providers** — health cards (worst-first) plus a detailed table (rating, latency, keys,
   breaker state, cost)
+- **Instances** — track other Hermes Router base URLs, or create Docker-managed routers on
+  new host ports for agents, tests, or isolated workloads
 - **Provider Keys** — add a key for any provider, set the key-rotation mode, and see live
   per-key request counts and daily budget usage
 - **Access Keys** — mint new `PROXY_API_KEYS` for teammates/other apps, with optional rate/
@@ -46,6 +48,62 @@ It's pure HTML/JS (no framework, no external CDN) and reads/writes only the rout
 
 From **VS Code**, the extension's dashboard panel has a **⬈ Web dashboard** button (and a globe
 icon in the panel header) that opens this page in your browser.
+
+## Instances: run and monitor more than one router
+
+The dashboard's **Instances** page turns one Hermes Router into a small control plane for other
+Hermes Router processes. This is useful when you want separate routers for agents, teams,
+experiments, or isolated provider-key pools. Each instance has its own base URL and proxy key, so
+an agent only needs the usual OpenAI-compatible settings:
+
+```python
+client = OpenAI(base_url="http://localhost:8320/v1", api_key="sk-router-agent-a")
+```
+
+There are two modes:
+
+- **Connect existing** — register a router that is already running somewhere. Enter a name, its
+  OpenAI base URL (for example `http://localhost:8320/v1`), and optionally its proxy key. Hermes
+  checks `/health`, and when a key is provided it also verifies authenticated `/v1/models`.
+- **Launch Docker** — define a managed Docker container. Pick a host port, such as `8320`, and
+  the dashboard fills `http://localhost:8320/v1` automatically. Hermes creates a container from
+  `HERMES_INSTANCE_IMAGE` (default `hermes-router:latest`), maps the host port to the container
+  port, generates a proxy key when you leave one blank, and then lets you start, stop, restart,
+  or delete the container from the Instances table.
+
+The **Use existing router keys** picker appears under Docker settings. It shows provider names
+and counts only, never raw key values. When you select a provider such as `gemini`, the manager
+copies the current router's existing Gemini provider keys into the new container as
+`GEMINI_API_KEYS`. This lets a new instance come up with the same provider pool without exposing
+secrets in the browser or API responses.
+
+Manual provider env vars are still available in the same advanced Docker settings box. Use them
+when an instance needs a different provider pool than the manager router.
+
+Instance definitions are stored in `instances.json`, next to `.env` and `auth.json` by default.
+It can contain generated proxy keys and copied provider keys, so it is git-ignored and written
+with owner-only permissions (`0600`) where the OS allows that. See
+[Configuration → Instance manager settings](configuration.md#instance-manager-settings) for the
+file path and Docker defaults.
+
+The same feature is available over HTTP for scripts or orchestrators:
+
+```bash
+# list instances (secrets are masked)
+curl -H "Authorization: Bearer sk-router-1" http://localhost:8319/v1/instances
+
+# register an already-running router
+curl -X POST http://localhost:8319/v1/instances \
+  -H "Authorization: Bearer sk-router-1" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"agent-a","mode":"external","base_url":"http://localhost:8320/v1","api_key":"sk-router-agent-a"}'
+
+# define and start a Docker instance, copying the manager's Gemini/OpenAI provider keys into it
+curl -X POST http://localhost:8319/v1/instances \
+  -H "Authorization: Bearer sk-router-1" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"agent-b","mode":"docker","host_port":8321,"copy_provider_keys":["gemini","openai"],"start":true}'
+```
 
 ## Proxy API keys & the dashboard key
 

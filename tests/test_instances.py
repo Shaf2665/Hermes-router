@@ -88,6 +88,55 @@ def test_docker_instance_generates_key_and_invokes_start(monkeypatch, tmp_path):
     assert actions == [(body["instance"]["container_name"], "start", 8321, body["generated_api_key"])]
 
 
+def test_docker_instance_can_copy_existing_provider_keys(monkeypatch, tmp_path):
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text('{"providers":{"gemini":["g-key-1","g-key-2"],"openai":["oa-key"]}}')
+    monkeypatch.setattr(router, "AUTH_FILE", auth_file)
+    monkeypatch.setattr(router, "INSTANCE_FILE", tmp_path / "instances.json")
+    monkeypatch.setattr(
+        router,
+        "_probe_instance",
+        lambda entry: {"status": "unreachable", "health_ok": False, "auth_ok": None, "latency_ms": 1, "message": "down"},
+    )
+    monkeypatch.setattr(
+        router,
+        "_docker_state",
+        lambda entry: {"available": True, "exists": False, "running": False, "status": "missing", "message": ""},
+    )
+    actions = []
+
+    def fake_docker_action(entry, action):
+        actions.append((action, entry["env"]))
+        return True, "container-id"
+
+    monkeypatch.setattr(router, "_docker_action", fake_docker_action)
+    client = router.app.test_client()
+
+    providers = client.get("/v1/config/providers", headers=AUTH).get_json()
+    assert providers["copyable_provider_keys"]["gemini"] == 2
+    assert providers["copyable_provider_keys"]["openai"] == 1
+
+    resp = client.post(
+        "/v1/instances",
+        headers=AUTH,
+        json={
+            "name": "agent with copied keys",
+            "mode": "docker",
+            "host_port": 8324,
+            "copy_provider_keys": ["gemini"],
+            "start": True,
+        },
+    )
+
+    body = resp.get_json()
+    assert resp.status_code == 201
+    assert body["instance"]["copy_provider_keys"] == ["gemini"]
+    assert body["instance"]["env"]["keys"] == ["GEMINI_API_KEYS"]
+    assert actions == [("start", {"GEMINI_API_KEYS": "g-key-1,g-key-2"})]
+    assert "g-key-1" not in resp.get_data(as_text=True)
+    assert "g-key-2" not in resp.get_data(as_text=True)
+
+
 def test_instance_validation_and_delete(monkeypatch, tmp_path):
     monkeypatch.setattr(router, "INSTANCE_FILE", tmp_path / "instances.json")
     monkeypatch.setattr(
