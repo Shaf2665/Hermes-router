@@ -89,18 +89,21 @@ file path and Docker defaults.
 The same feature is available over HTTP for scripts or orchestrators:
 
 ```bash
+# Set this to one of your PROXY_API_KEYS values.
+export HERMES_ROUTER_KEY='replace-with-your-router-key'
+
 # list instances (secrets are masked)
-curl -H "Authorization: Bearer sk-router-1" http://localhost:8319/v1/instances
+curl -H "Authorization: Bearer $HERMES_ROUTER_KEY" http://localhost:8319/v1/instances
 
 # register an already-running router
 curl -X POST http://localhost:8319/v1/instances \
-  -H "Authorization: Bearer sk-router-1" \
+  -H "Authorization: Bearer $HERMES_ROUTER_KEY" \
   -H "Content-Type: application/json" \
   -d '{"name":"agent-a","mode":"external","base_url":"http://localhost:8320/v1","api_key":"sk-router-agent-a"}'
 
 # define and start a Docker instance, copying the manager's Gemini/OpenAI provider keys into it
 curl -X POST http://localhost:8319/v1/instances \
-  -H "Authorization: Bearer sk-router-1" \
+  -H "Authorization: Bearer $HERMES_ROUTER_KEY" \
   -H "Content-Type: application/json" \
   -d '{"name":"agent-b","mode":"docker","host_port":8321,"copy_provider_keys":["gemini","openai"],"start":true}'
 ```
@@ -137,9 +140,10 @@ hr status --json   # raw JSON for scripts
 
 ## Prometheus metrics (`/metrics`)
 
-A Prometheus-compatible endpoint is exposed at `/metrics`. It reveals only counts and
-timings — never request content — so it's **unauthenticated by default**, like `/health`.
-Set `METRICS_REQUIRE_AUTH=1` to require the proxy key.
+A Prometheus-compatible endpoint is exposed at `/metrics`. It contains operational metrics,
+provider names, and the last six characters of proxy keys, but no request content or full keys.
+It is **unauthenticated by default**, like `/health`; set `METRICS_REQUIRE_AUTH=1` when those
+identifiers should not be public.
 
 ```bash
 curl http://localhost:8319/metrics
@@ -193,7 +197,7 @@ If you've set `METRICS_REQUIRE_AUTH=1`, add your proxy key as a bearer token:
 
 ```yaml
     authorization:
-      credentials: sk-router-1
+      credentials: YOUR_ROUTER_KEY
 ```
 
 **2. Alert on it** — an example rules file covering the failure modes that actually matter
@@ -263,11 +267,12 @@ to a provider, once its daily spend crosses the limit.
 - **cache** — hits, misses, hit-rate, semantic hits
 - **totals** — total tokens, total estimated cost, and uptime
 
-Cost is estimated from a built-in price table; free providers and subscription plans are `$0`.
+Cost is estimated from a manually maintained price table; entries marked free/subscription are
+`$0`, and unknown or changed upstream pricing may not be reflected.
 See [Configuration → Cost awareness](configuration.md).
 
 ```bash
-curl -H "Authorization: Bearer sk-router-1" http://localhost:8319/v1/usage
+curl -H "Authorization: Bearer $HERMES_ROUTER_KEY" http://localhost:8319/v1/usage
 ```
 
 ## JSON status (`/v1/status`)
@@ -290,19 +295,21 @@ usage; `hr status` shows both in the footer. See [configuration.md](configuratio
 ## Request log (`/v1/logs`)
 
 `GET /v1/logs` (proxy key required) returns the most recent requests from an **in-memory ring
-buffer** — the data source behind the web dashboard's live log. It never writes to disk: the
+buffer** — the data source behind the web dashboard's live log. The log never writes to disk: the
 last `REQUEST_LOG_SIZE` entries (default **500**) are kept in RAM and the oldest fall off as new
 ones arrive (~250 KB at the default size). Set `REQUEST_LOG_SIZE=0` to disable it entirely.
 
 Each entry records: timestamp, endpoint (`chat`/`messages`/`embeddings`), caller (key tail),
 streaming flag, complexity score (1–5), estimated tokens, chosen provider + model, latency,
 cascade count, status (`success`/`error`/`cache_hit`), and prompt/completion token counts.
-Request and response **content is never stored** — only metadata.
+The request log stores metadata only. The separate response cache does retain request/response
+data in memory and, with `CACHE_PERSIST=1`, in SQLite; see
+[Configuration](configuration.md#advanced-settings).
 
 Query parameters (all optional): `limit` (default 100), `provider`, `status`
 (`success`/`error`/`cache_hit`), and `endpoint` (`chat`/`messages`/`embeddings`).
 
 ```bash
-curl -H "Authorization: Bearer sk-router-1" \
+curl -H "Authorization: Bearer $HERMES_ROUTER_KEY" \
   "http://localhost:8319/v1/logs?limit=20&status=error"
 ```

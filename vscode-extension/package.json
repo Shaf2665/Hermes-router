@@ -1,8 +1,8 @@
 {
   "name": "hermes-router",
   "displayName": "hermes-router",
-  "description": "Control panel for hermes-router — monitor provider health and manage your free-tier AI load balancer from VS Code.",
-  "version": "0.9.3",
+  "description": "Control panel for hermes-router — monitor provider health and manage your multi-provider AI router from VS Code.",
+  "version": "0.9.4",
   "publisher": "MohammedShafiq",
   "license": "MIT",
   "icon": "icon.png",
@@ -68,8 +68,8 @@
         },
         "hermesRouter.apiKey": {
           "type": "string",
-          "default": "sk-router-1",
-          "description": "A value from the router's PROXY_API_KEYS — used to read /v1/status."
+          "default": "",
+          "description": "A value from the router's PROXY_API_KEYS. Fresh routers generate one on first boot; copy it from .env or the startup log."
         },
         "hermesRouter.hrPath": {
           "type": "string",

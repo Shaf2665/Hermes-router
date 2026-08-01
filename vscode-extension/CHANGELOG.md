@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.4
+
+- **Match generated router keys.** The extension no longer assumes the retired
+  `sk-router-1` default; set `hermesRouter.apiKey` to the key generated in `.env`.
+- **Keep host-only actions on the host.** Update and Codex import now show a clear notice for
+  remote routers instead of accidentally running against the local machine.
+
 ## 0.9.3
 
 - **Fix remote control buttons.** Restart now uses the router HTTP restart endpoint for remote

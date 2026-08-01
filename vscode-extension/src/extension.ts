@@ -9,7 +9,7 @@ function makeClient(): RouterClient {
   const cfg = vscode.workspace.getConfiguration("hermesRouter");
   return new RouterClient(
     cfg.get<string>("baseUrl", "http://localhost:8319"),
-    cfg.get<string>("apiKey", "sk-router-1")
+    cfg.get<string>("apiKey", "")
   );
 }
 
@@ -103,6 +103,12 @@ export function activate(context: vscode.ExtensionContext) {
       );
       return;
     }
+    if (!isLocal()) {
+      vscode.window.showInformationMessage(
+        "Update must run on the machine that hosts Hermes Router. This extension is connected to a remote URL."
+      );
+      return;
+    }
     await runHr(out, ["update"]);
     await refresh();
   });
@@ -117,6 +123,12 @@ export function activate(context: vscode.ExtensionContext) {
         "Codex import reads your ChatGPT login (~/.codex) from this machine — it isn't inside " +
           "the container. Mount it when you run the container (`-v ~/.codex:/root/.codex`) and " +
           "then import, or import on the host."
+      );
+      return;
+    }
+    if (!isLocal()) {
+      vscode.window.showInformationMessage(
+        "Codex import must run on the machine that hosts Hermes Router. This extension is connected to a remote URL."
       );
       return;
     }

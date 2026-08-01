@@ -1,8 +1,9 @@
 # Build your first AI agent
 
 A hands-on, copy-paste guide that takes you from a simple chatbot to a real AI agent —
-running entirely on **free** models through hermes-router. No frameworks, no paid keys, no
-prior agent experience needed.
+using models routed through hermes-router. The examples need no agent framework and can use
+currently available free/evaluation provider tiers; provider quotas and terms still apply.
+No prior agent experience is needed.
 
 > New to the words here (LLM, token, tool…)? Skim **[concepts.md](concepts.md)** first.
 
@@ -33,7 +34,7 @@ We'll build up to that in three small steps.
 ## Before you start
 
 1. hermes-router is installed and running (see **[getting-started.md](getting-started.md)**).
-2. Install the OpenAI library — we point it at the router, so it stays free:
+2. Install the OpenAI library. Upstream cost depends on the provider/model your router selects:
 
 ```bash
 pip install openai
@@ -44,7 +45,7 @@ key):
 
 ```python
 from openai import OpenAI
-client = OpenAI(base_url="http://localhost:8319/v1", api_key="sk-router-1")
+client = OpenAI(base_url="http://localhost:8319/v1", api_key="YOUR_ROUTER_KEY")
 ```
 
 ---
@@ -55,7 +56,7 @@ The smallest useful thing: send a message, print the reply.
 
 ```python
 from openai import OpenAI
-client = OpenAI(base_url="http://localhost:8319/v1", api_key="sk-router-1")
+client = OpenAI(base_url="http://localhost:8319/v1", api_key="YOUR_ROUTER_KEY")
 
 reply = client.chat.completions.create(
     model="hermes-router",
@@ -78,7 +79,7 @@ a list and re-send it every turn. This is **short-term memory**.
 
 ```python
 from openai import OpenAI
-client = OpenAI(base_url="http://localhost:8319/v1", api_key="sk-router-1")
+client = OpenAI(base_url="http://localhost:8319/v1", api_key="YOUR_ROUTER_KEY")
 
 messages = [{"role": "system", "content": "You are a friendly assistant. Keep answers short."}]
 
@@ -109,7 +110,7 @@ action. Here we give it a (pretend) weather tool.
 ```python
 import json
 from openai import OpenAI
-client = OpenAI(base_url="http://localhost:8319/v1", api_key="sk-router-1")
+client = OpenAI(base_url="http://localhost:8319/v1", api_key="YOUR_ROUTER_KEY")
 
 # 1) The actual function the agent can run.
 def get_weather(city):
@@ -162,8 +163,8 @@ What happens when you run it:
 That's a real agent — it observed, decided to act, used a tool, and finished. Add more
 functions (search, calculator, save-to-file…) and you can build agents that do real work.
 
-> hermes-router automatically routes tool requests only to providers whose model supports
-> function calling, so this works across the free pool without you worrying about it.
+> hermes-router prefers models confirmed to support function calling. If no candidate's
+> capability can be confirmed, it tries the pool rather than rejecting the request early.
 
 ---
 

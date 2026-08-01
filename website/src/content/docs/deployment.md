@@ -15,7 +15,7 @@ hermes-router has two pieces. Knowing this makes everything below make sense:
 1. **The router (`router.py`)** — the actual program. It's plain Python, so it runs on
    **Windows, macOS, and Linux** equally well. This is the part that does the work.
 2. **The `hr` command** — a friendly helper (`hr setup`, `hr auth add`, `hr status`, …). It's
-   written in **bash**, so it works on Linux/macOS (and Windows via WSL2 or Git Bash), but
+   written in **bash**, so it works on Linux/macOS (and Windows via WSL2), but
    **not** in a plain Windows Command Prompt / PowerShell.
 
 > Takeaway: the engine runs everywhere. If you're on Windows and don't want bash, you either
@@ -27,10 +27,10 @@ hermes-router has two pieces. Knowing this makes everything below make sense:
 
 | Your situation | Go to |
 |---|---|
-| "Just give me the easiest thing that works on any OS" | [Docker](#path-1-docker-easiest-any-os) |
-| I'm on **Linux or macOS** | [Linux/macOS install](#path-2-linux--macos-the-hr-way) |
-| I'm on **Windows** | [Windows](#path-3-windows) |
-| I want to host it **online** (free, in the cloud) | [Hugging Face Space](#path-4-hugging-face-space-host-it-online) |
+| "Just give me the easiest thing that works on any OS" | [Docker](#path-1--docker-easiest-any-os) |
+| I'm on **Linux or macOS** | [Linux/macOS install](#path-2--linux--macos-the-hr-way) |
+| I'm on **Windows** | [Windows](#path-3--windows) |
+| I want to host it **online** | [Hugging Face Space](#path-4--hugging-face-space-host-it-online) |
 
 After any path, jump to [Check it's working](#check-its-working) and
 [Troubleshooting](#troubleshooting).
@@ -63,9 +63,10 @@ docker --version
 If not, install **Docker Desktop** (Windows/macOS) or Docker Engine (Linux) from
 [docker.com](https://www.docker.com/products/docker-desktop/).
 
-You'll also need **at least one free API key** — see
-[providers.md](/providers/). Gemini ([aistudio.google.com](https://aistudio.google.com)) is
-a good first one: free and quick to create.
+For cloud inference you need at least one provider key; a configured local model needs no key.
+See [providers.md](/providers/) for current access notes. Gemini
+([aistudio.google.com](https://aistudio.google.com)) is one common starting point where its
+free tier is available.
 
 ---
 
@@ -86,21 +87,20 @@ docker run -d -p 8319:8319 \
 ```
 
 Add more `-e <PROVIDER>_API_KEYS=…` for other providers (see [providers.md](/providers/)).
-Then `curl http://localhost:8319/health`. To persist keys/state instead of passing env vars,
-mount a volume with an `auth.json` (and set `-e ROUTER_STATE_FILE=/tmp/router_state.json`).
+Then `curl http://localhost:8319/health`. The plain image is designed for environment-based
+configuration. For CLI-managed keys and persistent mutable configuration, use the `:cli`
+image with its `/app/data` volume as shown in the Windows/VS Code section below.
 
 > **Windows (PowerShell / Command Prompt): put it on one line.** The `\` line-continuation
 > above is Linux/macOS shell syntax — on Windows it errors with `docker: invalid reference
 > format` and `'-e' is not recognized`. Use a single line instead:
 >
 > ```powershell
-> docker run -d --name hermes-router -p 8319:8319 -e GEMINI_API_KEYS=your-gemini-key -e PROXY_API_KEYS=sk-router-1 shafiq735/hermes-router
+> docker run -d --name hermes-router -p 8319:8319 -e GEMINI_API_KEYS=your-gemini-key -e PROXY_API_KEYS=replace-with-a-long-random-secret shafiq735/hermes-router
 > ```
 >
 > (PowerShell's line-continuation character is a backtick `` ` ``, not `\`, if you want to split
-> it across lines.) `PROXY_API_KEYS=sk-router-1` here matches the VS Code extension's default
-> `apiKey`, so the extension connects with no extra config — pick your own secret only if you
-> also set `hermesRouter.apiKey` to the same value.
+> it across lines.) Set the VS Code extension's `hermesRouter.apiKey` to the same secret.
 
 ### Or build from source with Compose
 
@@ -198,10 +198,10 @@ three options, easiest first.
 1. Install **Docker Desktop** from [docker.com](https://www.docker.com/products/docker-desktop/)
    and start it (wait until the whale icon says "running").
 2. Open **PowerShell** and run the prebuilt image **as a single line** (the `\` multi-line form
-   in [Path 1](#path-1-docker-easiest-any-os) is Linux syntax and PowerShell rejects it):
+   in [Path 1](#path-1--docker-easiest-any-os) is Linux syntax and PowerShell rejects it):
 
    ```powershell
-   docker run -d --name hermes-router -p 8319:8319 -e GEMINI_API_KEYS=your-gemini-key -e PROXY_API_KEYS=sk-router-1 shafiq735/hermes-router
+   docker run -d --name hermes-router -p 8319:8319 -e GEMINI_API_KEYS=your-gemini-key -e PROXY_API_KEYS=replace-with-a-long-random-secret shafiq735/hermes-router
    ```
 3. In Docker Desktop → **Containers**, check that the row shows **Port(s) = `8319:8319`**. If
    that column is **blank**, the container has no published port (the `-p` was dropped) and
@@ -221,8 +221,7 @@ The [VS Code extension](/vscode-extension/) talks to the router over HTTP, so it
 your Docker container. In the extension settings:
 
 - **`hermesRouter.baseUrl`** → `http://localhost:8319`
-- **`hermesRouter.apiKey`** → the **same value as the container's `PROXY_API_KEYS`** (`sk-router-1`
-  in the command above).
+- **`hermesRouter.apiKey`** → the **same value as the container's `PROXY_API_KEYS`**.
 
 > A red **`401 unauthorized — check hermesRouter.apiKey`** in the dashboard means those two
 > values don't match — fix `apiKey` to equal `PROXY_API_KEYS` and click **Refresh**.
@@ -231,12 +230,12 @@ your Docker container. In the extension settings:
 so use the **`:cli`** image variant with a volume, and tell the extension the container name:
 
 ```powershell
-docker run -d --name hermes-router -p 8319:8319 -v hermes-data:/app/data -e PROXY_API_KEYS=sk-router-1 shafiq735/hermes-router:cli
+docker run -d --name hermes-router -p 8319:8319 -v hermes-data:/app/data -e PROXY_API_KEYS=replace-with-a-long-random-secret shafiq735/hermes-router:cli
 ```
 
 Then set **`hermesRouter.dockerContainer`** to `hermes-router`. Now the buttons run via
 `docker exec`/`docker restart` against the container, and the `/app/data` volume keeps your keys
-and settings across restarts. Full details: [VS Code Extension → Docker](/vscode-extension/#managing-a-router-running-in-docker).
+and settings across restarts. Full details: [VS Code Extension → Docker](/vscode-extension/#using-the-router-in-docker).
 
 (Sticking with the plain image? Add providers by re-running with another `-e <PROVIDER>_API_KEYS=…`
 and "restart" with `docker restart hermes-router`.)
@@ -251,7 +250,7 @@ WSL2 runs a real Ubuntu inside Windows, so everything behaves exactly like Linux
    ```
    Restart when prompted; it installs Ubuntu and asks you to create a username/password.
 2. Open **Ubuntu** from the Start menu (this is your Linux shell).
-3. Inside Ubuntu, follow [Path 2 — Linux/macOS](#path-2-linux--macos-the-hr-way). `hr` and
+3. Inside Ubuntu, follow [Path 2 — Linux/macOS](#path-2--linux--macos-the-hr-way). `hr` and
    all its commands now work.
 
 To reach the router from a Windows app, use `http://localhost:8319` — WSL2 forwards
@@ -310,8 +309,11 @@ PowerShell window to test it (see [Check it's working](#check-its-working)).
 
 ## Path 4 — Hugging Face Space (host it online)
 
-Want the router running in the cloud (free) instead of your own computer? A **Docker** Space
-works well. Follow these steps carefully — the **port** is the #1 thing people get wrong.
+Want the router running in the cloud instead of your own computer? A **Docker** Space can host
+it. Hugging Face currently requires an eligible paid account/organization plan to create
+Docker Spaces, even when CPU Basic hardware itself is listed as free. Check the current
+[Spaces overview](https://huggingface.co/docs/hub/spaces-overview) before choosing this path.
+Follow these steps carefully — the **port** is the #1 configuration detail people miss.
 
 **Step 1 — create the Space.** On [huggingface.co](https://huggingface.co) → your profile →
 **New Space**, and fill the form like this:
@@ -323,7 +325,7 @@ works well. Follow these steps carefully — the **port** is the #1 thing people
 | **License** | `mit` (matches the project) |
 | **Select the Space SDK** | **Docker** — ⚠️ *not* Gradio/Static; it's a web server, not a Gradio app |
 | **Choose a Docker template** | **Blank** — ⚠️ *not* Streamlit/Shiny/etc. We ship our own `Dockerfile`, so you want the empty starting point |
-| **Space hardware** | **CPU Basic (Free)** — the router is lightweight; no GPU needed |
+| **Space hardware** | **CPU Basic**, when available for your account — the router needs no GPU |
 | **Storage Bucket** | leave **off** (keys go in Secrets, not files — see Step 4) |
 | **Space Dev Mode** | leave **off** (PRO-only, not needed) |
 | **Visibility** | **Public** — the app URL must be reachable; this is why Step 5 (a strong proxy key) matters |
@@ -406,8 +408,7 @@ Add more provider keys (`OPENROUTER_API_KEYS`, etc.) the same way. `ROUTER_STATE
 the ratings cache at `/tmp`, which is writable on a Space.
 
 **Step 5 — 🔒 lock it down.** Your Space URL is **public** — anyone who finds it can spend
-your quota. So `PROXY_API_KEYS` **must** be a strong secret you choose, never the default
-`sk-router-1`.
+your quota. So `PROXY_API_KEYS` **must** be a strong secret you choose.
 
 **Step 6 — wait for it to build,** then open your Space URL:
 `https://<your-username>-<space-name>.hf.space/health` — you should see
@@ -445,11 +446,12 @@ curl http://localhost:8319/health
 Expected: `{"status":"ok",...}`. (No `curl`? Paste `http://localhost:8319/health` into a web
 browser.)
 
-**2. Can it answer a real question?** Replace `sk-router-1` with your `PROXY_API_KEYS` value:
+**2. Can it answer a real question?** Export your `PROXY_API_KEYS` value first:
 
 ```bash
+export HERMES_ROUTER_KEY='replace-with-your-router-key'
 curl http://localhost:8319/v1/chat/completions \
-  -H "Authorization: Bearer sk-router-1" \
+  -H "Authorization: Bearer $HERMES_ROUTER_KEY" \
   -H "Content-Type: application/json" \
   -d '{"model":"hermes-router","messages":[{"role":"user","content":"Say hi in one word"}]}'
 ```
@@ -551,7 +553,9 @@ docker` if not).
 **macOS:** there's no systemd — `hr service install` prints a ready-to-paste **launchd** plist you
 drop in `~/Library/LaunchAgents` and `launchctl load -w`.
 
-**Hugging Face Space:** always-on by the platform — nothing to do.
+**Hugging Face Space:** free CPU hardware sleeps after inactivity; a later visit wakes it.
+Paid hardware normally stays running unless you configure sleep. This is platform lifecycle
+behavior, not a router restart guarantee.
 
 ---
 

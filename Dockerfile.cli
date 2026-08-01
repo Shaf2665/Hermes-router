@@ -7,7 +7,7 @@
 #
 # Run it with a volume:
 #   docker run -d --name hermes-router -p 8319:8319 \
-#     -v hermes-data:/app/data -e PROXY_API_KEYS=sk-router-1 \
+#     -v hermes-data:/app/data -e PROXY_API_KEYS=replace-with-a-long-random-secret \
 #     shafiq735/hermes-router:cli
 FROM python:3.12-slim
 

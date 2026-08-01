@@ -1,8 +1,8 @@
 # Configuration
 
 All configuration is via environment variables (in `.env`) and the `auth.json` credential
-store. Everything is optional with sensible defaults — the router runs out of the box once
-it has at least one key.
+store. Most settings are optional; the router can serve model requests once at least one
+provider (including a local model) is configured.
 
 ## Core features vs. add-ons
 
@@ -10,8 +10,8 @@ hermes-router splits its behavior into two groups:
 
 - **Core features** — always on; they *are* the router. Auth, the credential pool + key
   rotation, failover, the circuit breaker, smart routing, protocol translation
-  (OpenAI/Anthropic/Codex), capability probing, token counting, request guardrails, and
-  usage/cost tracking.
+  (OpenAI/Anthropic/Codex), capability probing, token estimation, request guardrails, and
+  usage/estimated-cost tracking.
 - **Add-ons** — optional behaviors you turn on when you want them. Each is backed by an
   environment variable (or some `auth.json` config), and unset = off (except the response
   cache, on by default).
@@ -44,7 +44,7 @@ the command that manages them. The live state is also in `/v1/status` under `fea
 ## Where your keys live
 
 `hr auth add` writes to **`auth.json`** — the router's own credential store, kept next to
-the router. It's git-ignored, so real keys are never committed. Codex (ChatGPT
+the router. The repository ignores this file; do not force-add or publish it. Codex (ChatGPT
 subscription) logins are stored separately under `codex_accounts` (via
 `hr auth import-codex`); the router refreshes their OAuth access tokens automatically.
 
@@ -70,7 +70,7 @@ subscription) logins are stored separately under `codex_accounts` (via
 | `PROXY_API_KEYS` | *(auto-generated)* | Comma-separated keys your app uses to authenticate — and the key needed to open the web dashboard. If left unset (or on the `.env.example` placeholder), the router generates a real random key on first boot and saves it back to `.env`, logging it once. Add more from the dashboard's **Access Keys** page, or set your own here. |
 | `ROUTER_AUTH_FILE` | `./auth.json` | Where keys are stored |
 | `HERMES_INSTANCES_FILE` | `./instances.json` | Where the dashboard's Instances registry is stored. It may contain generated instance proxy keys and copied provider keys, so keep it private and never commit it. |
-| `CACHE_TTL_SECONDS` | `300` | Response cache lifetime (`0` disables). Entries are namespaced per API key, so different `PROXY_API_KEYS` never share a cached answer — safe for multi-tenant use |
+| `CACHE_TTL_SECONDS` | `300` | Response cache lifetime (`0` disables). Entries are namespaced per API key, so different `PROXY_API_KEYS` do not share a cached answer |
 | `LOG_LEVEL` | `INFO` | Logging verbosity |
 | `METRICS_REQUIRE_AUTH` | `0` | Require the proxy key on `/metrics` (`1` to enable) |
 | `REASONING_TOKEN_RESERVE` | `4096` | Extra output budget added for reasoning models so hidden chain-of-thought doesn't eat the answer (`0` disables) |
@@ -96,10 +96,15 @@ Sensible defaults — most users never touch these.
 | `ROUTER_MODEL_ID` | `hermes-router` | The model name clients send (the router maps it to each provider's real model) |
 | `ROUTER_STATE_FILE` | `./router_state.json` | Where provider ratings/capabilities are cached between restarts (use `/tmp/...` on read-only hosts like HF Spaces) |
 | `ROUTER_STATE_TTL_HOURS` | `24` | How long the cached probe state is trusted before re-probing (`0` = re-probe every start) |
+| `REQUEST_LOG_SIZE` | `500` | Maximum in-memory request-metadata entries (`0` disables the request log) |
 | `BREAKER_WINDOW` | `8` | Recent outcomes the circuit breaker weighs per provider |
 | `BREAKER_MIN_SAMPLES` | `4` | Minimum samples before the breaker can trip |
 | `BREAKER_ERROR_RATE` | `0.5` | Health-failure fraction that trips the breaker |
 | `BREAKER_COOLDOWN` | `60` | Seconds the breaker stays open before re-probing |
+
+Response-cache entries contain request material and generated responses. The in-memory cache
+retains them until expiry/eviction; `CACHE_PERSIST=1` also writes them to `CACHE_DB_PATH`.
+Protect that file and disable caching where this retention is inappropriate.
 
 ### Instance manager settings
 
@@ -138,7 +143,7 @@ set the same env var, the copied provider keys win for that provider.
 
 ### Per-key budgets & rate limits
 
-Give each `PROXY_API_KEYS` entry a ceiling so the router is safe to share with a team. These
+Give each `PROXY_API_KEYS` entry an upstream-usage ceiling. These
 env vars are **global defaults**; set per-key overrides in `auth.json` with `hr limit set`.
 `0` = unlimited (the default — no enforcement). Live usage shows in `/v1/status` and `hr status`.
 
@@ -162,10 +167,16 @@ in `auth.json` look like:
 { "proxy_keys": { "sk-team-1": { "rpm": 60, "req_per_day": 500, "tokens_per_day": 100000, "cost_per_day": 5 } } }
 ```
 
+> **Security boundary:** every proxy key can also call the dashboard's configuration-write
+> endpoints. Limits and provider scopes restrict routing usage, but they do not create a
+> read-only or non-admin role. Give keys only to trusted users/services and put an external
+> auth layer in front if you need tenant isolation.
+
 ### Cost / spend awareness
 
-The router estimates **spend** from a built-in price table (USD per 1M tokens, input/output).
-Free providers and subscription plans (Codex, Kimi coding) are **$0**. Estimated cost shows per
+The router estimates **spend** from a built-in, manually maintained price table (USD per 1M
+tokens, input/output). Providers and subscription plans marked as zero-cost in that table show
+`$0`. Estimated cost appears per
 provider and per key in `/v1/usage`, `/v1/status`, `hr status`, the VS Code dashboard, and
 `/metrics` (`hermes_router_cost_usd_total`). USD is always the canonical figure.
 
@@ -175,7 +186,9 @@ provider and per key in `/v1/usage`, `/v1/status`, `hr status`, the VS Code dash
 | `COST_FX_RATE` | `0` | USD→`COST_CURRENCY` multiplier (e.g. `83`); `0` shows USD only |
 | `MODEL_PRICES_FILE` | *(unset)* | JSON file of price overrides — `{"model-substr": [input, output]}` (USD per 1M tokens) — merged over the built-in table |
 
-Prices are **best-effort estimates** and drift over time; correct them with `MODEL_PRICES_FILE`.
+These are **best-effort operational estimates, not provider invoices**. Prices, promotions,
+tokenizers, and subscription terms drift; unknown models may show `$0`. Correct known prices
+with `MODEL_PRICES_FILE`.
 
 ### Local model (Ollama / LM Studio / llama.cpp)
 
@@ -247,10 +260,10 @@ hr model set gemini gemini-2.5-flash-lite,gemini-2.5-flash,gemini-2.0-flash
 hr restart
 ```
 
-Free-tier rate limits are almost always **per-model**, so each model is its own quota
-bucket. When the first model hits its limit (429), the router **fails over to the next model
-on the same key** before cascading to the next provider — multiplying free throughput along a
-new axis (keys × models × providers), with no extra signups. Each model is **also a first-class
+Some providers enforce model-specific limits, so each configured model can be another failover
+candidate. When the first model returns `429`, the router **fails over to the next model on
+the same key** before cascading to the next provider. This does not bypass limits shared at the
+account, project, organization, token, or daily level. Each model is **also a first-class
 routing candidate**, scored on its own rating and capability — so the router can pick the right
 model in the list for each request (e.g. a stronger model for a hard or tool-using turn), not just
 fall over to it. Within equal cost/capability buckets, the router prefers known stronger model

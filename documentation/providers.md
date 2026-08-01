@@ -1,33 +1,40 @@
 # Providers
 
-hermes-router routes across a pool of providers. You only need **one** key to start —
-add more (and more providers) to stay online longer. You can stack quota by creating
-multiple keys per provider, and by signing up with multiple Google/GitHub accounts.
+hermes-router routes across a pool of providers. You only need **one** configured provider
+to start. Add providers and keys to create more failover options. Multiple keys do not
+necessarily add quota: many services enforce limits per project, organization, or account.
 
 Add keys with `hr auth add <provider>` (see [configuration.md](configuration.md) for where
 they're stored).
 
-## Free providers
+Want help choosing? See the [free model rankings](free-model-rankings.md) for a
+quality-first comparison of the exact models Hermes Router uses by default.
 
-| Provider | Free tier | Sign up |
+## Free and evaluation access
+
+Provider plans, model catalogs, regions, and limits change independently of Hermes Router.
+Treat this table as an access guide, then check the linked provider console for the limits
+that apply to your account before relying on it.
+
+| Provider | Access notes | Sign up / current limits |
 |---|---|---|
-| Gemini | Generous per-minute limits | [aistudio.google.com](https://aistudio.google.com) |
-| OpenRouter | 50 requests/day per key | [openrouter.ai](https://openrouter.ai) |
-| SambaNova | Free, fast Llama models | [cloud.sambanova.ai](https://cloud.sambanova.ai) |
-| GitHub Models | Free with any GitHub account | [github.com/settings/tokens](https://github.com/settings/tokens) |
-| Cerebras | Fast inference, free tier | [cloud.cerebras.ai](https://cloud.cerebras.ai) |
-| Groq | Fast inference, free tier | [console.groq.com](https://console.groq.com) |
-| Mistral | Free tier | [console.mistral.ai](https://console.mistral.ai) |
-| Cohere | 1,000 calls/mo per key | [dashboard.cohere.com](https://dashboard.cohere.com) |
-| Z.ai (GLM) | ~1k requests/day | [z.ai](https://z.ai) |
-| Naga AI | 100 requests/day per key | [naga.ac](https://naga.ac) |
-| NVIDIA NIM | 40 requests/min per key | [build.nvidia.com](https://build.nvidia.com) |
-| Hugging Face | ~$0.10/mo credit (PRO: $2/mo) — 45k+ models | [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) |
+| Gemini | Free tier for eligible models, projects, and regions; limits are model/project-specific | [AI Studio](https://aistudio.google.com) · [rate limits](https://ai.google.dev/gemini-api/docs/rate-limits) |
+| OpenRouter | Zero-priced model variants; the no-credit plan currently has a shared daily request limit | [OpenRouter](https://openrouter.ai) · [free-model limits](https://openrouter.ai/docs/faq#how-are-rate-limits-calculated) |
+| SambaNova | Developer access and model availability are account-specific | [SambaNova Cloud](https://cloud.sambanova.ai) |
+| GitHub Models | Included, rate-limited API use for experiments and prototypes; paid usage is separate | [GitHub Models](https://github.com/marketplace/models) · [rate limits](https://docs.github.com/en/github-models/use-github-models/prototyping-with-ai-models#rate-limits) |
+| Cerebras | Free developer access with model/account-specific limits | [Cerebras Cloud](https://cloud.cerebras.ai) |
+| Groq | Free plan with model-specific organization limits | [Groq Console](https://console.groq.com) · [rate limits](https://console.groq.com/docs/rate-limits) |
+| Mistral | Experiment access is intended for testing and learning; availability depends on the account | [Mistral Console](https://console.mistral.ai) |
+| Cohere | Trial/evaluation keys are currently limited to 1,000 calls per month | [Cohere Dashboard](https://dashboard.cohere.com) · [limits](https://docs.cohere.com/v2/docs/rate-limits) |
+| Z.ai (GLM) | Some models are zero-priced; verify the current catalog and account limits | [Z.ai](https://z.ai) |
+| Naga AI | Promotional or free access may change; verify before configuring it | [Naga AI](https://naga.ac) |
+| NVIDIA NIM | Hosted API trial access and limits depend on the account/model | [NVIDIA Build](https://build.nvidia.com) |
+| Hugging Face | Monthly Inference Providers credit; the free-user amount is currently $0.10 and subject to change | [tokens](https://huggingface.co/settings/tokens) · [pricing](https://huggingface.co/docs/inference-providers/en/pricing) |
 
-> **Hugging Face note:** one token reaches 45,000+ models across many inference partners
-> via an OpenAI-compatible endpoint. The free credit is small, so it's best as an *extra* in
-> the pool (the router fails over to other providers when it runs out). The default model
-> uses the `:cheapest` suffix to stretch the credit; change it with `HUGGINGFACE_MODEL`.
+> **Hugging Face note:** one user token can access models currently served by Inference
+> Providers through an OpenAI-compatible endpoint. The catalog and serving partners change,
+> and only eligible routed requests use the monthly credit. The default model uses the
+> `:cheapest` suffix; change it with `HUGGINGFACE_MODEL`.
 
 ## Paid providers
 
@@ -60,9 +67,9 @@ Codex **Responses API** transparently. Add several accounts (run `hr auth import
 logging into each) and pair with `hr mode sequential` to drain one account's quota before the
 next. Override the model with `CODEX_MODEL` (default `gpt-5.5`).
 
-> ⚠️ **Terms of service:** routing ChatGPT *subscription* quota through a proxy is a gray
-> area in OpenAI's terms and could risk your account. Use your own accounts, at your own
-> discretion.
+> **Unofficial integration:** this subscription-token path is not an OpenAI API-key
+> integration. Review the terms that apply to your account and use only accounts you control;
+> OpenAI may change or stop supporting the underlying behavior.
 
 ## Kimi (Moonshot coding plan)
 
@@ -83,7 +90,7 @@ Get a key at [platform.kimi.ai](https://platform.kimi.ai) / [platform.moonshot.a
 ## OpenCode (Zen + Go)
 
 [OpenCode](https://opencode.ai) Zen is an OpenAI-compatible gateway of coding-tuned models —
-including a rotating pool of **genuinely free** ones. It's a normal API-key provider (no OAuth):
+including a rotating pool of models currently marked free. It's a normal API-key provider (no OAuth):
 sign in at [opencode.ai](https://opencode.ai), copy your key from **API Keys**, then:
 
 ```bash
@@ -91,13 +98,14 @@ hr auth add opencode
 hr restart
 ```
 
-The default routes to free models (`deepseek-v4-flash-free`, `minimax-m3-free`,
-`qwen3.6-plus-free`). Free promotions rotate — when one ends OpenCode returns a model error and
-the router automatically **skips it and fails over** to the next. Reach the premium models
-(Claude, GPT, Gemini, GLM, Kimi, Qwen…) by setting `OPENCODE_MODEL`.
+The default routes to free models (`deepseek-v4-flash-free`, `nemotron-3-ultra-free`,
+`mimo-v2.5-free`, `north-mini-code-free`). Free promotions rotate — when one ends OpenCode
+returns a model error and the router automatically **skips it and fails over** to the next.
+Reach the premium models (Claude, GPT, Gemini, GLM, Kimi, Qwen…) by setting `OPENCODE_MODEL`.
 
-**OpenCode Go** is OpenCode's low-cost subscription tier (**$5 first month, then $10/mo**) — the
-*same* API key against a different endpoint, no separate auth. Enable Go billing on opencode.ai,
+**OpenCode Go** is OpenCode's paid subscription tier — the *same* API key against a different
+endpoint, no separate auth. Check [OpenCode's current Go plan](https://opencode.ai/docs/go/)
+for pricing and limits, then enable Go billing on opencode.ai,
 then add it as its own provider so it's only used once you've subscribed:
 
 ```bash
@@ -111,8 +119,10 @@ hr restart
 > repeated failures instead of retrying forever, but it will never succeed). If you haven't
 > subscribed, skip this section — OpenCode Zen above already covers the free tier.
 
-Defaults to `https://opencode.ai/zen/go/v1` with `deepseek-v4-flash,minimax-m3`; override with
-`OPENCODE_GO_MODEL`.
+Defaults to `https://opencode.ai/zen/go/v1` with chat-completions-compatible models
+`deepseek-v4-flash,kimi-k2.7-code,mimo-v2.5`; override with `OPENCODE_GO_MODEL`.
+Models that OpenCode exposes only through `/v1/messages` are not compatible with this
+provider adapter.
 
 ## Local models (Ollama / LM Studio / llama.cpp)
 

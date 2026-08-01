@@ -22,12 +22,13 @@ A control panel for [hermes-router](https://github.com/Shaf2665/Hermes-router) i
 
 The extension registers **hermes-router** as a language model in VS Code. Open **Copilot Chat**,
 click the **model picker**, and choose **hermes-router** — your prompts now route through the
-router's free pool. It's also available to any extension via the `vscode.lm` API.
+router's configured pool. Provider pricing and limits still apply. It's also available to
+any extension via the `vscode.lm` API.
 
 > Requires **VS Code ≥ 1.104** and the **GitHub Copilot Chat** extension (for the chat UI +
-> model picker). Supports streamed text **and tool calling**, so it works in Copilot **agent
-> mode** (run commands, edit files, call MCP tools) — the router automatically routes
-> tool-using requests to tool-capable providers.
+> model picker). Supports streamed text **and tool calling**, so it can work in Copilot
+> **agent mode** (run commands, edit files, call MCP tools). Configure at least one model known
+> to support tools; the router prefers confirmed tool-capable models.
 
 ## Requirements
 
@@ -40,14 +41,14 @@ commands — the `hr` CLI on your PATH. See the
 | Setting | Default | Description |
 |---|---|---|
 | `hermesRouter.baseUrl` | `http://localhost:8319` | Router URL. Use your Space URL for a remote router. |
-| `hermesRouter.apiKey` | `sk-router-1` | A value from `PROXY_API_KEYS` — used to read `/v1/status`. |
+| `hermesRouter.apiKey` | *(empty)* | A value from `PROXY_API_KEYS`. Fresh routers generate one in `.env` and log it once. |
 | `hermesRouter.hrPath` | `hr` | Path to the `hr` CLI (for local control actions). |
 | `hermesRouter.dockerContainer` | `` | Container name to manage the router via Docker (see below). |
 | `hermesRouter.refreshSeconds` | `10` | Dashboard / status-bar refresh interval. |
 
-> **Remote routers:** Monitoring works over HTTP against any `baseUrl`. The control commands
-> use the local `hr` CLI, so they're disabled (with a notice) when `baseUrl` is not localhost —
-> manage a remote router where it's hosted.
+> **Remote routers:** Monitoring and Restart work over authenticated HTTP against any
+> `baseUrl`; Restart requires the remote supervisor/container to bring the process back.
+> Doctor, Update, and Import Codex must run on the router host and show a notice remotely.
 
 ## Managing a router running in Docker
 
@@ -64,7 +65,7 @@ This needs the **`:cli`** image variant run with a volume so changes persist:
 
 ```bash
 docker run -d --name hermes-router -p 8319:8319 \
-  -v hermes-data:/app/data -e PROXY_API_KEYS=sk-router-1 \
+  -v hermes-data:/app/data -e PROXY_API_KEYS=replace-with-a-long-random-secret \
   shafiq735/hermes-router:cli
 ```
 

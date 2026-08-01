@@ -19,11 +19,10 @@ This is the core of the router, used by every request.
   like "what year was X" or "yes or no" pushes it toward "easy."
 - Every configured model has a **capability rating from 1 (strongest) to 5 (weakest)**, based on
   its name (e.g. `gemini-2.5-pro` rates higher than `gemini-2.5-flash-lite`).
-- The router picks the **cheapest model that's still capable enough** for the request. A trivial
-  question never gets sent to your most powerful (and often priciest or slowest) model, and a hard
-  question is never left with a model too weak to handle it.
-- If the chosen model is rate-limited, down, or errors — the router **automatically tries the next
-  best one**. Your app just gets an answer; it never sees the failed attempt.
+- The router prefers the **lowest configured cost tier whose rating is sufficient** for the
+  heuristic difficulty score. These ratings are routing hints, not a guarantee of answer quality.
+- If the chosen model is rate-limited, down, or errors, the router **automatically tries the next
+  best one**. If every candidate fails, the app receives a `503`.
 
 This also works *within* a single provider: if you list several models for one provider (e.g.
 `GEMINI_MODEL=gemini-2.5-flash-lite,gemini-2.5-flash,gemini-2.5-pro`), the router treats each one
@@ -35,9 +34,8 @@ instead of only using the extra models as backups.
 **Tool calling** (or "function calling") is how you let the model *do* something — like look up
 the weather — instead of just answering in text. See **[concepts.md](concepts.md)** if that's new to you.
 
-Not every model can do this. When your request includes `tools`, the router **only considers
-models known to support function calling** — skipping ones that would just ignore the tool and
-answer conversationally instead of calling it. This is detected automatically per model at
+Not every model can do this. When your request includes `tools`, the router first considers
+models known to support function calling, skipping ones known not to support it. This is detected per model at
 startup (see [configuration.md](configuration.md#per-provider-capability-overrides) to override a
 result manually with `<PROVIDER>_SUPPORTS_TOOLS`).
 
@@ -82,4 +80,4 @@ probing under the hood, see the **[Architecture section of the README](../README
 
 ---
 
-**Next:** [Deployment](deployment.md) — run the router on your OS (Windows, macOS, Linux, Docker, or a free cloud Space).
+**Next:** [Deployment](deployment.md) — run the router on your OS (Windows, macOS, Linux, Docker, or Hugging Face Spaces).

@@ -42,7 +42,7 @@ from_env() {
 }
 
 PORT="${PORT:-$(from_env PORT || echo 8319)}"
-KEY="${PROXY_API_KEYS:-$(from_env PROXY_API_KEYS || echo 'sk-router-1')}"
+KEY="${PROXY_API_KEYS:-$(from_env PROXY_API_KEYS || true)}"
 KEY="${KEY%%,*}"
 
 # Fetch the live features snapshot from the running router.

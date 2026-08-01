@@ -30,8 +30,8 @@ from_env() {
 }
 
 PORT="${PORT:-$(from_env PORT || echo 8319)}"
-# Proxy key: env override → PROXY_API_KEYS in .env (first of comma list) → default.
-KEY="${PROXY_API_KEYS:-$(from_env PROXY_API_KEYS || echo 'sk-router-1')}"
+# Proxy key: env override → generated/configured PROXY_API_KEYS in .env.
+KEY="${PROXY_API_KEYS:-$(from_env PROXY_API_KEYS || true)}"
 KEY="${KEY%%,*}"   # first key if comma-separated
 
 JSON_ONLY=0

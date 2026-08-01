@@ -8,7 +8,7 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: 'hermes-router',
-			description: 'Keep your AI app online for free — a self-hosted load balancer across free AI providers (OpenAI & Anthropic compatible).',
+			description: 'A self-hosted multi-provider AI router with key rotation, failover, and a built-in dashboard.',
 			logo: { src: './src/assets/logo.png', alt: 'hermes-router' },
 			favicon: '/favicon.png',
 			customCss: ['./src/styles/custom.css'],
@@ -30,6 +30,7 @@ export default defineConfig({
 					items: [
 						{ label: 'Deployment', slug: 'deployment' },
 						{ label: 'Providers', slug: 'providers' },
+						{ label: 'Free Model Rankings', slug: 'free-model-rankings' },
 						{ label: 'Configuration', slug: 'configuration' },
 					],
 				},

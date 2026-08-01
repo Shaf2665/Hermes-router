@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-hermes-router — Free-tier AI load balancer with automatic key rotation.
+hermes-router — Multi-provider AI router with automatic key rotation.
 
 A lightweight OpenAI-compatible proxy that:
   - Rotates across multiple API keys per provider automatically
@@ -12,9 +12,11 @@ A lightweight OpenAI-compatible proxy that:
   - Tracks per-provider latency and error rates
 
 Supported providers (configure via .env or auth.json):
-  Free:  Gemini · OpenRouter · SambaNova · GitHub Models · Cerebras · Groq · Mistral · Cohere · Z.ai · Naga · NVIDIA NIM · Hugging Face
-  Paid:  OpenAI · Anthropic
-  Subscription (OAuth): Codex (ChatGPT) — via `hr auth import-codex`
+  API keys: Gemini · OpenRouter · SambaNova · GitHub Models · Cerebras · Groq ·
+            Mistral · Cohere · Z.ai · Naga · NVIDIA · Hugging Face · Kimi ·
+            OpenCode Zen/Go · OpenAI · Anthropic
+  OAuth: Codex (ChatGPT) via `hr auth import-codex`
+  Local: OpenAI-compatible servers such as Ollama or LM Studio
 
 Quick start:
   pip install -r requirements.txt
@@ -306,7 +308,7 @@ KNOWN_MODEL_RATINGS: dict = {
     "llama-3.3-70b": 2, "llama-3.1-70b": 2,
     "mistral-large": 2, "mistral-medium": 2,
     "command-r-plus": 2, "command-a": 2, "nvidia/nemotron-3-super": 2, "nemotron": 2,
-    "big-pickle": 2,
+    "mimo-v2.5": 2, "north-mini-code": 2, "big-pickle": 2,
     "deepseek-v4-flash": 2, "deepseek-v4": 2,  # capable but slow cold-start → "best", not first-choice
     "deepseek-v3": 2, "deepseek-v2": 2,
     "claude-sonnet": 2, "claude-3-5": 2, "grok-2": 2,
@@ -554,7 +556,7 @@ def _build_providers() -> list[dict]:
         providers.append({
             "name":     "groq",
             "base_url": "https://api.groq.com/openai/v1",
-            "model":    os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
+            "model":    os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b"),
             "keys":     groq_keys,
         })
 
@@ -563,7 +565,7 @@ def _build_providers() -> list[dict]:
         providers.append({
             "name":     "mistral",
             "base_url": "https://api.mistral.ai/v1",
-            "model":    os.environ.get("MISTRAL_MODEL", "mistral-medium-latest"),
+            "model":    os.environ.get("MISTRAL_MODEL", "mistral-medium-3-5"),
             "keys":     mistral_keys,
         })
 
@@ -581,7 +583,7 @@ def _build_providers() -> list[dict]:
         providers.append({
             "name":     "zai",
             "base_url": "https://api.z.ai/api/paas/v4",
-            "model":    os.environ.get("ZAI_MODEL", "glm-4.5-flash"),
+            "model":    os.environ.get("ZAI_MODEL", "glm-4.7-flash"),
             "keys":     zai_keys,
         })
 
@@ -604,9 +606,9 @@ def _build_providers() -> list[dict]:
         })
 
     # Hugging Face Inference Providers — one OpenAI-compatible endpoint fronting
-    # 45k+ models across many partners. Free accounts get a small monthly credit
-    # ($0.10; PRO $2), so it exhausts faster than the request-quota free tiers —
-    # the `:cheapest` suffix routes to the cheapest partner to stretch it. Use a
+    # the models currently served by participating partners. Eligible accounts
+    # receive monthly credit; the amount and catalog can change. The `:cheapest`
+    # suffix routes to the cheapest eligible partner. Use a
     # token from huggingface.co/settings/tokens (with Inference Providers access).
     huggingface_keys = _keys_for("huggingface", "HUGGINGFACE_API_KEYS")
     if huggingface_keys:
@@ -631,20 +633,23 @@ def _build_providers() -> list[dict]:
         })
 
     # OpenCode Zen — an OpenAI-compatible gateway for coding models with a pool of
-    # genuinely FREE models (default below). One API key (`hr auth add opencode`);
+    # models currently marked free (default below). One API key (`hr auth add opencode`);
     # paid premium models (claude/gpt/gemini/…) are reachable too via OPENCODE_MODEL.
     opencode_keys = _keys_for("opencode", "OPENCODE_API_KEYS")
     if opencode_keys:
         providers.append({
             "name":     "opencode",
             "base_url": os.environ.get("OPENCODE_BASE_URL", "https://opencode.ai/zen/v1"),
-            "model":    os.environ.get("OPENCODE_MODEL",
-                        "deepseek-v4-flash-free,minimax-m3-free,qwen3.6-plus-free"),
+            "model":    os.environ.get(
+                "OPENCODE_MODEL",
+                "deepseek-v4-flash-free,nemotron-3-ultra-free,"
+                "mimo-v2.5-free,north-mini-code-free",
+            ),
             "keys":     opencode_keys,
         })
 
-    # OpenCode Go — the same OpenCode key + an OpenAI-compatible endpoint, but the
-    # low-cost subscription tier ($5 first month, then $10/mo). Enabled only when an
+    # OpenCode Go — the same OpenCode key + an OpenAI-compatible endpoint, but a
+    # paid subscription tier. Enabled only when an
     # `opencode_go` key is configured (signals you've turned on Go billing), so it
     # never adds dead attempts before you subscribe.
     opencode_go_keys = _keys_for("opencode_go", "OPENCODE_GO_API_KEYS")
@@ -652,7 +657,7 @@ def _build_providers() -> list[dict]:
         providers.append({
             "name":     "opencode_go",
             "base_url": os.environ.get("OPENCODE_GO_BASE_URL", "https://opencode.ai/zen/go/v1"),
-            "model":    os.environ.get("OPENCODE_GO_MODEL", "deepseek-v4-flash,minimax-m3"),
+            "model":    os.environ.get("OPENCODE_GO_MODEL", "deepseek-v4-flash,kimi-k2.7-code,mimo-v2.5"),
             "keys":     opencode_go_keys,
         })
 
@@ -705,9 +710,9 @@ def _build_providers() -> list[dict]:
         log.warning("No providers configured — set GEMINI_API_KEYS, OPENROUTER_API_KEYS, etc. in .env")
 
     # Multi-model support: a provider's model string may be a comma-separated list
-    # (e.g. GEMINI_MODEL=gemini-2.5-flash-lite,gemini-2.5-flash). Free-tier rate
-    # limits are per-model, so the router fails over across a provider's models —
-    # each its own quota bucket — before cascading to the next provider. The first
+    # (e.g. GEMINI_MODEL=gemini-2.5-flash-lite,gemini-2.5-flash). The router
+    # fails over across a provider's models before cascading to the next provider;
+    # upstream services may still enforce shared account/project limits. The first
     # entry is the "primary" model used for probing, rating, and status display.
     for p in providers:
         models = [m.strip() for m in str(p.get("model", "")).split(",") if m.strip()]
@@ -719,15 +724,13 @@ def _build_providers() -> list[dict]:
         p["models"] = filtered
         p["model"]  = filtered[0] if filtered else ""
 
-    # Per-provider "skip when the request is too big" ceiling. Some free tiers
+    # Per-provider "skip when the request is too big" ceiling. Some providers
     # reject large payloads outright, so trying them with a big prompt just wastes
     # a round-trip before cascading. When the estimated request size exceeds a
     # provider's ceiling, that provider is skipped entirely.
     #   Configure via  {PROVIDER}_SKIP_TOKENS_OVER  (0 = never skip).
-    # Defaults match each free tier's known limit:
-    #   • groq          ~6000 TPM → 413
-    #   • sambanova     DeepSeek-V3.2 here caps at 32K context → 400
-    #   • github_models gpt-4o free tier ~8K input-token limit → 413
+    # Defaults are intentionally conservative and can be overridden as upstream
+    # model/account limits change.
     _skip_defaults = {"groq": 5500, "sambanova": 30000, "github_models": 6000}
     for p in providers:
         env_var = f"{p['name'].upper()}_SKIP_TOKENS_OVER"
@@ -832,12 +835,12 @@ PROVIDER_MODEL_ENV = {
 PROVIDER_MODEL_DEFAULT = {
     "gemini": "gemini-2.5-flash-lite", "openrouter": "nvidia/nemotron-3-super-120b-a12b:free",
     "sambanova": "DeepSeek-V3.2", "github_models": "gpt-4o", "cerebras": "gpt-oss-120b",
-    "groq": "llama-3.3-70b-versatile", "mistral": "mistral-medium-latest",
-    "cohere": "command-a-03-2025", "zai": "glm-4.5-flash",
+    "groq": "openai/gpt-oss-120b", "mistral": "mistral-medium-3-5",
+    "cohere": "command-a-03-2025", "zai": "glm-4.7-flash",
     "naga": "nemotron-3-super-120b-a12b:free", "nvidia": "deepseek-ai/deepseek-v4-flash",
     "huggingface": "openai/gpt-oss-120b:cheapest", "kimi": "kimi-for-coding",
-    "opencode": "deepseek-v4-flash-free,minimax-m3-free,qwen3.6-plus-free",
-    "opencode_go": "deepseek-v4-flash,minimax-m3", "openai": "gpt-4o-mini",
+    "opencode": "deepseek-v4-flash-free,nemotron-3-ultra-free,mimo-v2.5-free,north-mini-code-free",
+    "opencode_go": "deepseek-v4-flash,kimi-k2.7-code,mimo-v2.5", "openai": "gpt-4o-mini",
     "anthropic": "claude-haiku-4-5-20251001", "codex": "gpt-5.5", "local": "llama3.1",
 }
 
@@ -2401,7 +2404,9 @@ cache = ResponseCache(ttl=CACHE_TTL, max_size=CACHE_MAX_SIZE,
 
 # ── Per-key budgets & rate limits ("virtual keys" lite) ─────────────────────────
 # Each PROXY_API_KEYS entry can carry a requests-per-minute ceiling and per-UTC-day
-# request/token budgets, so the router is safe to share with a team. Limits come
+# request/token budgets, which helps control usage when a team shares a router.
+# These limits are not an authorization boundary: every valid proxy key can use
+# the router's authenticated configuration endpoints. Limits come
 # from auth.json under "proxy_keys" ({ "<key>": {"rpm","req_per_day","tokens_per_day"} }),
 # with env-var globals (PROXY_LIMIT_RPM / PROXY_LIMIT_REQ_DAY / PROXY_LIMIT_TOKENS_DAY)
 # as defaults. 0/absent everywhere = unlimited → identical to the prior behavior.
@@ -6570,9 +6575,9 @@ def logs():
 
 @app.route("/metrics")
 def metrics():
-    """Prometheus text-format metrics for scraping (Grafana, etc.). Exposes only
-    counts and timings — never request content — so it's unauthenticated like
-    /health. Set METRICS_REQUIRE_AUTH=1 to require the proxy key instead."""
+    """Prometheus text-format metrics for scraping (Grafana, etc.). Exposes
+    operational labels including provider names and proxy-key tails, but never
+    request content or full keys. Set METRICS_REQUIRE_AUTH=1 to require auth."""
     if _int_env("METRICS_REQUIRE_AUTH", 0):
         err = _auth_check()
         if err:

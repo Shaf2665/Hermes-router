@@ -5,13 +5,15 @@
 [![Docker Hub](https://img.shields.io/docker/v/shafiq735/hermes-router?label=Docker%20Hub&logo=docker&sort=semver)](https://hub.docker.com/r/shafiq735/hermes-router)
 [![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/MohammedShafiq.hermes-router?label=VS%20Code&logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=MohammedShafiq.hermes-router)
 
-**Keep your AI app online for free.** hermes-router sits between your app and a pool of
-free AI providers (Gemini, OpenRouter, Groq, and more). When one provider hits its rate
-limit, it automatically falls back to the next — so your app keeps working instead of
-erroring out.
+**Stretch free AI quotas across providers.** hermes-router sits between your app and a pool
+of AI providers (Gemini, OpenRouter, Groq, and more). When one provider hits its rate limit,
+it automatically tries the next. Requests can still fail when every configured option is
+unavailable or exhausted.
 
-It speaks **both the OpenAI API and the Anthropic API**, so any tool or library that
-already talks to either works unchanged — just point it at hermes-router instead.
+It implements the commonly used OpenAI-compatible chat, embeddings, and models endpoints,
+plus Anthropic's Messages endpoint. Compatible clients can usually connect by changing their
+base URL and API key; unsupported OpenAI/Anthropic endpoints are listed in
+**[Usage](documentation/usage.md)**.
 
 ```
   Your app ──────► hermes-router ──► Gemini → OpenRouter → Groq → … (tries each until one works)
@@ -19,7 +21,7 @@ already talks to either works unchanged — just point it at hermes-router inste
   Anthropic SDK)
 ```
 
-**Highlights:** OpenAI **and** Anthropic API compatible · automatic key rotation &
+**Highlights:** OpenAI-compatible chat/embeddings/models + Anthropic Messages · automatic key rotation &
 failover · smart routing (sends each request to the cheapest model that can handle it) ·
 **local models** (Ollama / LM Studio) with cloud fallback · tool calling · embeddings ·
 response caching (incl. optional **semantic** cache) · **per-key budgets & rate limits** ·
@@ -43,7 +45,8 @@ The docs read in order, from zero experience to a running, monitored agent:
 
 - **[Deployment](documentation/deployment.md)** — Windows/macOS/Linux, Docker, Hugging Face Spaces, **surviving reboots**
 - **[Providers](documentation/providers.md)** — free & paid providers, sign-up links, capabilities
-- **[Configuration](documentation/configuration.md)** — `auth.json`, all `.env` settings, **core features vs. add-ons** (`hr features`)
+- **[Free model rankings](documentation/free-model-rankings.md)** — compare the default free models by quality and best use
+- **[Configuration](documentation/configuration.md)** — `auth.json`, main `.env` settings and provider patterns, **core features vs. add-ons** (`hr features`)
 
 **Build with it:**
 
@@ -75,23 +78,24 @@ flows through it like this:
                                                            │ first one that succeeds
                                            ┌───────────────▼─────────────────────┐
                                            │ Gemini · OpenRouter · Groq · Mistral │
-                                           │ Cohere · NVIDIA · Codex · Kimi (16)  │
+                                           │ Cohere · NVIDIA · Codex · Kimi · more │
                                            └──────────────────────────────────────┘
 ```
 
 **The moving parts:**
 
 - **Credential pool** — every provider can hold many keys (from `auth.json`, then `.env`).
-  Keys are rotated round-robin (verified perfectly even under real concurrent load); a key that
+  Key selection is synchronized for concurrent requests and rotates round-robin; a key that
   gets rate-limited is put on a short cooldown and skipped until it recovers. Each key's usage
   count is visible in `/v1/status` and the web dashboard, so you can watch load spread across
   keys as you add them.
 - **Smart routing** — each request is scored 1–5 for difficulty (by length and content, no
   extra API call), and each model is scored 1–5 for capability. The router picks the
   *cheapest* model that can still handle the request, and rotates among equally-good ones.
-  Tool requests only go to tool-capable providers.
+  Tool-capable models are preferred; when capability is unknown for every candidate, the
+  router tries the pool instead of rejecting the request before an upstream attempt.
 - **Failover** — if a provider errors or times out, the router cascades to the next one
-  automatically, so a single failure never reaches your app.
+  automatically while another configured candidate remains available.
 - **Circuit breaker** — a provider that keeps failing is pulled out of rotation for a
   cooldown, then re-probed. Healthy providers are always preferred.
 - **Response cache** — identical requests can be served from an in-memory cache (TTL-based),
@@ -105,7 +109,7 @@ system-wide — `install.sh` only symlinks the `hr` command onto your PATH.
 
 ## Setup
 
-**Requirements:** Python 3.10+ and at least one free API key
+**Requirements:** Python 3.10+ and at least one configured cloud provider key or local model
 (see **[Providers](documentation/providers.md)**).
 
 > **Platform note:** the router runs on **Linux, macOS, and Windows**. The one-liner and
@@ -147,12 +151,12 @@ tracking other Hermes routers or launching Docker-backed ones (it'll ask for you
 
 ### Quick start
 
-Point any OpenAI client at `http://localhost:8319/v1`, model `hermes-router`:
+Point an OpenAI chat-completions client at `http://localhost:8319/v1`, model `hermes-router`:
 
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://localhost:8319/v1", api_key="sk-router-1")
+client = OpenAI(base_url="http://localhost:8319/v1", api_key="YOUR_ROUTER_KEY")
 resp = client.chat.completions.create(
     model="hermes-router",
     messages=[{"role": "user", "content": "Hello!"}],
@@ -204,8 +208,9 @@ full reference, and **[Providers](documentation/providers.md)** for valid provid
 keys. Run `hr auth list` to confirm keys are loaded, and `hr status` to see which are
 cooling down. Add more keys: `hr auth add <provider>`.
 
-**`401 Unauthorized`** — your app's API key isn't in `PROXY_API_KEYS`. Use a value that
-matches (default `sk-router-1`), or set your own in `.env` and `hr restart`.
+**`401 Unauthorized`** — your app's API key isn't in `PROXY_API_KEYS`. On first boot the
+router generates a random key, saves it to `.env`, and logs it once. Use that value, or set
+your own in `.env` and run `hr restart`.
 
 **A provider never gets used** — check `hr status`. If its circuit breaker is open it was
 unhealthy and is cooling off; it'll be re-probed automatically. If it shows `no keys`, add

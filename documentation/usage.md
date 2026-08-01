@@ -1,19 +1,26 @@
 # Using hermes-router from your app
 
-hermes-router speaks **both the OpenAI API and the Anthropic API**. Point any client
-that already talks to either at the router and it works unchanged.
+hermes-router implements these client-facing endpoints:
 
-`api_key` is any value from `PROXY_API_KEYS` (default `sk-router-1`; set your own in
-`.env` — see [configuration.md](configuration.md)).
+- OpenAI-compatible `POST /v1/chat/completions`, `POST /v1/embeddings`, and `GET /v1/models`
+- Anthropic-compatible `POST /v1/messages`
+
+Clients using those endpoints normally need only a base URL and API-key change. Other API
+surfaces, including image generation, audio, assistants, batches, files, and the OpenAI
+Responses API, are not exposed as client-facing router endpoints.
+
+`api_key` is any value from `PROXY_API_KEYS`. On first boot the router generates a random
+key, writes it to `.env`, and logs it once; you can replace it in `.env`. See
+[configuration.md](configuration.md).
 
 ## OpenAI SDK
 
-Point any OpenAI client at `http://localhost:8319/v1`, model `hermes-router`:
+Point an OpenAI chat-completions client at `http://localhost:8319/v1`, model `hermes-router`:
 
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://localhost:8319/v1", api_key="sk-router-1")
+client = OpenAI(base_url="http://localhost:8319/v1", api_key="YOUR_ROUTER_KEY")
 resp = client.chat.completions.create(
     model="hermes-router",
     messages=[{"role": "user", "content": "Hello!"}],
@@ -23,22 +30,23 @@ print(resp.choices[0].message.content)
 
 Streaming (`stream=True`) and function calling (`tools=[...]`) both work.
 
-> **Tip — multiply your free quota:** give a provider several models with a comma-separated
+> **Tip — add model-level failover:** give a provider several models with a comma-separated
 > `<PROVIDER>_MODEL` (e.g. `GEMINI_MODEL=gemini-2.5-flash-lite,gemini-2.5-flash`). Since
-> rate limits are per-model, the router fails over across a provider's models before moving
-> on — capacity scales with keys × **models** × providers. See
-> [Configuration](/configuration/#multiple-models-per-provider).
+> some providers enforce model-specific limits, the router can fail over across a provider's
+> models before moving on. Quota is not guaranteed to multiply: providers may enforce shared
+> project, organization, token, or daily limits. See
+> [Configuration](configuration.md#multiple-models-per-provider).
 
 ## Anthropic SDK
 
-Already built on the Anthropic SDK? Point its `base_url` at hermes-router — no code
-changes. The router accepts Anthropic's `/v1/messages` format (and the `x-api-key`
+Already built on the Anthropic Messages API? Point its `base_url` at hermes-router. The
+router accepts `/v1/messages` format (and the `x-api-key`
 header), translates it, and routes across **all** your free providers:
 
 ```python
 import anthropic
 
-client = anthropic.Anthropic(api_key="sk-router-1", base_url="http://localhost:8319")
+client = anthropic.Anthropic(api_key="YOUR_ROUTER_KEY", base_url="http://localhost:8319")
 msg = client.messages.create(
     model="claude-3-5-sonnet-20241022",   # model name is ignored — the router picks
     max_tokens=100,
@@ -71,15 +79,15 @@ msg = client.messages.create(
 # msg.stop_reason == "tool_use", with a tool_use block ready to run
 ```
 
-When a request carries tools, the router **automatically routes only to providers whose
-model supports function calling** (detected at startup), so a request never lands on a
-model that would silently ignore the tools. Override detection per provider with
+When a request carries tools, the router prefers models confirmed to support function calling.
+If none can be confirmed, it tries the configured pool instead of rejecting the request before
+an upstream attempt. Override detection per provider with
 `<PROVIDER>_SUPPORTS_TOOLS=1` / `=0` (see [configuration.md](configuration.md)).
 
 ## Embeddings
 
-The router also speaks the OpenAI **embeddings** API, backed by free providers (Gemini,
-Mistral, Cohere):
+The router also implements the OpenAI **embeddings** API, backed by configured embedding
+providers (Gemini, Mistral, Cohere, OpenAI, or a configured local embedding model):
 
 ```python
 resp = client.embeddings.create(model="hermes-router", input="hello world")
@@ -94,7 +102,7 @@ and `COHERE_EMBED_MODEL=` empty in `.env`).
 
 ## Reasoning models
 
-Some models (e.g. gpt-oss, Nemotron, GLM-4.5) spend output tokens on hidden
-chain-of-thought before answering. The router detects these at startup and reserves extra
-output budget for them, so a small `max_tokens` never yields an empty reply. Tune with
+Some models (e.g. gpt-oss, Nemotron, and GLM reasoning models) spend output tokens on
+internal reasoning before answering. The router detects these at startup and reserves extra
+output budget to reduce empty replies caused by a small `max_tokens`. Tune with
 `REASONING_TOKEN_RESERVE` (see [configuration.md](configuration.md)).

@@ -24,7 +24,7 @@ Every request flows through the same pipeline:
                                                                   │ first one that succeeds
                                                   ┌───────────────▼─────────────────────┐
                                                   │ Gemini · OpenRouter · Groq · Mistral │
-                                                  │ Cohere · NVIDIA · Codex · Kimi (16)  │
+                                                  │ Cohere · NVIDIA · Codex · Kimi · more │
                                                   └──────────────────────────────────────┘
 ```
 
@@ -35,10 +35,10 @@ Every request flows through the same pipeline:
 3. **Rate the request** — a 1–5 difficulty score is computed from length and content, with no
    extra API call.
 4. **Order providers** — each model is scored 1–5 for capability; the router prefers the
-   *cheapest* model that can still handle the request, skips unhealthy ones, and rotates among
-   equally-good ties.
+   lowest configured cost tier whose rating meets the heuristic request score, skips unhealthy
+   ones, and rotates among equally-good ties.
 5. **Try and fail over** — it sends to the first provider, rotating keys; on a rate-limit or
-   error it cascades to the next, so a single failure never reaches your app.
+   error it cascades to the next while candidates remain. Exhausting the pool returns `503`.
 
 ## The moving parts
 
@@ -54,26 +54,27 @@ short cooldown and skipped until it recovers.
 - `sequential` — drain one key fully until it rate-limits, then move to the next, keeping later
   keys/accounts fresh in reserve. Ideal for rationing many accounts.
 
-**Verified even under real concurrency.** Selection holds a single short critical section (a
-deque rotation + a comparison), so a 50-thread / 10,000-call stress test showed perfectly even
-distribution (max/min spread of 1) with negligible lock contention. Each key's actual usage count
+**Concurrent selection.** Selection holds a short critical section around the deque rotation and
+comparison so concurrent requests cannot corrupt rotation state. Each key's actual usage count
 is tracked and exposed per provider in `/v1/status` (`keys[].requests`) and as a tooltip on the
 web dashboard's key dots — so adding more keys to a provider and watching the count spread evenly
 across them isn't just a design claim, it's directly observable.
 
 **Multiple models per provider.** A provider's `<PROVIDER>_MODEL` can be a comma-separated
-list. Because free-tier rate limits are per-**model**, cooldowns are tracked per **(key,
+list. Because some provider limits are model-specific, cooldowns are tracked per **(key,
 model)** pair: when one model hits a 429, the router fails over to the next model on the same
-key before cascading to the next provider. This multiplies free capacity along a third axis —
-**keys × models × providers** — with no extra signups. Each listed model is also a first-class
+key before cascading to the next provider. This adds routing options across keys, models, and
+providers; it does not bypass shared account, project, organization, token, or daily quotas.
+Each listed model is also a first-class
 routing candidate (see [Smart routing](#smart-routing) below), not just failover. See
 [Configuration](/configuration/#multiple-models-per-provider).
 
 ### Smart routing
 
 Requests are scored for difficulty and models for capability (both 1–5, lower = more capable).
-The router picks the cheapest model that can handle the request. Tool requests are only sent to
-models that support function calling (detected at startup). Optional **fast routing**
+The router prefers the lowest configured cost tier whose rating meets the heuristic score.
+Tool requests prefer models confirmed to support function calling; if every capability is
+unknown, the router tries the pool rather than rejecting early. Optional **fast routing**
 (`FAST_ROUTE_THRESHOLD`) sends short requests to low-latency providers first.
 
 **Per-model scoring.** When a provider lists several models, each **(provider, model)** pair is its
@@ -112,6 +113,9 @@ on prompts it answered before a redeploy. The DB is a durable mirror of the in-m
 to persist more — and expired rows are pruned on startup. All DB access is fail-soft: an error
 degrades to the in-memory cache without breaking a request.
 
+Cache entries contain request material and generated responses. Protect `CACHE_DB_PATH` like
+application data, and disable caching for workloads where retaining that data is inappropriate.
+
 **Semantic cache** (opt-in, `SEMANTIC_CACHE=1`) goes a step further: on an exact-match miss it
 embeds the prompt (reusing the router's own embeddings pipeline) and returns a cached answer
 whose stored prompt is *similar* above `SEMANTIC_CACHE_THRESHOLD` (cosine). It's a bounded linear
@@ -124,18 +128,23 @@ Each `PROXY_API_KEYS` entry can carry a requests-per-minute ceiling and per-UTC-
 token, **and estimated-cost** budgets (set globally via `PROXY_LIMIT_*` or per key in `auth.json`
 with `hr limit`). A caller over its limit gets a `429` with `Retry-After` *before* any provider is
 contacted; live counters appear in `/v1/status`. Unset = unlimited, so single-user setups are
-unaffected. This makes the router safe to share with a team. See
+unaffected. These ceilings constrain usage, but every proxy key can also call configuration-write
+endpoints, so keys are suitable only for trusted users/services. See
 [Configuration](/configuration/#per-key-budgets--rate-limits).
 
-**Cost awareness.** Spend is estimated from a built-in per-model price table (free providers and
-subscription plans are `$0`) and surfaced per provider and per key in `/v1/usage`, `/v1/status`,
+**Cost awareness.** Spend is estimated from a built-in, manually maintained per-model price
+table and surfaced per provider and per key in `/v1/usage`, `/v1/status`,
 and `/metrics` — with an optional second currency (`COST_FX_RATE`). See
 [Configuration](/configuration/#cost--spend-awareness).
 
-### Accurate token counting
+These values are operational estimates, not provider invoices. Unknown models and providers
+marked as free/subscription can show `$0` even when an upstream plan or promotion changes.
 
-Request size is measured with `tiktoken` (the `o200k_base` encoder, loaded lazily) for accurate
-routing and large-payload skipping, with a `characters ÷ 4` fallback when tiktoken is unavailable.
+### Token estimation
+
+Request text is encoded with `tiktoken` (`o200k_base`, loaded lazily) when available, with a
+`characters ÷ 4` fallback. Counts remain estimates because provider tokenizers and chat-format
+overhead differ.
 
 ### Capability probing
 
@@ -153,8 +162,8 @@ The router defends itself and avoids wasted upstream calls:
 
 - **Body-size limit** — requests larger than `MAX_REQUEST_BYTES` (default 10 MB) are rejected
   with `413` before any provider is contacted, so a buggy client can't exhaust memory.
-- **Large-payload skip** — some free tiers reject big requests outright (e.g. Groq ~6K
-  tokens/min → `413`). When a request is estimated to exceed a provider's ceiling
+- **Large-payload skip** — some providers reject requests above model/account limits. When a
+  request is estimated to exceed the configured provider ceiling
   (`<PROVIDER>_SKIP_TOKENS_OVER`), that provider is skipped and the router cascades on instead of
   burning a guaranteed-failed attempt.
 - **Output clamp** — providers that `400` when `max_tokens` exceeds their output cap have the
@@ -211,14 +220,16 @@ The same `router.py` engine runs everywhere; you choose how to launch it and how
 **Run it:**
 
 - **`hr` CLI** *(Linux/macOS/WSL)* — `hr setup`, `hr auth add`, `hr status`, `hr restart`. The
-  friendly day-to-day way to manage a local router. See [Deployment](/deployment/#path-2-linux--macos-the-hr-way).
+  friendly day-to-day way to manage a local router. See [Deployment](/deployment/#path-2--linux--macos-the-hr-way).
 - **Docker image** — the prebuilt multi-arch [`shafiq735/hermes-router`](https://hub.docker.com/r/shafiq735/hermes-router)
-  runs the same on Windows, macOS, and Linux: `docker run -p 8319:8319 …`. See [Deployment](/deployment/#path-1-docker-easiest-any-os).
-- **Hugging Face Space** — host it in the cloud for free. See [Deployment](/deployment/#path-4-hugging-face-space-host-it-online).
+  runs the same on Windows, macOS, and Linux: `docker run -p 8319:8319 …`. See [Deployment](/deployment/#path-1--docker-easiest-any-os).
+- **Hugging Face Space** — host it on a Space; plan eligibility and sleeping behavior depend
+  on the selected hardware/account. See [Deployment](/deployment/#path-4--hugging-face-space-host-it-online).
 
 **Connect to it:**
 
-- **Any OpenAI or Anthropic SDK** — point `base_url` at the router and you're done. See [Usage](/usage/).
+- **Compatible OpenAI or Anthropic clients** — the supported endpoint subset is listed in
+  [Usage](/usage/).
 - **VS Code extension** — monitor the provider pool, manage the router, *and* use hermes-router
   as a model inside Copilot Chat (including agent mode). See [VS Code Extension](/vscode-extension/).
 

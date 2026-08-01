@@ -1,7 +1,7 @@
 FROM python:3.12-slim
 
 LABEL org.opencontainers.image.title="Hermes Router" \
-      org.opencontainers.image.description="OpenAI-compatible free-tier AI load balancer with a built-in dashboard" \
+      org.opencontainers.image.description="Multi-provider AI router with a built-in dashboard" \
       org.opencontainers.image.source="https://github.com/Shaf2665/Hermes-router" \
       org.opencontainers.image.licenses="MIT"
 

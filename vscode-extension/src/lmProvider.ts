@@ -4,7 +4,7 @@ import { RouterClient, ChatMessage, ToolDef } from "./client";
 /**
  * Registers hermes-router as a VS Code Language Model provider, so it appears in
  * Copilot Chat's model picker (and is usable by any vscode.lm consumer). The one
- * logical model "hermes-router" fans out across the router's free pool, including
+ * logical model "hermes-router" fans out across the configured provider pool, including
  * tool calling for agent mode.
  */
 export class HermesChatModelProvider implements vscode.LanguageModelChatProvider {
@@ -17,7 +17,7 @@ export class HermesChatModelProvider implements vscode.LanguageModelChatProvider
     return [
       {
         id: "hermes-router",
-        name: "hermes-router (free pool)",
+        name: "hermes-router (provider pool)",
         family: "hermes-router",
         version: "1.0.0",
         maxInputTokens: 32000,

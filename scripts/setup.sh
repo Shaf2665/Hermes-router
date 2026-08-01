@@ -67,11 +67,11 @@ else
   warn "No API keys found — you need at least one to get LLM responses."
   echo ""
   echo "  Free providers (sign up and get a key):"
-  echo "    gemini       aistudio.google.com   (generous free tier)"
-  echo "    openrouter   openrouter.ai          (50 req/day per key)"
-  echo "    groq         console.groq.com       (fast, free tier)"
-  echo "    cerebras     cloud.cerebras.ai      (fast inference)"
-  echo "    sambanova    cloud.sambanova.ai     (free Llama models)"
+  echo "    gemini       aistudio.google.com   (model/project limits)"
+  echo "    openrouter   openrouter.ai          (rate-limited free models)"
+  echo "    groq         console.groq.com       (model-specific free limits)"
+  echo "    cerebras     cloud.cerebras.ai      (developer access)"
+  echo "    sambanova    cloud.sambanova.ai     (developer access)"
   echo ""
   printf '\033[1;36m[setup]\033[0m Which provider do you have a key for? (or Enter to skip): '
   read -r provider
@@ -147,7 +147,9 @@ if curl -sf "http://localhost:${PORT}/health" >/dev/null 2>&1; then
   echo ""
   echo "  Connect your app (Python):"
   echo "    from openai import OpenAI"
-  echo "    client = OpenAI(base_url='http://localhost:${PORT}/v1', api_key='sk-router-1')"
+  router_key="$(sed -n 's/^PROXY_API_KEYS=//p' "$REPO/.env" 2>/dev/null | head -1)"
+  router_key="${router_key%%,*}"
+  echo "    client = OpenAI(base_url='http://localhost:${PORT}/v1', api_key='${router_key:-YOUR_ROUTER_KEY}')"
   echo ""
 else
   warn "Router isn't responding on port $PORT."

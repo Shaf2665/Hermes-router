@@ -1,9 +1,9 @@
 ---
 title: hermes-router
-description: Keep your AI app online for free — one endpoint in front of a pool of free AI providers, with automatic key rotation and failover.
+description: Reduce provider interruptions with one endpoint, key rotation, failover, and smart routing across your configured AI providers.
 template: splash
 hero:
-  tagline: Keep your AI app online for free. One OpenAI/Anthropic-compatible endpoint in front of a pool of free providers — with automatic key rotation, failover, and smart routing.
+  tagline: One endpoint for OpenAI-compatible chat and embeddings plus Anthropic Messages, with key rotation, failover, and smart routing across your configured providers.
   actions:
     - text: Get Started
       link: /getting-started/
@@ -18,17 +18,16 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
 ## Why hermes-router?
 
-Free AI tiers are generous but rate-limited. hermes-router sits between your app and a pool
-of free providers (Gemini, OpenRouter, Groq, and more). When one hits its limit, it
-automatically falls back to the next — so your app keeps working instead of erroring out.
-Point any OpenAI **or** Anthropic client at it and nothing else changes.
+Free and evaluation tiers are rate-limited. hermes-router sits between your app and a pool
+of providers (Gemini, OpenRouter, Groq, and more). When one hits its limit, it tries the next
+configured candidate. A request can still fail when all candidates are exhausted or unavailable.
 
 <CardGrid>
-  <Card title="Never hit a rate limit" icon="rocket">
-    Automatic key rotation and provider failover across 16 providers keep you online.
+  <Card title="Reduce interruptions" icon="rocket">
+    Key rotation and provider failover keep trying while another configured candidate is available.
   </Card>
-  <Card title="Drop-in compatible" icon="puzzle">
-    Speaks the OpenAI **and** Anthropic APIs. Tool calling, embeddings, and streaming all work.
+  <Card title="Common API compatibility" icon="puzzle">
+    Supports OpenAI chat, embeddings, and models plus Anthropic Messages, including streaming and tool translation.
   </Card>
   <Card title="Smart, cheap routing" icon="setting">
     Each request goes to the cheapest model that can handle it; unhealthy providers are skipped.
@@ -50,8 +49,8 @@ can follow the path straight through from zero to a running, monitored agent.
   <LinkCard title="1. Getting Started" href="/getting-started/" description="Zero-experience intro and your first message." />
   <LinkCard title="2. Core Concepts" href="/concepts/" description="Plain-language glossary — LLM, token, tool, agent…" />
   <LinkCard title="3. Routing Features" href="/routing/" description="How the router picks a provider for chat, tools, vision, and embeddings." />
-  <LinkCard title="4. Deployment" href="/deployment/" description="Run it on Windows, macOS, Linux, Docker, or a free Hugging Face Space." />
-  <LinkCard title="5. Providers" href="/providers/" description="Add free API keys — sign-up links, Codex, local models." />
+  <LinkCard title="4. Deployment" href="/deployment/" description="Run it on Windows, macOS, Linux, Docker, or Hugging Face Spaces." />
+  <LinkCard title="5. Providers" href="/providers/" description="Add provider API keys — access notes, Codex, and local models." />
   <LinkCard title="6. Usage" href="/usage/" description="Call it from the OpenAI or Anthropic SDK; tools, streaming." />
   <LinkCard title="7. Build an Agent" href="/build-an-agent/" description="Chatbot → memory → tools, copy-paste." />
 </CardGrid>
@@ -70,7 +69,7 @@ hr setup        # add a key, start the router
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://localhost:8319/v1", api_key="sk-router-1")
+client = OpenAI(base_url="http://localhost:8319/v1", api_key="YOUR_ROUTER_KEY")
 resp = client.chat.completions.create(
     model="hermes-router",
     messages=[{"role": "user", "content": "Hello!"}],
