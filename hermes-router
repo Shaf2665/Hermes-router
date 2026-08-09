@@ -23,6 +23,8 @@
 #   hr status                         Live health dashboard for the running router
 #   hr restart                        Restart the router so key/config changes take effect
 #   hr doctor                         Diagnose installation issues
+#   hr hall detect                    Verify Hall of Wisdom bridge configuration
+#   hr hall run                       Run the advisory Hall bridge (prompt on stdin)
 #   hr update [--check]               Update to the latest version (safe; auto-rollback)
 #   hr version                        Show the installed version
 #   hr help                           Show all commands
@@ -83,6 +85,9 @@ case "$cmd" in
     ;;
   doctor)
     exec "$REPO/scripts/doctor.sh" "$@"
+    ;;
+  hall)
+    exec "$PYTHON" "$REPO/hermes_hall_bridge.py" "$@"
     ;;
   update)
     HR_INVOKE="hermes-router update" exec "$REPO/scripts/update.sh" "$@"
