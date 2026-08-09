@@ -53,6 +53,7 @@ The docs read in order, from zero experience to a running, monitored agent:
 - **[Usage](documentation/usage.md)** — OpenAI SDK, Anthropic SDK, tool use, embeddings
 - 🤖 **[Build your first AI agent](documentation/build-an-agent.md)** — chatbot → memory → tools, copy-paste
 - 🏛️ **[Hall of Wisdom integration](documentation/hall-of-wisdom.md)** — use Hermes as a credential-isolated advisory agent in Hall
+- 🛠️ **[Hermes Coding Runtime](documentation/hermes-agent-runtime.md)** — local project tools and structured events for Hall coding tasks
 
 **Operate & extend:**
 

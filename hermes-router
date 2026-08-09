@@ -25,6 +25,9 @@
 #   hr doctor                         Diagnose installation issues
 #   hr hall detect                    Verify Hall of Wisdom bridge configuration
 #   hr hall run                       Run the advisory Hall bridge (prompt on stdin)
+#   hr agent detect                   Verify Hermes Coding Runtime + router
+#   hr agent capabilities             Print coding-runtime capabilities as JSON
+#   hr agent run                      Run coding runtime (JSON task on stdin)
 #   hr update [--check]               Update to the latest version (safe; auto-rollback)
 #   hr version                        Show the installed version
 #   hr help                           Show all commands
@@ -88,6 +91,9 @@ case "$cmd" in
     ;;
   hall)
     exec "$PYTHON" "$REPO/hermes_hall_bridge.py" "$@"
+    ;;
+  agent)
+    exec "$PYTHON" "$REPO/hermes_agent_runner.py" "$@"
     ;;
   update)
     HR_INVOKE="hermes-router update" exec "$REPO/scripts/update.sh" "$@"

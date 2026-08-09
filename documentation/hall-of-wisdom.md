@@ -1,11 +1,11 @@
 # Hall of Wisdom integration
 
-Hermes Router now provides `hermes_hall_bridge.py`, a small, cross-platform
+Hermes Router provides `hermes_hall_bridge.py`, a small, cross-platform
 structured-CLI boundary for [Hall of Wisdom](https://github.com/Shaf2665/HallOfWisdom).
 It lets Hall use the router's configured provider pool for **advisory work**:
 planning, analysis, review, and implementation guidance.
 
-This is intentionally not a replacement for Hall's Claude Code or Codex
+This advisory bridge remains intentionally separate from Hall's Claude Code or Codex
 adapters. Hermes Router is a model gateway; it does not itself own a coding
 CLI tool loop. The bridge therefore makes no claim to read a project, edit a
 file, run a command, or report file changes. Hall should route an editing task
@@ -71,7 +71,7 @@ To exercise the event protocol directly:
 printf 'Review the proposed migration and list risks.' | python hermes_hall_bridge.py run
 ```
 
-## Contract for the Hall adapter phase
+## Advisory adapter contract
 
 The next Hall of Wisdom phase should add a concrete
 `@hall-of-wisdom/hermes-router-adapter` package and register it with Hall
@@ -102,8 +102,8 @@ after a successful `detect` document with the exact
 Hall's existing bounded process-tree mechanism; this bridge itself has no tool
 process to cancel.
 
-Do not advertise `project.edit` or `command.execute` until a separate,
-security-reviewed Hermes coding-agent tool-loop exists. Such a feature would
-need an explicit permission model, path containment checks, process allowlists,
-event mapping, cancellation, and isolated-worktree validation—the same class
-of guarantees Hall already expects from its Codex and Claude Code adapters.
+For coding tasks, use the separate [Hermes Coding Runtime](hermes-agent-runtime.md).
+It implements `project.read`, `project.edit`, `command.execute`, structured
+events, and cancellation as a local process while preserving this bridge's
+advisory-only behavior. A future Hall TypeScript adapter may support both agent
+identities, but it must never interpret this advisory bridge as edit-capable.
