@@ -1470,6 +1470,11 @@ def _model_has_confirmed_tool_support(name: str, model: str) -> bool:
     return bool(caps and caps.get("supports_tools") is True and caps.get("tools_confirmed") is True)
 
 
+def _cached_model_caps_compatible(caps: object) -> bool:
+    """Legacy cache entries predate tools_confirmed and must be re-probed."""
+    return isinstance(caps, dict) and "tools_confirmed" in caps
+
+
 # Known vision-capable model families, matched by substring (mirrors _rate_model's
 # approach). Unlike tool support — which most modern chat models handle, so
 # _model_supports_tools defaults to True — vision support is the exception rather
@@ -1904,8 +1909,10 @@ def _initialize_ratings(providers: list, pool_ref):
             # Probes cost a real completion per model, so skip them while the state
             # is fresh AND still covers every configured provider and model.
             age = time.time() - cached_doc.get("last_updated_ts", 0)
-            models_covered = all((p["name"], m) in _model_state
-                                 for p in providers for m in _provider_models(p))
+            models_covered = all(
+                _cached_model_caps_compatible(_model_state.get((p["name"], m)))
+                for p in providers for m in _provider_models(p)
+            )
             discovery_requested = any(_provider_model_discovery_enabled(p) for p in providers)
             if (not discovery_requested
                     and STATE_TTL_HOURS > 0 and age < STATE_TTL_HOURS * 3600
@@ -1928,7 +1935,9 @@ def _initialize_ratings(providers: list, pool_ref):
     log.info("[ratings] Background provider validation starting…")
     new_state = {}
     new_model_state = {}
-    cached_models = dict(_model_state)   # reuse fresh entries; only probe new/expired ones
+    cached_models = {
+        key: caps for key, caps in _model_state.items() if _cached_model_caps_compatible(caps)
+    }
     for p in providers:
         name  = p["name"]
         key   = pool_ref.first_key(name)
@@ -6554,6 +6563,8 @@ def status():
             entry["available"] = st["available"]
         if "supports_tools" in st:
             entry["supports_tools"] = st["supports_tools"]
+        if "tools_confirmed" in st:
+            entry["tools_confirmed"] = st["tools_confirmed"]
         if "reasoning" in st:
             entry["reasoning"] = st["reasoning"]
         if p.get("skip_if_tokens_over"):

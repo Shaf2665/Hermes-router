@@ -49,6 +49,11 @@ def _status_has_tool_model(response: Any) -> bool:
             for capability in model_caps
         ):
             return True
+        if (
+            provider.get("supports_tools") is True
+            and provider.get("tools_confirmed") is True
+        ):
+            return True
     return False
 
 

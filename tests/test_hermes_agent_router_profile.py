@@ -16,6 +16,14 @@ class FakePool:
         return "provider-key"
 
 
+class RatingPool:
+    def first_key(self, _provider):
+        return "provider-key"
+
+    def rename_model(self, *_args):
+        pass
+
+
 class FakeResponse:
     status_code = 200
     headers = {}
@@ -132,6 +140,88 @@ def test_normal_tool_routing_retains_optimistic_unknown_support(monkeypatch):
 
     assert router._model_supports_tools("unknown", "unknown-model") is True
     assert router._model_has_confirmed_tool_support("unknown", "unknown-model") is False
+
+
+def test_legacy_cached_model_capability_is_reprobed(monkeypatch, tmp_path):
+    state_file = tmp_path / "router_state.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "last_updated_ts": router.time.time(),
+                "providers": {"test": {"model": "tool-model"}},
+                "model_state": {
+                    "test::tool-model": {"rating": 1, "supports_tools": True, "reasoning": False}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    resolved = []
+    provider = {"name": "test", "model": "tool-model", "models": ["tool-model"], "keys": ["key"]}
+    monkeypatch.setattr(router, "STATE_FILE", state_file)
+    monkeypatch.setattr(router, "_model_state", {})
+    monkeypatch.setattr(router, "_provider_state", {})
+    monkeypatch.setattr(router, "_provider_model_discovery_enabled", lambda *_args: False)
+    monkeypatch.setattr(router, "_probe_provider", lambda *_args: (True, 1, "tool-model", "ok"))
+    monkeypatch.setattr(
+        router,
+        "_resolve_caps",
+        lambda _provider, _key, model, _ok: (
+            resolved.append(model)
+            or {"rating": 1, "supports_tools": True, "tools_confirmed": True, "reasoning": False}
+        ),
+    )
+
+    router._initialize_ratings([provider], RatingPool())
+
+    assert resolved == ["tool-model"]
+    assert router._model_has_confirmed_tool_support("test", "tool-model") is True
+
+
+def test_current_cached_model_capability_is_reused(monkeypatch, tmp_path):
+    state_file = tmp_path / "router_state.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "last_updated_ts": router.time.time(),
+                "providers": {"test": {"model": "tool-model"}},
+                "model_state": {
+                    "test::tool-model": {
+                        "rating": 1,
+                        "supports_tools": True,
+                        "tools_confirmed": True,
+                        "reasoning": False,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    provider = {"name": "test", "model": "tool-model", "models": ["tool-model"], "keys": ["key"]}
+    monkeypatch.setattr(router, "STATE_FILE", state_file)
+    monkeypatch.setattr(router, "_model_state", {})
+    monkeypatch.setattr(router, "_provider_state", {})
+    monkeypatch.setattr(router, "_provider_model_discovery_enabled", lambda *_args: False)
+    monkeypatch.setattr(router, "_probe_provider", lambda *_args: (_ for _ in ()).throw(AssertionError("reprobe")))
+    monkeypatch.setattr(router, "_resolve_caps", lambda *_args: (_ for _ in ()).throw(AssertionError("resolve")))
+
+    router._initialize_ratings([provider], RatingPool())
+
+    assert router._model_has_confirmed_tool_support("test", "tool-model") is True
+
+
+def test_status_exposes_provider_level_confirmed_tool_support(monkeypatch):
+    monkeypatch.setattr(router, "PROVIDERS", [{"name": "single", "model": "tool-model", "keys": []}])
+    monkeypatch.setattr(
+        router,
+        "_provider_state",
+        {"single": {"available": True, "supports_tools": True, "tools_confirmed": True}},
+    )
+
+    response = router.app.test_client().get("/v1/status", headers={"Authorization": "Bearer sk-test"})
+
+    assert response.status_code == 200
+    assert response.get_json()["providers"]["single"]["tools_confirmed"] is True
 
 
 def test_agent_runtime_routes_real_tool_call_through_router(monkeypatch, tmp_path):

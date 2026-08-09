@@ -7,7 +7,7 @@ import sys
 import hermes_agent.__main__ as cli
 
 
-def test_detect_and_capabilities_are_machine_readable(monkeypatch):
+def test_detect_accepts_confirmed_multi_model_capability(monkeypatch):
     monkeypatch.setenv("HERMES_ROUTER_API_KEY", "test-key")
     monkeypatch.setattr(
         cli,
@@ -20,6 +20,7 @@ def test_detect_and_capabilities_are_machine_readable(monkeypatch):
                     "test": {
                         "available": True,
                         "model_caps": [
+                            {"model": "plain", "supports_tools": False, "tools_confirmed": False},
                             {"model": "test", "supports_tools": True, "tools_confirmed": True}
                         ],
                     }
@@ -36,6 +37,47 @@ def test_detect_and_capabilities_are_machine_readable(monkeypatch):
     assert detected["runtime_version"] == "0.1.0"
     assert detected["capabilities"] == capabilities["capabilities"]
     assert detected["execution_trust"] == "trusted_local"
+
+
+def test_detect_accepts_confirmed_single_model_provider(monkeypatch):
+    monkeypatch.setenv("HERMES_ROUTER_API_KEY", "test-key")
+    monkeypatch.setattr(
+        cli,
+        "request_json",
+        lambda _config, _method, path, **_kwargs: (
+            {"data": [{"id": "hermes-router"}]}
+            if path == "/models"
+            else {
+                "providers": {
+                    "test": {
+                        "available": True,
+                        "supports_tools": True,
+                        "tools_confirmed": True,
+                    }
+                }
+            }
+        ),
+    )
+
+    assert cli.detect_document()["available"] is True
+
+
+def test_detect_rejects_unconfirmed_single_model_provider(monkeypatch):
+    monkeypatch.setenv("HERMES_ROUTER_API_KEY", "test-key")
+    monkeypatch.setattr(
+        cli,
+        "request_json",
+        lambda _config, _method, path, **_kwargs: (
+            {"data": [{"id": "hermes-router"}]}
+            if path == "/models"
+            else {"providers": {"test": {"available": True, "supports_tools": True}}}
+        ),
+    )
+
+    detected = cli.detect_document()
+
+    assert detected["available"] is False
+    assert detected["code"] == "HERMES_AGENT_TOOLS_UNAVAILABLE"
 
 
 def test_detect_rejects_router_without_tool_capable_model(monkeypatch):
