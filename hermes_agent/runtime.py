@@ -20,7 +20,7 @@ MAX_TOOL_CALLS = 50
 MAX_FINAL_CHARS = 128_000
 
 SYSTEM_PROMPT = """You are Hermes Coding Runtime operating inside a Hall-owned worktree.
-Use the provided tools to inspect and modify only this worktree. Use project.apply_patch for edits.
+Use the provided tools to inspect and modify only this worktree. Use project_apply_patch for edits.
 Commands must be structured argv arrays; never construct shell command strings. Do not access .git,
 delete files, request credentials, or claim a tool action succeeded unless its result says so.
 Finish with a concise summary of the completed work and verification."""
@@ -30,7 +30,7 @@ TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "project.read",
+            "name": "project_read",
             "description": "Read one UTF-8 text file inside the worktree.",
             "parameters": {
                 "type": "object",
@@ -43,7 +43,7 @@ TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "project.search",
+            "name": "project_search",
             "description": "Search for a literal text string inside worktree files.",
             "parameters": {
                 "type": "object",
@@ -59,7 +59,7 @@ TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "project.apply_patch",
+            "name": "project_apply_patch",
             "description": (
                 "Replace exactly one old_text occurrence in a UTF-8 file, or create a new file "
                 "with create=true. Deletion is unsupported."
@@ -81,7 +81,7 @@ TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "command.execute",
+            "name": "command_execute",
             "description": "Run a structured argv command in the worktree without a shell.",
             "parameters": {
                 "type": "object",
@@ -221,10 +221,10 @@ class AgentRuntime:
             raise AgentError("HERMES_AGENT_INVALID_RESPONSE", "Tool call is invalid.")
         tool_name = function.get("name")
         if tool_name not in {
-            "project.read",
-            "project.search",
-            "project.apply_patch",
-            "command.execute",
+            "project_read",
+            "project_search",
+            "project_apply_patch",
+            "command_execute",
         }:
             raise AgentError("HERMES_AGENT_TOOL_UNSUPPORTED", "Requested tool is unsupported.")
         raw_arguments = function.get("arguments", "{}")
@@ -253,16 +253,16 @@ class AgentRuntime:
                 raise parse_error
             if self.cancelled.is_set():
                 raise AgentCancelled()
-            if tool_name == "project.read":
+            if tool_name == "project_read":
                 outcome = self.workspace.read(arguments)
-            elif tool_name == "project.search":
+            elif tool_name == "project_search":
                 outcome = self.workspace.search(arguments)
-            elif tool_name == "project.apply_patch":
+            elif tool_name == "project_apply_patch":
                 outcome = self.workspace.apply_patch(arguments)
             else:
                 outcome = self.commands.execute(arguments)
             success = not (
-                tool_name == "command.execute" and outcome.result.get("exit_code") != 0
+                tool_name == "command_execute" and outcome.result.get("exit_code") != 0
             )
             model_result = outcome.result
         except AgentCancelled:
@@ -289,4 +289,3 @@ class AgentRuntime:
             "tool_call_id": tool_call_id,
             "content": json.dumps(model_result, separators=(",", ":"), ensure_ascii=False),
         }
-

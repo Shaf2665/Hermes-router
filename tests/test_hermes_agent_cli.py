@@ -19,7 +19,9 @@ def test_detect_and_capabilities_are_machine_readable(monkeypatch):
                 "providers": {
                     "test": {
                         "available": True,
-                        "model_caps": [{"model": "test", "supports_tools": True}],
+                        "model_caps": [
+                            {"model": "test", "supports_tools": True, "tools_confirmed": True}
+                        ],
                     }
                 }
             }
@@ -48,7 +50,32 @@ def test_detect_rejects_router_without_tool_capable_model(monkeypatch):
                 "providers": {
                     "test": {
                         "available": True,
-                        "model_caps": [{"model": "test", "supports_tools": False}],
+                        "model_caps": [{"model": "test", "supports_tools": False, "tools_confirmed": False}],
+                    }
+                }
+            }
+        ),
+    )
+
+    detected = cli.detect_document()
+
+    assert detected["available"] is False
+    assert detected["code"] == "HERMES_AGENT_TOOLS_UNAVAILABLE"
+
+
+def test_detect_rejects_unconfirmed_tool_support(monkeypatch):
+    monkeypatch.setenv("HERMES_ROUTER_API_KEY", "test-key")
+    monkeypatch.setattr(
+        cli,
+        "request_json",
+        lambda _config, _method, path, **_kwargs: (
+            {"data": [{"id": "hermes-router"}]}
+            if path == "/models"
+            else {
+                "providers": {
+                    "test": {
+                        "available": True,
+                        "model_caps": [{"model": "test", "supports_tools": True}],
                     }
                 }
             }

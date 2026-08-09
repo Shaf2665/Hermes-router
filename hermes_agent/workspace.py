@@ -111,6 +111,8 @@ class Workspace:
                     if name.casefold() != ".git" and not (Path(current) / name).is_symlink()
                 ]
                 for name in names:
+                    if name.casefold() == ".git":
+                        continue
                     candidate = Path(current) / name
                     if not candidate.is_symlink() and candidate.is_file():
                         files.append(candidate)

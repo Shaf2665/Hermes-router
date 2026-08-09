@@ -5,7 +5,7 @@ from hermes_agent import CAPABILITIES, PROTOCOL_VERSION, RUNTIME_VERSION
 from hermes_agent.client import HermesInferenceClient
 from hermes_agent.errors import AgentError
 from hermes_agent.protocol import EventEmitter, MAX_EVENT_BYTES
-from hermes_agent.runtime import AgentRuntime
+from hermes_agent.runtime import AgentRuntime, TOOLS
 from hermes_router_client import RouterConfig
 
 
@@ -38,7 +38,7 @@ def test_agent_loop_emits_bounded_structured_lifecycle(tmp_path):
             "tool_calls": [
                 tool_call(
                     "call-1",
-                    "project.apply_patch",
+                    "project_apply_patch",
                     {"path": "app.py", "old_text": "value = 1", "new_text": "value = 2"},
                 )
             ],
@@ -124,6 +124,15 @@ def test_capability_vocabulary_is_exact():
         "cancellation",
     )
     assert "git.inspect" not in CAPABILITIES
+
+
+def test_model_facing_tool_names_are_provider_safe():
+    assert [tool["function"]["name"] for tool in TOOLS] == [
+        "project_read",
+        "project_search",
+        "project_apply_patch",
+        "command_execute",
+    ]
 
 
 def test_message_events_remain_bounded_for_escaped_unicode():

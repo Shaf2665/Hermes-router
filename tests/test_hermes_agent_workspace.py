@@ -21,6 +21,8 @@ def test_paths_stay_inside_worktree_and_reject_git(tmp_path):
     with pytest.raises(AgentError) as git_error:
         workspace.read({"path": ".git/config"})
     assert git_error.value.code == "WORKSPACE_GIT_PATH_REJECTED"
+    (git_dir / "secret.txt").write_text("git-only-secret", encoding="utf-8")
+    assert workspace.search({"query": "git-only-secret"}).result["matches"] == []
     assert not outside.exists()
 
 
@@ -79,4 +81,3 @@ def test_patch_rejects_ambiguous_or_stale_changes(tmp_path):
             }
         )
     assert stale.value.code == "PROJECT_PATCH_CONFLICT"
-

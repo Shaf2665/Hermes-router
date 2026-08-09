@@ -43,11 +43,11 @@ def _status_has_tool_model(response: Any) -> bool:
             continue
         model_caps = provider.get("model_caps")
         if isinstance(model_caps, list) and any(
-            isinstance(capability, dict) and capability.get("supports_tools") is True
+            isinstance(capability, dict)
+            and capability.get("supports_tools") is True
+            and capability.get("tools_confirmed") is True
             for capability in model_caps
         ):
-            return True
-        if not isinstance(model_caps, list) and provider.get("supports_tools") is True:
             return True
     return False
 

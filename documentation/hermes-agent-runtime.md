@@ -73,15 +73,16 @@ verified Git-inspection tool.
   never accepted from task input.
 - The process current working directory is the worktree root.
 
-## Tool contract
+## Model tool contract
 
-The model receives only four tools:
+The model receives only four provider-safe function names. The Hall capability
+vocabulary above remains unchanged.
 
-- `project.read({path})` — reads one bounded UTF-8 file.
-- `project.search({query, path?})` — literal bounded search.
-- `project.apply_patch({path, old_text?, new_text, create?, expected_sha256?})`
+- `project_read({path})` — reads one bounded UTF-8 file.
+- `project_search({query, path?})` — literal bounded search.
+- `project_apply_patch({path, old_text?, new_text, create?, expected_sha256?})`
   — replaces exactly one occurrence or creates a file; never deletes.
-- `command.execute({argv, timeout_seconds?})` — structured argv, `shell=False`,
+- `command_execute({argv, timeout_seconds?})` — structured argv, `shell=False`,
   fixed worktree cwd, bounded time/output, scrubbed environment, and process-tree
   cancellation.
 
@@ -129,7 +130,7 @@ X-Hermes-Agent-Run: <run_id>
 The profile does not expose any project tool over HTTP. It only changes routing:
 
 - exact and semantic response caches are bypassed for reads and writes;
-- a tool definition and a tool-capable candidate are mandatory;
+- a tool definition and a positively confirmed tool-capable candidate are mandatory;
 - the last successful provider/model for a run is tried first on its next turn;
 - the normal router provider/key/model failover loop remains authoritative, and
   a successful fallback becomes the new affinity target.

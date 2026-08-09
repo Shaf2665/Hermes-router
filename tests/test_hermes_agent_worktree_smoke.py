@@ -2,8 +2,12 @@ import json
 import subprocess
 import sys
 
+import pytest
+
+from hermes_agent.errors import AgentError
 from hermes_agent.protocol import EventEmitter
 from hermes_agent.runtime import AgentRuntime
+from hermes_agent.workspace import Workspace
 
 
 class WorktreeSmokeClient:
@@ -16,7 +20,7 @@ class WorktreeSmokeClient:
                         "id": "patch",
                         "type": "function",
                         "function": {
-                            "name": "project.apply_patch",
+                            "name": "project_apply_patch",
                             "arguments": json.dumps(
                                 {
                                     "path": "value.py",
@@ -35,7 +39,7 @@ class WorktreeSmokeClient:
                         "id": "verify",
                         "type": "function",
                         "function": {
-                            "name": "command.execute",
+                            "name": "command_execute",
                             "arguments": json.dumps(
                                 {"argv": [sys.executable, "-m", "py_compile", "value.py"]}
                             ),
@@ -75,6 +79,11 @@ def test_real_disposable_git_worktree_smoke(tmp_path):
     git("commit", "-m", "fixture")
     git("worktree", "add", "--detach", str(worktree), "HEAD")
 
+    workspace = Workspace(worktree)
+    with pytest.raises(AgentError) as git_file:
+        workspace.read({"path": ".git"})
+    assert git_file.value.code == "WORKSPACE_GIT_PATH_REJECTED"
+
     events = []
     runtime = AgentRuntime(
         WorktreeSmokeClient(), worktree, EventEmitter("worktree-smoke", events.append)
@@ -94,3 +103,4 @@ def test_real_disposable_git_worktree_smoke(tmp_path):
     assert events[5]["payload"]["success"] is True
     assert (worktree / "value.py").read_text(encoding="utf-8") == "value = 2\n"
     assert (repository / "value.py").read_text(encoding="utf-8") == "value = 1\n"
+    assert workspace.search({"query": "gitdir:"}).result["matches"] == []

@@ -1451,12 +1451,23 @@ def _model_caps(name: str, model: str) -> dict:
     st = _model_state.get((name, model))
     if st:
         return st
-    return {"rating": _rate_model(model), "supports_tools": True, "reasoning": False}
+    return {
+        "rating": _rate_model(model),
+        "supports_tools": True,
+        "tools_confirmed": False,
+        "reasoning": False,
+    }
 
 
 def _model_supports_tools(name: str, model: str) -> bool:
     """Whether this specific (provider, model) handles function calling."""
     return bool(_model_caps(name, model).get("supports_tools", True))
+
+
+def _model_has_confirmed_tool_support(name: str, model: str) -> bool:
+    """Whether tool support was explicitly configured or positively probed."""
+    caps = _model_state.get((name, model))
+    return bool(caps and caps.get("supports_tools") is True and caps.get("tools_confirmed") is True)
 
 
 # Known vision-capable model families, matched by substring (mirrors _rate_model's
@@ -1850,21 +1861,29 @@ def _resolve_caps(p: dict, key: str, model: str, ok: bool) -> dict:
 
     _probe_tools returns None when the probe itself was inconclusive (network
     error / non-200, often a free-tier RPM cap already hit by earlier probes in
-    the same startup pass) — that must NOT be cached as a confident "no tool
-    support", so it falls back to the optimistic default (True) instead.
+    the same startup pass). Normal routing keeps its optimistic fallback; the
+    agent profile separately requires tools_confirmed.
     """
     name = p["name"]
     et = _env_flag(name, "SUPPORTS_TOOLS", model)
     if et is not None:
         supports_tools = et
+        tools_confirmed = True
     elif not ok:
         supports_tools = False   # provider unreachable at boot — genuinely unusable
+        tools_confirmed = False
     else:
         probed = _probe_tools(p, key, model)
         supports_tools = True if probed is None else probed
+        tools_confirmed = probed is True
     er = _env_flag(name, "REASONING", model)
     reasoning = er if er is not None else (_probe_reasoning(p, key, model) if ok else False)
-    return {"rating": _rate_model(model), "supports_tools": supports_tools, "reasoning": reasoning}
+    return {
+        "rating": _rate_model(model),
+        "supports_tools": supports_tools,
+        "tools_confirmed": tools_confirmed,
+        "reasoning": reasoning,
+    }
 
 
 def _initialize_ratings(providers: list, pool_ref):
@@ -1918,7 +1937,8 @@ def _initialize_ratings(providers: list, pool_ref):
                                 "available": False, "latency_ms": 0, "overridden": False}
             for m in _provider_models(p):
                 new_model_state[(name, m)] = {"rating": _rate_model(m),
-                                              "supports_tools": False, "reasoning": False}
+                                              "supports_tools": False, "tools_confirmed": False,
+                                              "reasoning": False}
             continue
         _refresh_discovered_models(p, key, pool_ref)
         if not _provider_models(p):
@@ -1957,6 +1977,7 @@ def _initialize_ratings(providers: list, pool_ref):
         new_state[name] = {"rating": prim["rating"], "model": actual, "available": available,
                             "latency_ms": round(latency, 1), "overridden": overridden,
                             "original_model": original, "supports_tools": prim["supports_tools"],
+                            "tools_confirmed": prim.get("tools_confirmed", False),
                             "reasoning": prim["reasoning"], "probe_status": probe_status}
     _provider_state = new_state
     _model_state = new_model_state
@@ -5519,8 +5540,9 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
     # Default requests keep the compatibility fallback when capability metadata
     # has no tool candidate. Agent-profile requests are strict and fail early.
     needs_tools = bool(payload.get("tools"))
+    tool_capable = _model_has_confirmed_tool_support if agent_mode else _model_supports_tools
     any_tool_candidate = any(
-        _model_supports_tools(c["provider"]["name"], c["model"]) for c in ordered
+        tool_capable(c["provider"]["name"], c["model"]) for c in ordered
     )
     if agent_mode and not needs_tools:
         return (
@@ -5596,7 +5618,7 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
 
         # Tool request → skip candidates whose MODEL can't do function calling
         # (per-model; another model on the same provider may still qualify).
-        if enforce_tool and not _model_supports_tools(name, model):
+        if enforce_tool and not tool_capable(name, model):
             log.info(f"⚒ skipping {name}/{model} (no tool support)")
             continue
 
