@@ -1,14 +1,6 @@
-import importlib.util
-from pathlib import Path
-
 import pytest
 
-
-ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location("hermes_hall_bridge", ROOT / "hermes_hall_bridge.py")
-assert SPEC is not None and SPEC.loader is not None
-bridge = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(bridge)
+import hermes_hall_bridge as bridge
 
 
 def config(**overrides):
