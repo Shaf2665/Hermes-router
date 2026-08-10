@@ -1,4 +1,7 @@
-# Hermes Coding Runtime
+---
+title: "Hermes Coding Runtime"
+description: "A local, headless coding-agent process that uses Hermes Router for inference while keeping file and command execution out of the server."
+---
 
 Hermes Coding Runtime is a local, headless coding-agent process for Hall of
 Wisdom. It uses Hermes Router for model inference while keeping file and command
@@ -33,7 +36,7 @@ python <hermes-directory>/hermes_agent_runner.py run
 
 Linux/macOS installations can also use `hr agent detect|capabilities|run`.
 
-Both Docker images ([deployment.md](deployment.md#path-1--docker-easiest-any-os)) bundle the
+Both Docker images ([deployment.md](/deployment/#path-1--docker-easiest-any-os)) bundle the
 runtime. The `:cli` variant exposes it through `hr`; the plain image through the file
 entrypoint:
 
@@ -173,3 +176,7 @@ The future Hall adapter needs only a local process boundary:
 Hall continues to own worktree creation, cleanup, permissions, task policy, and
 any higher-level approval UI. No session, memory, or worktree identifier should
 be sent to Hermes beyond `run_id`, prompt, cwd, and the router environment.
+
+---
+
+**Next:** [Monitoring](/monitoring/) — watch provider health, cache, tokens, and spend once it's running.

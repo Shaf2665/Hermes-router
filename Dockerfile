@@ -12,7 +12,12 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY router.py .
+# router.py is the whole server. The bridge/runtime modules are optional
+# entrypoints (Hall of Wisdom advisory bridge, Hermes Coding Runtime) that add
+# no dependencies — bundling them keeps `docker exec … python hermes_agent_runner.py`
+# working against any Hermes container.
+COPY router.py hermes_hall_bridge.py hermes_router_client.py hermes_agent_runner.py ./
+COPY hermes_agent ./hermes_agent
 
 # Port 8319 serves the API (/v1/*), /health, /metrics, and the built-in
 # monitoring dashboard (open http://localhost:8319/ in a browser).

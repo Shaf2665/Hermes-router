@@ -1,4 +1,7 @@
-# Hall of Wisdom integration
+---
+title: "Hall of Wisdom"
+description: "Use Hermes Router as a credential-isolated advisory agent inside Hall of Wisdom via the structured-CLI bridge."
+---
 
 Hermes Router provides `hermes_hall_bridge.py`, a small, cross-platform
 structured-CLI boundary for [Hall of Wisdom](https://github.com/Shaf2665/HallOfWisdom).
@@ -59,7 +62,7 @@ PowerShell uses the same command:
 python .\hermes_hall_bridge.py detect
 ```
 
-The bridge also ships inside both Docker images ([deployment.md](deployment.md#path-1--docker-easiest-any-os)).
+The bridge also ships inside both Docker images ([deployment.md](/deployment/#path-1--docker-easiest-any-os)).
 In the `:cli` variant it is reachable as `hr hall`:
 
 ```bash
@@ -110,8 +113,12 @@ after a successful `detect` document with the exact
 Hall's existing bounded process-tree mechanism; this bridge itself has no tool
 process to cancel.
 
-For coding tasks, use the separate [Hermes Coding Runtime](hermes-agent-runtime.md).
+For coding tasks, use the separate [Hermes Coding Runtime](/hermes-agent-runtime/).
 It implements `project.read`, `project.edit`, `command.execute`, structured
 events, and cancellation as a local process while preserving this bridge's
 advisory-only behavior. A future Hall TypeScript adapter may support both agent
 identities, but it must never interpret this advisory bridge as edit-capable.
+
+---
+
+**Next:** [Hermes Coding Runtime](/hermes-agent-runtime/) — the edit-capable sibling of this advisory bridge, with project tools and cancellation.

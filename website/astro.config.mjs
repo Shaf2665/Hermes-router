@@ -42,6 +42,13 @@ export default defineConfig({
 					],
 				},
 				{
+					label: 'Integrations',
+					items: [
+						{ label: 'Hall of Wisdom', slug: 'hall-of-wisdom' },
+						{ label: 'Hermes Coding Runtime', slug: 'hermes-agent-runtime' },
+					],
+				},
+				{
 					label: 'Operate',
 					items: [
 						{ label: 'Monitoring', slug: 'monitoring' },

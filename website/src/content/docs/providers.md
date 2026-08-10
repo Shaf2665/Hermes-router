@@ -109,7 +109,8 @@ setting `OPENCODE_MODEL`.
 
 **OpenCode Go** is OpenCode's paid subscription tier — the *same* API key against a different
 endpoint, no separate auth. Check [OpenCode's current Go plan](https://opencode.ai/docs/go/)
-for pricing and limits, then enable Go billing on opencode.ai and add it as its own provider:
+for pricing and limits, then enable Go billing on opencode.ai,
+then add it as its own provider so it's only used once you've subscribed:
 
 ```bash
 hr auth add opencode_go      # paste the same OpenCode key

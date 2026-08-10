@@ -1,0 +1,43 @@
+# Keep the build context small and free of secrets.
+#
+# The Dockerfiles COPY only what they need (router.py, the hr CLI, scripts/,
+# and the agent/bridge modules), so nothing here is required at build time —
+# but without this file Docker still uploads the whole 300 MB working tree
+# (venv/, website/node_modules/, .git/) to the daemon on every build.
+
+# Credentials and runtime state — must never land in an image layer
+.env
+.env.*
+!.env.example
+auth.json
+instances.json
+router_state.json
+cache.db
+router.log
+
+# Local virtualenv / build caches
+venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# VCS and CI metadata
+.git/
+.github/
+.gitignore
+.claude/
+
+# Not needed to run the router
+website/
+vscode-extension/
+documentation/
+tests/
+*.md
+*.png
+docker-compose.yml
+Dockerfile
+Dockerfile.cli
+install.sh
+get.sh
