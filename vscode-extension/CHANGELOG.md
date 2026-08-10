@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.5
+
+- **Accept a `/v1` base URL.** Every SDK example shows `base_url = http://host:8319/v1`, so
+  that's what people pasted into `hermesRouter.baseUrl` — and the extension then requested
+  `/v1/v1/status`, 404'ing the dashboard, the status bar, and the Copilot model with
+  `router HTTP 404`. A trailing `/v1` is now stripped, and the setting says so.
+
 ## 0.9.4
 
 - **Match generated router keys.** The extension no longer assumes the retired

@@ -71,7 +71,11 @@ export class RouterClient {
   constructor(private baseUrl: string, private apiKey: string) {}
 
   private base(): string {
-    return this.baseUrl.replace(/\/+$/, "");
+    // Every SDK example shows base_url = http://host:8319/v1, so that's what people
+    // paste here — then we'd request /v1/v1/status and 404 on everything. Strip it.
+    // ponytail: a router genuinely mounted under a path ending in /v1 would break;
+    // no such deployment exists (the router owns /v1/* itself).
+    return this.baseUrl.trim().replace(/\/+$/, "").replace(/\/v1$/, "");
   }
 
   /** URL of the browser monitoring dashboard served by the router. */

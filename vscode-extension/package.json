@@ -2,7 +2,7 @@
   "name": "hermes-router",
   "displayName": "hermes-router",
   "description": "Control panel for hermes-router — monitor provider health and manage your multi-provider AI router from VS Code.",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "publisher": "MohammedShafiq",
   "license": "MIT",
   "icon": "icon.png",
@@ -64,7 +64,7 @@
         "hermesRouter.baseUrl": {
           "type": "string",
           "default": "http://localhost:8319",
-          "description": "Base URL of the running hermes-router (use your Space URL for a remote router; CLI controls are disabled when remote)."
+          "description": "Base URL of the running hermes-router — the host and port only, e.g. http://localhost:8319 (a trailing /v1 is ignored). Use your Space URL for a remote router; CLI controls are disabled when remote."
         },
         "hermesRouter.apiKey": {
           "type": "string",
