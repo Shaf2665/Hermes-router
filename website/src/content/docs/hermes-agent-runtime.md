@@ -79,11 +79,17 @@ verified Git-inspection tool.
 `run` reads exactly one bounded UTF-8 JSON object from stdin:
 
 ```json
-{"run_id":"hall-run-123","prompt":"Implement and test the requested change."}
+{"run_id":"hall-run-123","prompt":"Implement and test the requested change.","task_intent":"coding"}
 ```
 
 - `prompt` is required.
 - `run_id` is optional; the runtime generates one when omitted.
+- `task_intent` is optional. It is a workload hint, not an instruction, and the
+  only accepted values are `planning`, `coding`, `review`, `debug`, `vision`,
+  and `general`. A missing, non-string, or unrecognised value is silently
+  treated as `general` — it never fails an otherwise valid task — and `general`
+  routes exactly as a caller that omits the field. See *Agent routing profile*
+  for what each value does.
 - Router URL, key, model, worktree path, command policy, and extra arguments are
   never accepted from task input.
 - The process current working directory is the worktree root.
@@ -135,11 +141,12 @@ and emits one `run.cancelled` event when the process can still write stdout.
 ## Agent routing profile
 
 Runtime inference uses the existing `/v1/chat/completions` endpoint with two
-internal routing headers:
+internal routing headers, plus a third when the task carried a `task_intent`:
 
 ```text
 X-Hermes-Profile: agent
 X-Hermes-Agent-Run: <run_id>
+X-Hermes-Task-Intent: <task_intent>
 ```
 
 The profile does not expose any project tool over HTTP. It only changes routing:
@@ -149,6 +156,22 @@ The profile does not expose any project tool over HTTP. It only changes routing:
 - the last successful provider/model for a run is tried first on its next turn;
 - the normal router provider/key/model failover loop remains authoritative, and
   a successful fallback becomes the new affinity target.
+
+`X-Hermes-Task-Intent` is re-validated by the router and only ever reorders the
+existing ranked candidate list using capability metadata the router already
+holds. It never filters candidates, never names a model or provider, and never
+overrides complexity tiering — a too-weak model is never promoted over one that
+fits the request. Unrecognised values and `general` are dropped and route as
+today.
+
+| Intent | Effect on candidate order |
+| --- | --- |
+| `general`, missing, unrecognised | None. Ordering is unchanged. |
+| `coding` | Prefers models known to support function calling. |
+| `review` | Prefers models with reasoning support. |
+| `planning` | Prefers models with reasoning support. |
+| `debug` | Reuses the existing low-latency (fast-route) preference. |
+| `vision` | Prefers vision-capable models **only** when the request actually carries image content; on a text-only request the hint is dropped entirely and does not mark the request multimodal. |
 
 ## Hall TypeScript adapter contract
 
@@ -161,7 +184,8 @@ The future Hall adapter needs only a local process boundary:
    and select the adapter only when the JSON document has `available: true` and
    `protocol: "hermes-agent/v1"`.
 3. For a task, spawn `run` with `cwd` set to Hall's prepared worktree. Write one
-   JSON object containing Hall's bounded `run_id` and prompt, then close stdin.
+   JSON object containing Hall's bounded `run_id` and prompt — optionally with
+   `task_intent` — then close stdin.
 4. Parse stdout one line at a time as JSON. Require the protocol, run id, and
    monotonically increasing sequence; map event `type` and `payload` directly.
    Treat stderr only as diagnostics and never parse it as the event stream.

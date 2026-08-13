@@ -14,9 +14,13 @@ class HermesInferenceClient:
         self,
         config: RouterConfig,
         request: Callable[..., Any] = request_json,
+        task_intent: str | None = None,
     ):
         self.config = config
         self.request = request
+        # Optional workload hint from the orchestrator, forwarded to the router
+        # for the whole run. None → no header, i.e. today's routing.
+        self.task_intent = task_intent
 
     def complete(
         self,
@@ -32,15 +36,18 @@ class HermesInferenceClient:
             "tool_choice": "auto",
             "parallel_tool_calls": False,
         }
+        headers = {
+            "X-Hermes-Profile": "agent",
+            "X-Hermes-Agent-Run": run_id,
+        }
+        if self.task_intent is not None:
+            headers["X-Hermes-Task-Intent"] = self.task_intent
         response = self.request(
             self.config,
             "POST",
             "/chat/completions",
             payload,
-            extra_headers={
-                "X-Hermes-Profile": "agent",
-                "X-Hermes-Agent-Run": run_id,
-            },
+            extra_headers=headers,
         )
         try:
             message = response["choices"][0]["message"]

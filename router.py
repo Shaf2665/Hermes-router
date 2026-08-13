@@ -1786,8 +1786,37 @@ def classify_complexity(messages: list) -> int:
     return 5
 
 
+# Task-intent hints (internal `X-Hermes-Task-Intent` header). A caller — today
+# Hall of Wisdom's Hermes adapter — can say what kind of work a request is, and
+# routing biases the existing candidate order toward matching capability
+# metadata. Purely a hint: unknown values and `general` are dropped, and every
+# intent leaves the tier/price/quality ordering and the failover cascade intact.
+_TASK_INTENTS = frozenset({"planning", "coding", "review", "debug", "vision", "general"})
+
+
+def _task_intent(value: str | None) -> str | None:
+    """Validate a task-intent hint. Missing, unknown, or `general` → None, which
+    every downstream term treats as "no hint" and routes exactly as it does today."""
+    value = (value or "").strip().lower()
+    return value if value in _TASK_INTENTS and value != "general" else None
+
+
+def _intent_fit(intent: str | None, provider: dict, model: str) -> int:
+    """0 = this candidate matches the caller's task intent, 1 = it doesn't.
+    Reads only existing capability metadata — never a model or provider name.
+    Returns a constant 0 for no/unknown intent and for `debug` (which reuses the
+    existing fast-route preference instead), so ordering is bit-for-bit unchanged."""
+    if intent == "coding":            # editing/tool-driven work needs function calling
+        return 0 if _model_supports_tools(provider["name"], model) else 1
+    if intent in ("review", "planning"):   # both want the stronger reasoning models
+        return 0 if _model_caps(provider["name"], model).get("reasoning") else 1
+    if intent == "vision":            # only reached when the payload really has an image
+        return 0 if _model_supports_vision(provider, model) else 1
+    return 0
+
+
 def _get_smart_ordered(providers: list, complexity: int, est_tokens: int = 0,
-                       prefer_local: bool = False) -> list:
+                       prefer_local: bool = False, intent: str | None = None) -> list:
     """
     Rank every configured (provider, model) for this complexity: cheapest capable
     model first, then better same-price models, then too-weak as last resort. Never blocks. Returns
@@ -1808,6 +1837,10 @@ def _get_smart_ordered(providers: list, complexity: int, est_tokens: int = 0,
     stable, so equal-keyed candidates keep their (rotated) relative order.
     """
     fast_first = FAST_ROUTE_TOKENS > 0 and 0 < est_tokens < FAST_ROUTE_TOKENS
+    # `debug` reuses the existing low-latency preference rather than adding a
+    # ranking term of its own — a debug turn wants a quick answer.
+    if intent == "debug":
+        fast_first = True
 
     def _key(cand):
         p      = cand["provider"]
@@ -1834,9 +1867,13 @@ def _get_smart_ordered(providers: list, complexity: int, est_tokens: int = 0,
             sort_within = rating - complexity   # too weak — closest first
         # local_first leads the key so a preferred local model sorts ahead of all
         # others on easy turns; it's a constant 1 otherwise, leaving order unchanged.
+        # intent_fit sits AFTER tier for the same reason tier leads: a capability
+        # hint may reorder within the capable tier, but must never promote a
+        # too-weak model over one that actually fits the request's complexity.
         # list_index trails so a provider's listed model order breaks rating ties.
-        return (local_first, tier, price, quality, sort_within, breaker_open, health,
-                0 if avail else 1, fast, cand["list_index"])
+        return (local_first, tier, _intent_fit(intent, p, model), price, quality,
+                sort_within, breaker_open, health, 0 if avail else 1, fast,
+                cand["list_index"])
 
     n = len(providers)
     offset = next(_rr_counter) % n if n else 0
@@ -3277,16 +3314,24 @@ def _estimated_tokens(messages: list) -> int:
     return sum(len(_message_text(m)) for m in messages) // 4
 
 
-def _ordered_providers(payload: dict, prefer_local: bool = False) -> list[dict]:
+def _ordered_providers(payload: dict, prefer_local: bool = False,
+                       intent: str | None = None) -> list[dict]:
     """
     Smart complexity-aware ordering: use cheapest capable model for simple
     tasks, best model for complex ones. With FAST_ROUTE_THRESHOLD set,
     short requests break ties in favour of low-latency providers. With
     prefer_local (the `:fast` profile), a local model leads on easy turns.
+    With a task intent, matching capability metadata breaks ties within tier.
     """
     messages   = payload.get("messages", [])
+    # A `vision` hint only means anything when the request genuinely carries an
+    # image. Dropping it here keeps a text-only request text-only: the hint alone
+    # must never make routing (or `enforce_vision` below) treat it as multimodal.
+    if intent == "vision" and not _payload_has_image(payload):
+        intent = None
     complexity = classify_complexity(messages)
-    ordered    = _get_smart_ordered(PROVIDERS, complexity, _estimated_tokens(messages), prefer_local)
+    ordered    = _get_smart_ordered(PROVIDERS, complexity, _estimated_tokens(messages),
+                                    prefer_local, intent)
     log.info(f"→ complexity={complexity} ({_COMPLEXITY_LABELS[complexity]}) "
              f"order={[c['provider']['name'] + '/' + c['model'] for c in ordered]}")
     return ordered
@@ -5504,10 +5549,12 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
     prefer_local = False
     request_profile = ""
     agent_run_id = None
+    task_intent = None
     try:
         request_profile = request.headers.get("X-Hermes-Profile", "").strip().lower()
         if request_profile == "agent":
             agent_run_id = _agent_run_id(request.headers.get("X-Hermes-Agent-Run"))
+        task_intent = _task_intent(request.headers.get("X-Hermes-Task-Intent"))
     except RuntimeError:
         pass  # called outside a request context (e.g. tests)
     agent_mode = request_profile == "agent"
@@ -5539,7 +5586,7 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
                     return ("json", hit)
 
     est_tokens = _estimated_tokens(messages)
-    ordered    = _ordered_providers(payload, prefer_local)
+    ordered    = _ordered_providers(payload, prefer_local, task_intent)
     if agent_mode:
         ordered = _agent_affinity_order(ordered, agent_run_id)
 

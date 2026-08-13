@@ -21,6 +21,11 @@ from .runtime import AgentRuntime
 
 MAX_INPUT_BYTES = 100_000
 
+# Optional workload hint an orchestrator (Hall of Wisdom) may send alongside the
+# task. Purely additive: anything else — including a missing field — routes as
+# "general", i.e. exactly as this runtime behaved before the field existed.
+TASK_INTENTS = frozenset({"planning", "coding", "review", "debug", "vision", "general"})
+
 
 def emit_document(document: dict[str, Any]) -> None:
     sys.stdout.write(json.dumps(document, separators=(",", ":"), ensure_ascii=True) + "\n")
@@ -86,7 +91,7 @@ def detect_document() -> dict[str, Any]:
     )
 
 
-def read_task_input() -> tuple[str, str]:
+def read_task_input() -> tuple[str, str, str | None]:
     data = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
     if len(data) > MAX_INPUT_BYTES:
         raise AgentError("HERMES_AGENT_INPUT_TOO_LARGE", "Task input exceeds the runtime limit.")
@@ -104,18 +109,23 @@ def read_task_input() -> tuple[str, str]:
         run_id = safe_run_id(supplied_run_id or f"hermes-{uuid.uuid4()}")
     except ValueError as error:
         raise AgentError("HERMES_AGENT_INPUT_INVALID", "Task run_id is invalid.") from error
-    return prompt, run_id
+    # An unusable task_intent is never an error — the field is an optional hint,
+    # so it degrades to "general" rather than failing an otherwise valid task.
+    supplied_intent = value.get("task_intent")
+    task_intent = supplied_intent if isinstance(supplied_intent, str) and \
+        supplied_intent in TASK_INTENTS else None
+    return prompt, run_id, task_intent
 
 
 def run_command() -> int:
     emitter: EventEmitter | None = None
     runtime: AgentRuntime | None = None
     try:
-        prompt, run_id = read_task_input()
+        prompt, run_id, task_intent = read_task_input()
         emitter = EventEmitter(run_id)
         config = load_router_config()
         runtime = AgentRuntime(
-            HermesInferenceClient(config),
+            HermesInferenceClient(config, task_intent=task_intent),
             os.getcwd(),
             emitter,
         )
