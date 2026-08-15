@@ -130,10 +130,10 @@ class AgentRuntime:
         self._terminal = True
         self.emitter.emit(event_type, payload)
 
-    def run(self, prompt: str) -> str:
+    def run(self, prompt: str, image_parts: list[dict[str, Any]] | None = None) -> str:
         self.emitter.emit("run.started")
         try:
-            self._run_loop(prompt)
+            self._run_loop(prompt, image_parts)
             return "completed"
         except AgentCancelled:
             self._emit_terminal(
@@ -157,12 +157,19 @@ class AgentRuntime:
             )
             return "failed"
 
-    def _run_loop(self, prompt: str) -> None:
+    def _run_loop(self, prompt: str, image_parts: list[dict[str, Any]] | None = None) -> None:
         if not isinstance(prompt, str) or not prompt.strip():
             raise AgentError("HERMES_AGENT_INPUT_INVALID", "Task prompt is empty.")
+        # A plain string when there are no image parts — byte-identical to
+        # before this parameter existed. Only turns into an OpenAI-format
+        # content-blocks list when real image bytes are actually attached;
+        # see build_image_content_parts in __main__.py.
+        user_content: Any = (
+            [{"type": "text", "text": prompt}, *image_parts] if image_parts else prompt
+        )
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
+            {"role": "user", "content": user_content},
         ]
         tool_count = 0
         for _turn in range(MAX_AGENT_TURNS):

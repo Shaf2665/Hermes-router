@@ -15,6 +15,7 @@ import json
 
 from hermes_agent import __main__ as agent_main
 from hermes_agent.__main__ import (
+    build_image_content_parts,
     build_prompt_with_attachments,
     read_task_input,
 )
@@ -212,8 +213,9 @@ def test_attachment_paths_appear_in_the_prompt_agentruntime_receives(monkeypatch
         def __init__(self, *_args, **_kwargs):
             pass
 
-        def run(self, prompt):
+        def run(self, prompt, image_parts=None):
             captured["prompt"] = prompt
+            captured["image_parts"] = image_parts
             return "completed"
 
         def cancel(self):
@@ -227,6 +229,132 @@ def test_attachment_paths_appear_in_the_prompt_agentruntime_receives(monkeypatch
     assert captured["prompt"].startswith("Fix the bug.")
     assert ".hall-attachments/11111111-1111-4111-8111-111111111111/spec.txt" in captured["prompt"]
     assert "spec.txt" in captured["prompt"]
+    # A non-image attachment never produces multimodal content.
+    assert captured["image_parts"] == []
+
+
+def test_run_command_task_intent_vision_with_no_image_attachment_never_fabricates_content(
+    monkeypatch,
+):
+    # A "vision" task_intent Hall sent, with no image-kind attachment, must
+    # never produce multimodal content — image_parts is derived solely from
+    # attachment kind, never from task_intent.
+    monkeypatch.setenv("HERMES_ROUTER_API_KEY", "test-key")
+    _stdin(
+        monkeypatch,
+        {
+            "prompt": "Describe it.",
+            "run_id": "hall-run-11",
+            "task_intent": "vision",
+            "attachments": [_attachment(kind="file")],
+        },
+    )
+    captured: dict = {}
+
+    class _FakeRuntime:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def run(self, prompt, image_parts=None):
+            captured["image_parts"] = image_parts
+            return "completed"
+
+        def cancel(self):
+            pass
+
+    monkeypatch.setattr(agent_main, "AgentRuntime", _FakeRuntime)
+
+    agent_main.run_command()
+
+    assert captured["image_parts"] == []
+
+
+# ── build_image_content_parts: real multimodal content ─────────────────────
+
+def _write_materialized_image(tmp_path, relative_path: str, data: bytes) -> None:
+    absolute = tmp_path
+    for segment in relative_path.split("/")[:-1]:
+        absolute = absolute / segment
+    absolute.mkdir(parents=True, exist_ok=True)
+    (tmp_path / relative_path).write_bytes(data)
+
+
+def test_build_image_content_parts_returns_empty_for_no_attachments(tmp_path):
+    assert build_image_content_parts([], str(tmp_path)) == []
+
+
+def test_build_image_content_parts_ignores_non_image_attachments(tmp_path):
+    assert build_image_content_parts([_attachment(kind="file")], str(tmp_path)) == []
+
+
+def test_build_image_content_parts_builds_a_data_url_image_block(tmp_path):
+    rel = ".hall-attachments/aaa/one.png"
+    _write_materialized_image(tmp_path, rel, b"fake-png-bytes")
+    entry = _attachment(relative_path=rel, kind="image", mime_type="image/png")
+
+    parts = build_image_content_parts([entry], str(tmp_path))
+
+    assert len(parts) == 1
+    assert parts[0]["type"] == "image_url"
+    url = parts[0]["image_url"]["url"]
+    assert url.startswith("data:image/png;base64,")
+    import base64 as _b64
+
+    encoded = url.split(",", 1)[1]
+    assert _b64.b64decode(encoded) == b"fake-png-bytes"
+
+
+def test_build_image_content_parts_handles_multiple_images_in_order(tmp_path):
+    rel_a = ".hall-attachments/aaa/one.png"
+    rel_b = ".hall-attachments/bbb/two.png"
+    _write_materialized_image(tmp_path, rel_a, b"AAA")
+    _write_materialized_image(tmp_path, rel_b, b"BBB")
+    entries = [
+        _attachment(relative_path=rel_a, kind="image", mime_type="image/png"),
+        _attachment(relative_path=rel_b, kind="image", mime_type="image/png"),
+    ]
+
+    parts = build_image_content_parts(entries, str(tmp_path))
+
+    import base64 as _b64
+
+    assert [
+        _b64.b64decode(part["image_url"]["url"].split(",", 1)[1]) for part in parts
+    ] == [b"AAA", b"BBB"]
+
+
+def test_build_image_content_parts_drops_a_missing_file_without_raising(tmp_path):
+    entry = _attachment(
+        relative_path=".hall-attachments/missing/one.png", kind="image", mime_type="image/png"
+    )
+
+    assert build_image_content_parts([entry], str(tmp_path)) == []
+
+
+def test_build_image_content_parts_drops_an_oversized_image(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_main, "MAX_IMAGE_ATTACHMENT_BYTES", 4)
+    rel = ".hall-attachments/aaa/big.png"
+    _write_materialized_image(tmp_path, rel, b"this-is-too-big")
+    entry = _attachment(relative_path=rel, kind="image", mime_type="image/png")
+
+    assert build_image_content_parts([entry], str(tmp_path)) == []
+
+
+def test_build_image_content_parts_stops_once_the_total_budget_is_exhausted(monkeypatch, tmp_path):
+    monkeypatch.setattr(agent_main, "MAX_IMAGE_ATTACHMENT_BYTES", 10)
+    monkeypatch.setattr(agent_main, "MAX_TOTAL_IMAGE_ATTACHMENT_BYTES", 10)
+    rel_a = ".hall-attachments/aaa/one.png"
+    rel_b = ".hall-attachments/bbb/two.png"
+    _write_materialized_image(tmp_path, rel_a, b"1234567890")
+    _write_materialized_image(tmp_path, rel_b, b"abcdefghij")
+    entries = [
+        _attachment(relative_path=rel_a, kind="image", mime_type="image/png"),
+        _attachment(relative_path=rel_b, kind="image", mime_type="image/png"),
+    ]
+
+    parts = build_image_content_parts(entries, str(tmp_path))
+
+    assert len(parts) == 1
 
 
 def test_run_command_prompt_is_byte_identical_with_no_attachments(monkeypatch):
@@ -238,8 +366,9 @@ def test_run_command_prompt_is_byte_identical_with_no_attachments(monkeypatch):
         def __init__(self, *_args, **_kwargs):
             pass
 
-        def run(self, prompt):
+        def run(self, prompt, image_parts=None):
             captured["prompt"] = prompt
+            captured["image_parts"] = image_parts
             return "completed"
 
         def cancel(self):
@@ -250,3 +379,4 @@ def test_run_command_prompt_is_byte_identical_with_no_attachments(monkeypatch):
     agent_main.run_command()
 
     assert captured["prompt"] == "Fix the bug."
+    assert captured["image_parts"] == []

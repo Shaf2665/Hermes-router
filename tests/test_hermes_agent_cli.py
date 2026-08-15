@@ -37,6 +37,84 @@ def test_detect_accepts_confirmed_multi_model_capability(monkeypatch):
     assert detected["runtime_version"] == "0.1.0"
     assert detected["capabilities"] == capabilities["capabilities"]
     assert detected["execution_trust"] == "trusted_local"
+    # No model in this fixture reports supports_vision — additive field,
+    # never blocks overall availability.
+    assert detected["vision_available"] is False
+
+
+def test_detect_reports_vision_available_when_a_model_supports_vision(monkeypatch):
+    monkeypatch.setenv("HERMES_ROUTER_API_KEY", "test-key")
+    monkeypatch.setattr(
+        cli,
+        "request_json",
+        lambda _config, _method, path, **_kwargs: (
+            {"data": [{"id": "hermes-router"}]}
+            if path == "/models"
+            else {
+                "providers": {
+                    "test": {
+                        "available": True,
+                        "model_caps": [
+                            {
+                                "model": "text-only",
+                                "supports_tools": True,
+                                "tools_confirmed": True,
+                                "supports_vision": False,
+                            },
+                            {
+                                "model": "vision-model",
+                                "supports_tools": True,
+                                "tools_confirmed": True,
+                                "supports_vision": True,
+                            },
+                        ],
+                    }
+                }
+            }
+        ),
+    )
+
+    detected = cli.detect_document()
+
+    assert detected["available"] is True
+    assert detected["vision_available"] is True
+
+
+def test_detect_never_reports_vision_available_for_an_unavailable_provider(monkeypatch):
+    monkeypatch.setenv("HERMES_ROUTER_API_KEY", "test-key")
+    monkeypatch.setattr(
+        cli,
+        "request_json",
+        lambda _config, _method, path, **_kwargs: (
+            {"data": [{"id": "hermes-router"}]}
+            if path == "/models"
+            else {
+                "providers": {
+                    "down": {
+                        "available": False,
+                        "model_caps": [
+                            {
+                                "model": "vision-model",
+                                "supports_tools": True,
+                                "tools_confirmed": True,
+                                "supports_vision": True,
+                            }
+                        ],
+                    },
+                    "up": {
+                        "available": True,
+                        "supports_tools": True,
+                        "tools_confirmed": True,
+                    },
+                }
+            }
+        ),
+    )
+
+    detected = cli.detect_document()
+
+    assert detected["available"] is True
+    assert detected["vision_available"] is False
 
 
 def test_detect_accepts_confirmed_single_model_provider(monkeypatch):

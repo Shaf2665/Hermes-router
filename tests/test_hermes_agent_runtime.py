@@ -66,6 +66,30 @@ def test_agent_loop_emits_bounded_structured_lifecycle(tmp_path):
     assert (tmp_path / "app.py").read_text(encoding="utf-8") == "value = 2\n"
 
 
+def test_run_sends_plain_string_content_when_no_image_parts(tmp_path):
+    client = ScriptedClient([{"content": "Done."}])
+    runtime = AgentRuntime(client, tmp_path, EventEmitter("run-2", lambda _e: None))
+
+    assert runtime.run("Describe the file.") == "completed"
+
+    first_user_message = client.calls[0][0][1]
+    assert first_user_message == {"role": "user", "content": "Describe the file."}
+
+
+def test_run_sends_multimodal_content_blocks_when_image_parts_are_present(tmp_path):
+    client = ScriptedClient([{"content": "It's a screenshot."}])
+    runtime = AgentRuntime(client, tmp_path, EventEmitter("run-3", lambda _e: None))
+    image_part = {"type": "image_url", "image_url": {"url": "data:image/png;base64,QQ=="}}
+
+    assert runtime.run("Describe the image.", image_parts=[image_part]) == "completed"
+
+    first_user_message = client.calls[0][0][1]
+    assert first_user_message == {
+        "role": "user",
+        "content": [{"type": "text", "text": "Describe the image."}, image_part],
+    }
+
+
 def test_runtime_emits_failure_and_cancellation_terminals(tmp_path):
     failed_events = []
     failed = AgentRuntime(

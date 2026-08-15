@@ -6605,7 +6605,8 @@ def status():
             # Per-model capability breakdown (rating + tool/reasoning support), so
             # dashboards can show why a non-primary model gets picked for hard turns.
             entry["model_caps"] = [
-                {"model": m, **_model_caps(p["name"], m)} for m in p["models"]]
+                {"model": m, **_model_caps(p["name"], m),
+                 "supports_vision": _model_supports_vision(p, m)} for m in p["models"]]
         if "available" in st:
             entry["available"] = st["available"]
         if "supports_tools" in st:

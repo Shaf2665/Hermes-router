@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import signal
@@ -37,6 +38,16 @@ MAX_ATTACHMENT_RELATIVE_PATH_CHARS = 1024
 MAX_ATTACHMENT_FILENAME_CHARS = 200
 MAX_ATTACHMENT_MIME_TYPE_CHARS = 255
 MAX_ATTACHMENTS_SECTION_CHARS = 8000
+
+# Bounds for turning an "image"-kind attachment into real multimodal
+# content (base64 data-URL image_url blocks). Deliberately conservative
+# relative to Hall's own 64MB/20-attachment materialization cap — an
+# oversized image is skipped (dropped from the multimodal content, but its
+# text-line reference in the attachments section is kept) rather than
+# failing the whole task, the same "degrade, never crash" discipline
+# `_parse_attachment_entry` already uses for malformed manifest entries.
+MAX_IMAGE_ATTACHMENT_BYTES = 20 * 1024 * 1024
+MAX_TOTAL_IMAGE_ATTACHMENT_BYTES = 40 * 1024 * 1024
 
 
 def emit_document(document: dict[str, Any]) -> None:
@@ -74,6 +85,30 @@ def _status_has_tool_model(response: Any) -> bool:
     return False
 
 
+def _status_has_vision_model(response: Any) -> bool:
+    """Whether the router's live `/status` currently reports at least one
+    available provider with a vision-capable model. Reuses `model_caps`'
+    `supports_vision` field (router.py computes it from its own existing,
+    non-hardcoded model-family pattern list — never duplicated here) the
+    same way `_status_has_tool_model` reuses `supports_tools`. Unlike tool
+    support, this is never a hard requirement for `detect_document()`
+    overall availability — a missing vision model only means
+    `vision_available` is omitted/false, never that the whole runtime is
+    unavailable, so normal coding/review/general routing is unaffected."""
+    if not isinstance(response, dict) or not isinstance(response.get("providers"), dict):
+        return False
+    for provider in response["providers"].values():
+        if not isinstance(provider, dict) or provider.get("available") is False:
+            continue
+        model_caps = provider.get("model_caps")
+        if isinstance(model_caps, list) and any(
+            isinstance(capability, dict) and capability.get("supports_vision") is True
+            for capability in model_caps
+        ):
+            return True
+    return False
+
+
 def detect_document() -> dict[str, Any]:
     try:
         config = load_router_config()
@@ -100,6 +135,10 @@ def detect_document() -> dict[str, Any]:
         capabilities=list(CAPABILITIES),
         integration_level="structured_cli",
         execution_trust="trusted_local",
+        # Additive, never a hard requirement — see _status_has_vision_model's
+        # doc comment. `status` was already fetched above for the tool-model
+        # check; this is not a second /status request.
+        vision_available=_status_has_vision_model(status),
     )
 
 
@@ -186,6 +225,56 @@ def build_prompt_with_attachments(prompt: str, attachments: list[dict[str, str]]
     return prompt + _build_attachments_section(attachments)
 
 
+def _read_image_bytes(relative_path: str, cwd: str, remaining_total_budget: int) -> bytes | None:
+    """Reads one already-materialized image straight from this runtime's
+    own worktree (`cwd`) — never a second storage path. Returns `None`
+    (never raises) for anything that isn't a plain, readable, in-budget
+    file: `_is_safe_relative_attachment_path` already rejected traversal
+    at manifest-parse time, but this is a second, independent boundary
+    (an unreadable/oversized file degrades this one image, not the task)."""
+    absolute_path = os.path.join(cwd, *relative_path.split("/"))
+    try:
+        size = os.path.getsize(absolute_path)
+    except OSError:
+        return None
+    if size <= 0 or size > MAX_IMAGE_ATTACHMENT_BYTES or size > remaining_total_budget:
+        return None
+    try:
+        with open(absolute_path, "rb") as handle:
+            return handle.read(MAX_IMAGE_ATTACHMENT_BYTES + 1)
+    except OSError:
+        return None
+
+
+def build_image_content_parts(
+    attachments: list[dict[str, str]], cwd: str
+) -> list[dict[str, Any]]:
+    """Turns every `kind == "image"` attachment Hall already materialized
+    into this worktree into an OpenAI-format `image_url` content block
+    (a `data:` URL — the same format `router.py`'s existing
+    `_openai_content_to_anthropic` already translates for Anthropic
+    providers). Returns `[]` for no image attachments, which is what keeps
+    `AgentRuntime`'s message content a plain string — unchanged — for
+    every task that doesn't attach one."""
+    parts: list[dict[str, Any]] = []
+    remaining_total_budget = MAX_TOTAL_IMAGE_ATTACHMENT_BYTES
+    for entry in attachments:
+        if entry.get("kind") != "image":
+            continue
+        data = _read_image_bytes(entry["relative_path"], cwd, remaining_total_budget)
+        if data is None:
+            continue
+        remaining_total_budget -= len(data)
+        encoded = base64.b64encode(data).decode("ascii")
+        parts.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{entry['mime_type']};base64,{encoded}"},
+            }
+        )
+    return parts
+
+
 def read_task_input() -> tuple[str, str, str | None, list[dict[str, str]]]:
     data = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
     if len(data) > MAX_INPUT_BYTES:
@@ -236,7 +325,10 @@ def run_command() -> int:
 
         signal.signal(signal.SIGTERM, handle_signal)
         signal.signal(signal.SIGINT, handle_signal)
-        state = runtime.run(build_prompt_with_attachments(prompt, attachments))
+        image_parts = build_image_content_parts(attachments, os.getcwd())
+        state = runtime.run(
+            build_prompt_with_attachments(prompt, attachments), image_parts=image_parts
+        )
         return 0 if state in {"completed", "cancelled"} else 1
     except AgentCancelled:
         if emitter is not None:
