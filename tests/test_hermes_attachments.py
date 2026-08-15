@@ -7,11 +7,17 @@ the same stdin JSON object `run_id`/`prompt`/`task_intent` already use. This
 file proves the runtime parses that manifest defensively, turns it into
 bounded "Attached files" prompt context using only the already-materialized
 relative paths, and never fails or changes behavior for a payload that omits
-it entirely.
+it entirely — with one deliberate exception: a real image attachment is a
+REQUIRED vision request, and if any single image cannot be prepared
+(missing, unreadable, oversized, or an unsupported type), the whole run
+fails before ever reaching the router — see the "fail-closed" sections
+below.
 """
 
 import io
 import json
+
+import pytest
 
 from hermes_agent import __main__ as agent_main
 from hermes_agent.__main__ import (
@@ -19,6 +25,7 @@ from hermes_agent.__main__ import (
     build_prompt_with_attachments,
     read_task_input,
 )
+from hermes_agent.errors import AgentError
 
 
 def _stdin(monkeypatch, document: dict) -> None:
@@ -323,24 +330,64 @@ def test_build_image_content_parts_handles_multiple_images_in_order(tmp_path):
     ] == [b"AAA", b"BBB"]
 
 
-def test_build_image_content_parts_drops_a_missing_file_without_raising(tmp_path):
+# ── build_image_content_parts: fail-closed for required vision execution ──
+#
+# A real image attachment means vision was required (see deriveTaskIntent
+# on Hall's side). None of the tests below may ever observe a partial
+# image_url list or a silent fall-back to text-only — the function must
+# raise, full stop.
+
+def test_build_image_content_parts_fails_on_a_missing_file(tmp_path):
     entry = _attachment(
         relative_path=".hall-attachments/missing/one.png", kind="image", mime_type="image/png"
     )
 
-    assert build_image_content_parts([entry], str(tmp_path)) == []
+    with pytest.raises(AgentError) as excinfo:
+        build_image_content_parts([entry], str(tmp_path))
+
+    assert excinfo.value.code == agent_main.IMAGE_ATTACHMENT_UNAVAILABLE_CODE
+    # Never leaks the path/filename in the safe message.
+    assert "one.png" not in excinfo.value.message
+    assert "missing" not in excinfo.value.message
 
 
-def test_build_image_content_parts_drops_an_oversized_image(tmp_path, monkeypatch):
+def test_build_image_content_parts_fails_on_an_unreadable_file(tmp_path):
+    # A directory at the expected file path is a real, structural
+    # "unreadable" case — os.path.getsize succeeds but open() raises.
+    rel = ".hall-attachments/aaa/not-a-file.png"
+    (tmp_path / ".hall-attachments" / "aaa" / "not-a-file.png").mkdir(parents=True)
+    entry = _attachment(relative_path=rel, kind="image", mime_type="image/png")
+
+    with pytest.raises(AgentError) as excinfo:
+        build_image_content_parts([entry], str(tmp_path))
+
+    assert excinfo.value.code == agent_main.IMAGE_ATTACHMENT_UNAVAILABLE_CODE
+
+
+def test_build_image_content_parts_fails_on_an_oversized_image(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_main, "MAX_IMAGE_ATTACHMENT_BYTES", 4)
     rel = ".hall-attachments/aaa/big.png"
     _write_materialized_image(tmp_path, rel, b"this-is-too-big")
     entry = _attachment(relative_path=rel, kind="image", mime_type="image/png")
 
-    assert build_image_content_parts([entry], str(tmp_path)) == []
+    with pytest.raises(AgentError) as excinfo:
+        build_image_content_parts([entry], str(tmp_path))
+
+    assert excinfo.value.code == agent_main.IMAGE_ATTACHMENT_UNAVAILABLE_CODE
 
 
-def test_build_image_content_parts_stops_once_the_total_budget_is_exhausted(monkeypatch, tmp_path):
+def test_build_image_content_parts_fails_on_an_unsupported_mime_type(tmp_path):
+    rel = ".hall-attachments/aaa/one.svg"
+    _write_materialized_image(tmp_path, rel, b"<svg/>")
+    entry = _attachment(relative_path=rel, kind="image", mime_type="image/svg+xml")
+
+    with pytest.raises(AgentError) as excinfo:
+        build_image_content_parts([entry], str(tmp_path))
+
+    assert excinfo.value.code == agent_main.IMAGE_ATTACHMENT_UNAVAILABLE_CODE
+
+
+def test_build_image_content_parts_fails_when_the_total_budget_is_exceeded(monkeypatch, tmp_path):
     monkeypatch.setattr(agent_main, "MAX_IMAGE_ATTACHMENT_BYTES", 10)
     monkeypatch.setattr(agent_main, "MAX_TOTAL_IMAGE_ATTACHMENT_BYTES", 10)
     rel_a = ".hall-attachments/aaa/one.png"
@@ -352,9 +399,104 @@ def test_build_image_content_parts_stops_once_the_total_budget_is_exhausted(monk
         _attachment(relative_path=rel_b, kind="image", mime_type="image/png"),
     ]
 
-    parts = build_image_content_parts(entries, str(tmp_path))
+    with pytest.raises(AgentError) as excinfo:
+        build_image_content_parts(entries, str(tmp_path))
 
-    assert len(parts) == 1
+    assert excinfo.value.code == agent_main.IMAGE_ATTACHMENT_UNAVAILABLE_CODE
+
+
+def test_build_image_content_parts_one_bad_image_among_multiple_fails_the_whole_request(
+    tmp_path,
+):
+    # First image is perfectly valid; second is missing. The whole call
+    # must fail — the valid first image must never be sent on its own.
+    rel_good = ".hall-attachments/aaa/good.png"
+    rel_missing = ".hall-attachments/bbb/missing.png"
+    _write_materialized_image(tmp_path, rel_good, b"valid-bytes")
+    entries = [
+        _attachment(relative_path=rel_good, kind="image", mime_type="image/png"),
+        _attachment(relative_path=rel_missing, kind="image", mime_type="image/png"),
+    ]
+
+    with pytest.raises(AgentError) as excinfo:
+        build_image_content_parts(entries, str(tmp_path))
+
+    assert excinfo.value.code == agent_main.IMAGE_ATTACHMENT_UNAVAILABLE_CODE
+
+
+# ── run_command: fail-closed reaches the wire, and never reaches the router ──
+
+def test_run_command_image_preparation_failure_never_starts_the_agent_runtime(
+    monkeypatch, capsys, tmp_path
+):
+    monkeypatch.setenv("HERMES_ROUTER_API_KEY", "test-key")
+    monkeypatch.chdir(tmp_path)
+    entry = _attachment(
+        relative_path=".hall-attachments/missing/one.png", kind="image", mime_type="image/png"
+    )
+    _stdin(
+        monkeypatch,
+        {"prompt": "Describe it.", "run_id": "hall-run-12", "attachments": [entry]},
+    )
+    run_calls: list = []
+
+    class _FakeRuntime:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def run(self, prompt, image_parts=None):
+            # If this is ever called, a router/model request would follow —
+            # proving it never runs is exactly what this test is for.
+            run_calls.append((prompt, image_parts))
+            return "completed"
+
+        def cancel(self):
+            pass
+
+    monkeypatch.setattr(agent_main, "AgentRuntime", _FakeRuntime)
+
+    exit_code = agent_main.run_command()
+
+    assert exit_code == 1
+    assert run_calls == []
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.strip()]
+    assert [event["type"] for event in events] == ["run.started", "run.failed"]
+    assert events[-1]["payload"]["code"] == agent_main.IMAGE_ATTACHMENT_UNAVAILABLE_CODE
+
+
+def test_run_command_with_a_valid_image_attachment_produces_multimodal_content(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("HERMES_ROUTER_API_KEY", "test-key")
+    monkeypatch.chdir(tmp_path)
+    rel = ".hall-attachments/aaa/screenshot.png"
+    _write_materialized_image(tmp_path, rel, b"real-png-bytes")
+    entry = _attachment(relative_path=rel, kind="image", mime_type="image/png")
+    _stdin(
+        monkeypatch,
+        {"prompt": "Describe the screenshot.", "run_id": "hall-run-13", "attachments": [entry]},
+    )
+    captured: dict = {}
+
+    class _FakeRuntime:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def run(self, prompt, image_parts=None):
+            captured["image_parts"] = image_parts
+            return "completed"
+
+        def cancel(self):
+            pass
+
+    monkeypatch.setattr(agent_main, "AgentRuntime", _FakeRuntime)
+
+    exit_code = agent_main.run_command()
+
+    assert exit_code == 0
+    assert len(captured["image_parts"]) == 1
+    assert captured["image_parts"][0]["type"] == "image_url"
+    assert captured["image_parts"][0]["image_url"]["url"].startswith("data:image/png;base64,")
 
 
 def test_run_command_prompt_is_byte_identical_with_no_attachments(monkeypatch):

@@ -41,13 +41,28 @@ MAX_ATTACHMENTS_SECTION_CHARS = 8000
 
 # Bounds for turning an "image"-kind attachment into real multimodal
 # content (base64 data-URL image_url blocks). Deliberately conservative
-# relative to Hall's own 64MB/20-attachment materialization cap — an
-# oversized image is skipped (dropped from the multimodal content, but its
-# text-line reference in the attachments section is kept) rather than
-# failing the whole task, the same "degrade, never crash" discipline
-# `_parse_attachment_entry` already uses for malformed manifest entries.
+# relative to Hall's own 64MB/20-attachment materialization cap. Unlike
+# `_parse_attachment_entry`'s "degrade, never crash" discipline for a
+# malformed *manifest entry*, a real image attachment that fails to
+# prepare (missing, unreadable, oversized, or an unsupported image type)
+# fails the whole run — see `build_image_content_parts`'s doc comment for
+# why a required vision request must never silently become a smaller
+# image set or fall back to text-only.
 MAX_IMAGE_ATTACHMENT_BYTES = 20 * 1024 * 1024
 MAX_TOTAL_IMAGE_ATTACHMENT_BYTES = 40 * 1024 * 1024
+
+# The image kinds Hall's own upload-time validation allows (see
+# `ALLOWED_ATTACHMENT_MIME_TYPES` in `packages/protocol/src/attachment.ts`)
+# — checked again here, independently, since this runtime never trusts a
+# caller's own validation for anything it is about to send to a model.
+SUPPORTED_IMAGE_MIME_TYPES = frozenset(
+    {"image/png", "image/jpeg", "image/gif", "image/webp"}
+)
+
+IMAGE_ATTACHMENT_UNAVAILABLE_CODE = "HERMES_AGENT_IMAGE_ATTACHMENT_UNAVAILABLE"
+IMAGE_ATTACHMENT_UNAVAILABLE_MESSAGE = (
+    "A required image attachment could not be prepared for vision analysis."
+)
 
 
 def emit_document(document: dict[str, Any]) -> None:
@@ -225,25 +240,38 @@ def build_prompt_with_attachments(prompt: str, attachments: list[dict[str, str]]
     return prompt + _build_attachments_section(attachments)
 
 
-def _read_image_bytes(relative_path: str, cwd: str, remaining_total_budget: int) -> bytes | None:
+def _unavailable_image_error() -> AgentError:
+    return AgentError(IMAGE_ATTACHMENT_UNAVAILABLE_CODE, IMAGE_ATTACHMENT_UNAVAILABLE_MESSAGE)
+
+
+def _read_image_bytes_or_fail(relative_path: str, cwd: str, remaining_total_budget: int) -> bytes:
     """Reads one already-materialized image straight from this runtime's
-    own worktree (`cwd`) — never a second storage path. Returns `None`
-    (never raises) for anything that isn't a plain, readable, in-budget
-    file: `_is_safe_relative_attachment_path` already rejected traversal
-    at manifest-parse time, but this is a second, independent boundary
-    (an unreadable/oversized file degrades this one image, not the task)."""
+    own worktree (`cwd`) — never a second storage path. Raises
+    `AgentError(IMAGE_ATTACHMENT_UNAVAILABLE_CODE, ...)` — never returns a
+    partial result — for anything that isn't a plain, readable, in-budget
+    file: missing (`os.path.getsize` fails), unreadable (`open` fails),
+    or oversized (exceeds the per-image cap or the remaining total
+    budget). `_is_safe_relative_attachment_path` already rejected
+    traversal at manifest-parse time; this is a second, independent
+    boundary. The raised error's message never includes the path,
+    filename, or any OS error detail — see the "never raw process/OS
+    output" discipline this module already applies to `AgentError`
+    elsewhere."""
     absolute_path = os.path.join(cwd, *relative_path.split("/"))
     try:
         size = os.path.getsize(absolute_path)
-    except OSError:
-        return None
+    except OSError as error:
+        raise _unavailable_image_error() from error
     if size <= 0 or size > MAX_IMAGE_ATTACHMENT_BYTES or size > remaining_total_budget:
-        return None
+        raise _unavailable_image_error()
     try:
         with open(absolute_path, "rb") as handle:
-            return handle.read(MAX_IMAGE_ATTACHMENT_BYTES + 1)
-    except OSError:
-        return None
+            data = handle.read(MAX_IMAGE_ATTACHMENT_BYTES + 1)
+    except OSError as error:
+        raise _unavailable_image_error() from error
+    if len(data) > MAX_IMAGE_ATTACHMENT_BYTES:
+        raise _unavailable_image_error()
+    return data
 
 
 def build_image_content_parts(
@@ -255,15 +283,26 @@ def build_image_content_parts(
     `_openai_content_to_anthropic` already translates for Anthropic
     providers). Returns `[]` for no image attachments, which is what keeps
     `AgentRuntime`'s message content a plain string — unchanged — for
-    every task that doesn't attach one."""
+    every task that doesn't attach one.
+
+    Fail-closed for a REQUIRED vision request (any image-kind attachment
+    at all means vision was required — see `deriveTaskIntent` on Hall's
+    side): if any single image is missing, unreadable, oversized, or an
+    unsupported mime type, this raises immediately rather than returning
+    a partial set — a vision request must never silently run with fewer
+    images than were actually attached, and must never silently fall back
+    to text-only. Called from `run_command()` strictly before `AgentRuntime.run()`,
+    so a raise here means no router/model request is ever made for this
+    run."""
+    image_entries = [entry for entry in attachments if entry.get("kind") == "image"]
+    if not image_entries:
+        return []
     parts: list[dict[str, Any]] = []
     remaining_total_budget = MAX_TOTAL_IMAGE_ATTACHMENT_BYTES
-    for entry in attachments:
-        if entry.get("kind") != "image":
-            continue
-        data = _read_image_bytes(entry["relative_path"], cwd, remaining_total_budget)
-        if data is None:
-            continue
+    for entry in image_entries:
+        if entry["mime_type"] not in SUPPORTED_IMAGE_MIME_TYPES:
+            raise _unavailable_image_error()
+        data = _read_image_bytes_or_fail(entry["relative_path"], cwd, remaining_total_budget)
         remaining_total_budget -= len(data)
         encoded = base64.b64encode(data).decode("ascii")
         parts.append(
