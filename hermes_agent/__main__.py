@@ -26,6 +26,18 @@ MAX_INPUT_BYTES = 100_000
 # "general", i.e. exactly as this runtime behaved before the field existed.
 TASK_INTENTS = frozenset({"planning", "coding", "review", "debug", "vision", "general"})
 
+# Optional materialized-attachment manifest an orchestrator (Hall of Wisdom) may
+# send alongside the task. Purely additive: a missing, malformed, or oversized
+# manifest degrades to no attachments rather than failing an otherwise valid
+# task — the same "hint, not an instruction" discipline task_intent already
+# uses. Every bound here is defensive: a caller that already validated its own
+# payload should never hit these, but this runtime never trusts that.
+MAX_ATTACHMENT_ENTRIES = 50
+MAX_ATTACHMENT_RELATIVE_PATH_CHARS = 1024
+MAX_ATTACHMENT_FILENAME_CHARS = 200
+MAX_ATTACHMENT_MIME_TYPE_CHARS = 255
+MAX_ATTACHMENTS_SECTION_CHARS = 8000
+
 
 def emit_document(document: dict[str, Any]) -> None:
     sys.stdout.write(json.dumps(document, separators=(",", ":"), ensure_ascii=True) + "\n")
@@ -91,7 +103,90 @@ def detect_document() -> dict[str, Any]:
     )
 
 
-def read_task_input() -> tuple[str, str, str | None]:
+def _is_safe_relative_attachment_path(relative_path: str) -> bool:
+    """True only for a path Hall could plausibly have materialized inside the
+    worktree this runtime's cwd already is — never an absolute host path, a
+    UNC/drive-rooted path, or one containing a traversal segment. Hall's own
+    TypeScript side already builds `relative_path` from validated components
+    before ever sending it, but this runtime never trusts that by itself."""
+    if not relative_path or len(relative_path) > MAX_ATTACHMENT_RELATIVE_PATH_CHARS:
+        return False
+    if "\0" in relative_path:
+        return False
+    if relative_path.startswith(("/", "\\")):
+        return False
+    if len(relative_path) >= 2 and relative_path[1] == ":":
+        return False
+    segments = relative_path.replace("\\", "/").split("/")
+    return not any(segment in ("", ".", "..") for segment in segments)
+
+
+def _parse_attachment_entry(raw: Any) -> dict[str, str] | None:
+    """Returns a validated `{relative_path, filename, mime_type, kind}` entry,
+    or `None` for anything that doesn't match — one malformed entry is
+    dropped, never a reason to fail the whole task or the rest of the
+    manifest. `kind` is carried through as opaque display data only; no
+    branch anywhere treats an `"image"` kind differently (attachments —
+    including images — are ordinary file-path context in this runtime)."""
+    if not isinstance(raw, dict):
+        return None
+    relative_path = raw.get("relative_path")
+    filename = raw.get("filename")
+    mime_type = raw.get("mime_type")
+    kind = raw.get("kind")
+    if (
+        not isinstance(relative_path, str)
+        or not _is_safe_relative_attachment_path(relative_path)
+        or not isinstance(filename, str)
+        or not filename
+        or len(filename) > MAX_ATTACHMENT_FILENAME_CHARS
+        or "\0" in filename
+        or not isinstance(mime_type, str)
+        or not mime_type
+        or len(mime_type) > MAX_ATTACHMENT_MIME_TYPE_CHARS
+        or "\0" in mime_type
+    ):
+        return None
+    return {
+        "relative_path": relative_path,
+        "filename": filename,
+        "mime_type": mime_type,
+        "kind": kind if isinstance(kind, str) and kind else "file",
+    }
+
+
+def _parse_attachments(raw: Any) -> list[dict[str, str]]:
+    if not isinstance(raw, list):
+        return []
+    parsed = [entry for entry in (_parse_attachment_entry(item) for item in raw) if entry is not None]
+    return parsed[:MAX_ATTACHMENT_ENTRIES]
+
+
+def _build_attachments_section(attachments: list[dict[str, str]]) -> str:
+    """A bounded, fixed-shape block appended to the task prompt — never
+    parsed as instructions, just descriptive file-path context using only
+    the relative paths Hall already materialized inside this runtime's own
+    worktree. Returns "" for no attachments, which is what keeps a text-only
+    task's prompt byte-identical to before this function existed."""
+    if not attachments:
+        return ""
+    lines = [
+        f"- {entry['relative_path']} ({entry['filename']}, {entry['mime_type']})"
+        for entry in attachments
+    ]
+    section = "\n\nAttached files (read-only copies inside your working directory):\n" + "\n".join(
+        lines
+    )
+    if len(section) > MAX_ATTACHMENTS_SECTION_CHARS:
+        section = section[:MAX_ATTACHMENTS_SECTION_CHARS] + "\n[... attachment list truncated ...]"
+    return section
+
+
+def build_prompt_with_attachments(prompt: str, attachments: list[dict[str, str]]) -> str:
+    return prompt + _build_attachments_section(attachments)
+
+
+def read_task_input() -> tuple[str, str, str | None, list[dict[str, str]]]:
     data = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
     if len(data) > MAX_INPUT_BYTES:
         raise AgentError("HERMES_AGENT_INPUT_TOO_LARGE", "Task input exceeds the runtime limit.")
@@ -114,14 +209,18 @@ def read_task_input() -> tuple[str, str, str | None]:
     supplied_intent = value.get("task_intent")
     task_intent = supplied_intent if isinstance(supplied_intent, str) and \
         supplied_intent in TASK_INTENTS else None
-    return prompt, run_id, task_intent
+    # Same discipline as task_intent: an unusable attachments manifest (wrong
+    # type, malformed entries, too many entries) degrades to an empty list
+    # rather than failing an otherwise valid task.
+    attachments = _parse_attachments(value.get("attachments"))
+    return prompt, run_id, task_intent, attachments
 
 
 def run_command() -> int:
     emitter: EventEmitter | None = None
     runtime: AgentRuntime | None = None
     try:
-        prompt, run_id, task_intent = read_task_input()
+        prompt, run_id, task_intent, attachments = read_task_input()
         emitter = EventEmitter(run_id)
         config = load_router_config()
         runtime = AgentRuntime(
@@ -137,7 +236,7 @@ def run_command() -> int:
 
         signal.signal(signal.SIGTERM, handle_signal)
         signal.signal(signal.SIGINT, handle_signal)
-        state = runtime.run(prompt)
+        state = runtime.run(build_prompt_with_attachments(prompt, attachments))
         return 0 if state in {"completed", "cancelled"} else 1
     except AgentCancelled:
         if emitter is not None:

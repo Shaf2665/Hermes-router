@@ -76,7 +76,7 @@ verified Git-inspection tool.
 `run` reads exactly one bounded UTF-8 JSON object from stdin:
 
 ```json
-{"run_id":"hall-run-123","prompt":"Implement and test the requested change.","task_intent":"coding"}
+{"run_id":"hall-run-123","prompt":"Implement and test the requested change.","task_intent":"coding","attachments":[{"relative_path":".hall-attachments/11111111-1111-4111-8111-111111111111/spec.txt","filename":"spec.txt","mime_type":"text/plain","kind":"file"}]}
 ```
 
 - `prompt` is required.
@@ -87,6 +87,22 @@ verified Git-inspection tool.
   treated as `general` — it never fails an otherwise valid task — and `general`
   routes exactly as a caller that omits the field. See *Agent routing profile*
   for what each value does.
+- `attachments` is optional: a list of files Hall has already materialized
+  into this run's own worktree before spawning the runtime (Hall's isolated
+  worktree writes them under `.hall-attachments/<id>/<filename>`). Each entry
+  is `{relative_path, filename, mime_type, kind}` — `relative_path` must be
+  relative to the worktree root the runtime's own cwd already is, never an
+  absolute path, a drive-rooted or UNC path, or contain a `..` traversal
+  segment; `kind` (currently `"file"` or `"image"`) is carried through as
+  plain display data only — an `"image"` entry is listed exactly like any
+  other file, never treated as multimodal input. A missing `attachments`
+  field, a non-list value, or any malformed entry within an otherwise-valid
+  list degrades safely (the whole field, or just that one entry, is dropped)
+  rather than failing an otherwise valid task — the same discipline
+  `task_intent` already uses. Every valid entry is appended to the prompt the
+  model receives as a bounded "Attached files" list of relative paths the
+  model can open with `project_read`; the runtime never reads a host
+  filesystem path itself and never embeds file bytes in the request.
 - Router URL, key, model, worktree path, command policy, and extra arguments are
   never accepted from task input.
 - The process current working directory is the worktree root.
@@ -182,7 +198,8 @@ The future Hall adapter needs only a local process boundary:
    `protocol: "hermes-agent/v1"`.
 3. For a task, spawn `run` with `cwd` set to Hall's prepared worktree. Write one
    JSON object containing Hall's bounded `run_id` and prompt — optionally with
-   `task_intent` — then close stdin.
+   `task_intent` and, when the task has attachments already materialized into
+   that same worktree, `attachments` — then close stdin.
 4. Parse stdout one line at a time as JSON. Require the protocol, run id, and
    monotonically increasing sequence; map event `type` and `payload` directly.
    Treat stderr only as diagnostics and never parse it as the event stream.

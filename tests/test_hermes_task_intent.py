@@ -32,19 +32,19 @@ def _client(recorder) -> HermesInferenceClient:
 def test_hall_style_stdin_task_intent_is_parsed(monkeypatch):
     _stdin(monkeypatch, {"prompt": "task", "run_id": "hall-run-1", "task_intent": "coding"})
 
-    assert read_task_input() == ("task", "hall-run-1", "coding")
+    assert read_task_input() == ("task", "hall-run-1", "coding", [])
 
 
 def test_missing_task_intent_preserves_old_behaviour(monkeypatch):
     _stdin(monkeypatch, {"prompt": "task", "run_id": "hall-run-2"})
 
-    assert read_task_input() == ("task", "hall-run-2", None)
+    assert read_task_input() == ("task", "hall-run-2", None, [])
 
 
 def test_invalid_task_intent_falls_back_without_failing_the_task(monkeypatch):
     for bogus in ("refactoring", "CODING", "", 7, None, {"a": 1}):
         _stdin(monkeypatch, {"prompt": "task", "run_id": "hall-run-3", "task_intent": bogus})
-        assert read_task_input() == ("task", "hall-run-3", None)
+        assert read_task_input() == ("task", "hall-run-3", None, [])
 
 
 def test_general_intent_is_carried_but_routes_as_today(monkeypatch):
@@ -52,6 +52,31 @@ def test_general_intent_is_carried_but_routes_as_today(monkeypatch):
 
     assert read_task_input()[2] == "general"
     assert router._task_intent("general") is None
+
+
+def test_task_intent_propagates_unchanged_alongside_an_attachments_manifest(monkeypatch):
+    # An attachments manifest arriving alongside task_intent must not change
+    # how task_intent itself is parsed or carried through.
+    _stdin(
+        monkeypatch,
+        {
+            "prompt": "task",
+            "run_id": "hall-run-5",
+            "task_intent": "coding",
+            "attachments": [
+                {
+                    "relative_path": ".hall-attachments/abc/spec.txt",
+                    "filename": "spec.txt",
+                    "mime_type": "text/plain",
+                    "kind": "file",
+                }
+            ],
+        },
+    )
+
+    prompt, run_id, task_intent, attachments = read_task_input()
+    assert (prompt, run_id, task_intent) == ("task", "hall-run-5", "coding")
+    assert len(attachments) == 1
 
 
 # ── client: the intent reaches the router as a header ─────────────────────────
