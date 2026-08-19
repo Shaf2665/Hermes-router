@@ -237,12 +237,6 @@ and settings across restarts. Full details: [vscode-extension.md](vscode-extensi
 (Sticking with the plain image? Add providers by re-running with another `-e <PROVIDER>_API_KEYS=…`
 and "restart" with `docker restart hermes-router`.)
 
-> The `:cli` image also bundles the [Hall of Wisdom bridge](hall-of-wisdom.md) and the
-> [Hermes Coding Runtime](hermes-agent-runtime.md), so `docker exec hermes-router hr hall detect`
-> and `docker exec hermes-router hr agent capabilities` work inside the container. The plain
-> image carries the same two entrypoints without the `hr` wrapper — call them directly, e.g.
-> `docker exec hermes-router python hermes_agent_runner.py capabilities`.
-
 ### 3b. WSL2 (full `hr` experience)
 
 WSL2 runs a real Ubuntu inside Windows, so everything behaves exactly like Linux.

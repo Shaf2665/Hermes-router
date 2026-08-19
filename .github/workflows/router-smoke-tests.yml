@@ -39,10 +39,6 @@ jobs:
         run: >-
           python -m py_compile
           router.py
-          hermes_hall_bridge.py
-          hermes_router_client.py
-          hermes_agent_runner.py
-          hermes_agent/*.py
 
       - name: Shell syntax check
         run: |

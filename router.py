@@ -1786,37 +1786,38 @@ def classify_complexity(messages: list) -> int:
     return 5
 
 
-# Task-intent hints (internal `X-Hermes-Task-Intent` header). A caller — today
-# Hall of Wisdom's Hermes adapter — can say what kind of work a request is, and
+# Generic workload hints (`X-Hermes-Workload-Hint`) let a caller describe the
+# kind of inference it is requesting without coupling the router to an agent
+# product or execution runtime.
 # routing biases the existing candidate order toward matching capability
 # metadata. Purely a hint: unknown values and `general` are dropped, and every
 # intent leaves the tier/price/quality ordering and the failover cascade intact.
-_TASK_INTENTS = frozenset({"planning", "coding", "review", "debug", "vision", "general"})
+_WORKLOAD_HINTS = frozenset({"planning", "coding", "review", "debug", "vision", "general"})
 
 
-def _task_intent(value: str | None) -> str | None:
-    """Validate a task-intent hint. Missing, unknown, or `general` → None, which
+def _workload_hint(value: str | None) -> str | None:
+    """Validate a workload hint. Missing, unknown, or `general` → None, which
     every downstream term treats as "no hint" and routes exactly as it does today."""
     value = (value or "").strip().lower()
-    return value if value in _TASK_INTENTS and value != "general" else None
+    return value if value in _WORKLOAD_HINTS and value != "general" else None
 
 
-def _intent_fit(intent: str | None, provider: dict, model: str) -> int:
-    """0 = this candidate matches the caller's task intent, 1 = it doesn't.
+def _workload_fit(hint: str | None, provider: dict, model: str) -> int:
+    """0 = this candidate matches the caller's workload hint, 1 = it doesn't.
     Reads only existing capability metadata — never a model or provider name.
     Returns a constant 0 for no/unknown intent and for `debug` (which reuses the
     existing fast-route preference instead), so ordering is bit-for-bit unchanged."""
-    if intent == "coding":            # editing/tool-driven work needs function calling
+    if hint == "coding":            # editing/tool-driven work needs function calling
         return 0 if _model_supports_tools(provider["name"], model) else 1
-    if intent in ("review", "planning"):   # both want the stronger reasoning models
+    if hint in ("review", "planning"):   # both want the stronger reasoning models
         return 0 if _model_caps(provider["name"], model).get("reasoning") else 1
-    if intent == "vision":            # only reached when the payload really has an image
+    if hint == "vision":            # only reached when the payload really has an image
         return 0 if _model_supports_vision(provider, model) else 1
     return 0
 
 
 def _get_smart_ordered(providers: list, complexity: int, est_tokens: int = 0,
-                       prefer_local: bool = False, intent: str | None = None) -> list:
+                       prefer_local: bool = False, workload_hint: str | None = None) -> list:
     """
     Rank every configured (provider, model) for this complexity: cheapest capable
     model first, then better same-price models, then too-weak as last resort. Never blocks. Returns
@@ -1839,7 +1840,7 @@ def _get_smart_ordered(providers: list, complexity: int, est_tokens: int = 0,
     fast_first = FAST_ROUTE_TOKENS > 0 and 0 < est_tokens < FAST_ROUTE_TOKENS
     # `debug` reuses the existing low-latency preference rather than adding a
     # ranking term of its own — a debug turn wants a quick answer.
-    if intent == "debug":
+    if workload_hint == "debug":
         fast_first = True
 
     def _key(cand):
@@ -1871,7 +1872,7 @@ def _get_smart_ordered(providers: list, complexity: int, est_tokens: int = 0,
         # hint may reorder within the capable tier, but must never promote a
         # too-weak model over one that actually fits the request's complexity.
         # list_index trails so a provider's listed model order breaks rating ties.
-        return (local_first, tier, _intent_fit(intent, p, model), price, quality,
+        return (local_first, tier, _workload_fit(workload_hint, p, model), price, quality,
                 sort_within, breaker_open, health, 0 if avail else 1, fast,
                 cand["list_index"])
 
@@ -2252,42 +2253,41 @@ stats = ProviderStats()
 # returns without changing _route_completion's return signature.
 _req_ctx = threading.local()
 
-# Agent-run affinity is a bounded, in-memory routing hint only. The local Hermes
-# coding runtime supplies an opaque run id; the router remembers the last
-# successful provider/model for that run and tries it first on the next tool-loop
-# turn. Normal failover remains unchanged, and a successful fallback replaces the
-# hint. Nothing here exposes project tools or execution through HTTP.
-_AGENT_AFFINITY_TTL = 3600
-_AGENT_AFFINITY_MAX = 256
-_agent_affinity_lock = threading.Lock()
-_agent_affinity: OrderedDict[str, tuple[str, str, float]] = OrderedDict()
+# Session affinity is a bounded, in-memory routing hint only. A caller supplies
+# an opaque session id; the router remembers the last successful provider/model
+# and tries it first next time. Normal failover remains unchanged, and a
+# successful fallback replaces the hint. Nothing here exposes execution tools.
+_SESSION_AFFINITY_TTL = 3600
+_SESSION_AFFINITY_MAX = 256
+_session_affinity_lock = threading.Lock()
+_session_affinity: OrderedDict[str, tuple[str, str, float]] = OrderedDict()
 
 
-def _agent_run_id(value: str | None) -> str | None:
+def _session_affinity_id(value: str | None) -> str | None:
     value = (value or "").strip()
     if not value or len(value) > 200 or not re.fullmatch(r"[A-Za-z0-9._:-]+", value):
         return None
     return value
 
 
-def _agent_affinity_get(run_id: str | None) -> tuple[str, str] | None:
-    if run_id is None:
+def _session_affinity_get(session_id: str | None) -> tuple[str, str] | None:
+    if session_id is None:
         return None
     now = time.time()
-    with _agent_affinity_lock:
-        entry = _agent_affinity.get(run_id)
+    with _session_affinity_lock:
+        entry = _session_affinity.get(session_id)
         if entry is None:
             return None
         provider, model, timestamp = entry
-        if now - timestamp > _AGENT_AFFINITY_TTL:
-            del _agent_affinity[run_id]
+        if now - timestamp > _SESSION_AFFINITY_TTL:
+            del _session_affinity[session_id]
             return None
-        _agent_affinity.move_to_end(run_id)
+        _session_affinity.move_to_end(session_id)
         return provider, model
 
 
-def _agent_affinity_order(ordered: list[dict], run_id: str | None) -> list[dict]:
-    affinity = _agent_affinity_get(run_id)
+def _session_affinity_order(ordered: list[dict], session_id: str | None) -> list[dict]:
+    affinity = _session_affinity_get(session_id)
     if affinity is None:
         return ordered
     provider_name, model = affinity
@@ -2299,14 +2299,14 @@ def _agent_affinity_order(ordered: list[dict], run_id: str | None) -> list[dict]
     )
 
 
-def _agent_affinity_set(run_id: str | None, provider_name: str, model: str) -> None:
-    if run_id is None:
+def _session_affinity_set(session_id: str | None, provider_name: str, model: str) -> None:
+    if session_id is None:
         return
-    with _agent_affinity_lock:
-        _agent_affinity[run_id] = (provider_name, model, time.time())
-        _agent_affinity.move_to_end(run_id)
-        while len(_agent_affinity) > _AGENT_AFFINITY_MAX:
-            _agent_affinity.popitem(last=False)
+    with _session_affinity_lock:
+        _session_affinity[session_id] = (provider_name, model, time.time())
+        _session_affinity.move_to_end(session_id)
+        while len(_session_affinity) > _SESSION_AFFINITY_MAX:
+            _session_affinity.popitem(last=False)
 
 
 class RequestRingBuffer:
@@ -3315,23 +3315,23 @@ def _estimated_tokens(messages: list) -> int:
 
 
 def _ordered_providers(payload: dict, prefer_local: bool = False,
-                       intent: str | None = None) -> list[dict]:
+                       workload_hint: str | None = None) -> list[dict]:
     """
     Smart complexity-aware ordering: use cheapest capable model for simple
     tasks, best model for complex ones. With FAST_ROUTE_THRESHOLD set,
     short requests break ties in favour of low-latency providers. With
     prefer_local (the `:fast` profile), a local model leads on easy turns.
-    With a task intent, matching capability metadata breaks ties within tier.
+    With a workload hint, matching capability metadata breaks ties within tier.
     """
     messages   = payload.get("messages", [])
     # A `vision` hint only means anything when the request genuinely carries an
     # image. Dropping it here keeps a text-only request text-only: the hint alone
     # must never make routing (or `enforce_vision` below) treat it as multimodal.
-    if intent == "vision" and not _payload_has_image(payload):
-        intent = None
+    if workload_hint == "vision" and not _payload_has_image(payload):
+        workload_hint = None
     complexity = classify_complexity(messages)
     ordered    = _get_smart_ordered(PROVIDERS, complexity, _estimated_tokens(messages),
-                                    prefer_local, intent)
+                                    prefer_local, workload_hint)
     log.info(f"→ complexity={complexity} ({_COMPLEXITY_LABELS[complexity]}) "
              f"order={[c['provider']['name'] + '/' + c['model'] for c in ordered]}")
     return ordered
@@ -5543,26 +5543,22 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
     _req_ctx.cache_hit = False
     _req_ctx.attempts  = 0   # total forward() calls made (cascades = attempts-1)
 
-    # Routing profiles are internal hints on the existing completion endpoint.
-    # `fast` prefers a local model; `agent` enforces tools, bypasses caches, and
-    # uses per-run provider/model affinity while retaining normal failover.
+    # Generic routing hints on the existing completion endpoint. `:fast`
+    # prefers a local model; a tool loop can request strict tool transport,
+    # cache isolation, and session affinity while retaining normal failover.
     prefer_local = False
-    request_profile = ""
-    agent_run_id = None
-    task_intent = None
+    tool_loop = False
+    session_affinity_id = None
+    workload_hint = None
     try:
-        request_profile = request.headers.get("X-Hermes-Profile", "").strip().lower()
-        if request_profile == "agent":
-            agent_run_id = _agent_run_id(request.headers.get("X-Hermes-Agent-Run"))
-        task_intent = _task_intent(request.headers.get("X-Hermes-Task-Intent"))
+        tool_loop = request.headers.get("X-Hermes-Tool-Loop", "").strip().lower() in {"1", "true", "yes"}
+        session_affinity_id = _session_affinity_id(request.headers.get("X-Hermes-Session-Affinity"))
+        workload_hint = _workload_hint(request.headers.get("X-Hermes-Workload-Hint"))
     except RuntimeError:
         pass  # called outside a request context (e.g. tests)
-    agent_mode = request_profile == "agent"
     if str(payload.get("model") or "").endswith(":fast"):
         prefer_local = True
         payload = {**payload, "model": ROUTER_MODEL}
-    elif request_profile == "fast":
-        prefer_local = True
 
     messages = payload.get("messages", [])
 
@@ -5570,7 +5566,7 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
     # semantic match. query_emb is reused to store the response so future similar
     # prompts can match it.
     query_emb = None
-    if not streaming and not agent_mode:
+    if not streaming and not tool_loop:
         cached = cache.get(payload, ns)
         if cached is not None:
             log.info("↩ cache hit")
@@ -5586,33 +5582,32 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
                     return ("json", hit)
 
     est_tokens = _estimated_tokens(messages)
-    ordered    = _ordered_providers(payload, prefer_local, task_intent)
-    if agent_mode:
-        ordered = _agent_affinity_order(ordered, agent_run_id)
+    ordered    = _ordered_providers(payload, prefer_local, workload_hint)
+    ordered = _session_affinity_order(ordered, session_affinity_id)
 
     # Tool-aware routing: when the request carries tools, prefer (provider, model)
     # candidates whose MODEL actually supports function calling — otherwise a model
     # that silently ignores tools would return plain text instead of the tool call.
     # Default requests keep the compatibility fallback when capability metadata
-    # has no tool candidate. Agent-profile requests are strict and fail early.
+    # has no tool candidate. Explicit tool loops are strict and fail early.
     needs_tools = bool(payload.get("tools"))
-    tool_capable = _model_has_confirmed_tool_support if agent_mode else _model_supports_tools
+    tool_capable = _model_has_confirmed_tool_support if tool_loop else _model_supports_tools
     any_tool_candidate = any(
         tool_capable(c["provider"]["name"], c["model"]) for c in ordered
     )
-    if agent_mode and not needs_tools:
+    if tool_loop and not needs_tools:
         return (
             "error",
-            {"error": {"message": "Agent profile requires tool definitions", "type": "invalid_request_error"}},
+            {"error": {"message": "Tool-loop mode requires tool definitions", "type": "invalid_request_error"}},
             400,
         )
-    if agent_mode and not any_tool_candidate:
+    if tool_loop and not any_tool_candidate:
         return (
             "error",
             {"error": {"message": "No tool-capable models available", "type": "router_error"}},
             503,
         )
-    enforce_tool = needs_tools and (agent_mode or any_tool_candidate)
+    enforce_tool = needs_tools and (tool_loop or any_tool_candidate)
 
     # Vision-aware routing: when the request carries an image, prefer candidates
     # whose MODEL is known to accept image input — otherwise the request cascades
@@ -5770,8 +5765,8 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
                 # Codex backend always streams SSE. Stream it through, or
                 # aggregate it into one response for non-streaming clients.
                 if streaming:
-                    if agent_mode:
-                        _agent_affinity_set(agent_run_id, name, model)
+                    if session_affinity_id is not None:
+                        _session_affinity_set(session_affinity_id, name, model)
                     return ("stream", _with_cleanup(resp, _codex_streaming_generator(resp)), name)
                 events = []
                 for raw in resp.iter_lines():
@@ -5791,14 +5786,14 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
                     pool.mark_rate_limited(name, key, model, retry_after=30)
                     break
                 _add_provider_tokens(name, data, model)
-                if not agent_mode:
+                if not tool_loop:
                     cache.set(payload, data, ns, query_emb)
                 else:
-                    _agent_affinity_set(agent_run_id, name, model)
+                    _session_affinity_set(session_affinity_id, name, model)
                 return ("json", data)
             if streaming:
-                if agent_mode:
-                    _agent_affinity_set(agent_run_id, name, model)
+                if session_affinity_id is not None:
+                    _session_affinity_set(session_affinity_id, name, model)
                 gen = (_anthropic_streaming_generator(resp) if is_anthropic
                        else _streaming_generator(resp))
                 wrapped = _streaming_with_usage(_with_cleanup(resp, gen), name, model)
@@ -5844,10 +5839,10 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
                 if not is_anthropic:
                     _strip_response(data)
                 _add_provider_tokens(name, data, model)
-                if not agent_mode:
+                if not tool_loop:
                     cache.set(payload, data, ns, query_emb)
                 else:
-                    _agent_affinity_set(agent_run_id, name, model)
+                    _session_affinity_set(session_affinity_id, name, model)
                 return ("json", data)
 
     return ("error", {"error": {"message": "All providers exhausted", "type": "router_error"}}, 503)

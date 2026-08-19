@@ -147,8 +147,8 @@ LOCAL_MODEL=llama3.1                          # comma-separate for multi-model f
 
 The provider turns on as soon as `LOCAL_BASE_URL` or `LOCAL_MODEL` is set.
 
-**Conversation mode** — send the model id **`hermes-router:fast`** (or the header
-`X-Hermes-Profile: fast`) and the router prefers your local model for short/casual turns,
+**Conversation mode** — send the model id **`hermes-router:fast`** and the router
+prefers your local model for short/casual turns,
 falling back to the cloud pool for heavier requests. Plain `hermes-router` keeps the normal
 smart routing across every provider.
 

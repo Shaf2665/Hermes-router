@@ -88,7 +88,7 @@ safely share one list. Each model's capability shows in `/v1/status` under `mode
 **Local models & conversation mode.** A model running on your own machine (Ollama / LM Studio /
 llama.cpp) can join the pool as the `local` provider — free, private, fast (see
 [Providers](/providers/#local-models-ollama--lm-studio--llamacpp)). Sending the model id
-`hermes-router:fast` (or header `X-Hermes-Profile: fast`) makes the router prefer that local
+`hermes-router:fast` makes the router prefer that local
 model for short/casual turns, with the cloud providers as automatic fallback for heavier
 requests.
 

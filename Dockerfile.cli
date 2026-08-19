@@ -31,11 +31,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY router.py hermes-router ./
 COPY scripts ./scripts
 
-# Backing files for `hr hall` (advisory bridge) and `hr agent` (Hermes Coding
-# Runtime). Without these the two subcommands exit with "No such file".
-COPY hermes_hall_bridge.py hermes_router_client.py hermes_agent_runner.py ./
-COPY hermes_agent ./hermes_agent
-
 # Put `hr` (and the full name) on PATH.
 RUN chmod +x hermes-router scripts/*.sh \
  && ln -s /app/hermes-router /usr/local/bin/hr \

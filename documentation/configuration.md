@@ -203,7 +203,7 @@ machine. It's keyless (cloud providers remain the fallback). See
 | `LOCAL_API_KEY` | `local` | Only if your local server actually requires a key |
 | `LOCAL_EMBED_MODEL` | *(unset)* | Optional — also serve `/v1/embeddings` from the local server |
 
-> Send model `hermes-router:fast` (or header `X-Hermes-Profile: fast`) to prefer the local model
+> Send model `hermes-router:fast` to prefer the local model
 > for short/casual turns, with cloud fallback for heavier requests.
 
 ### Per-provider model
