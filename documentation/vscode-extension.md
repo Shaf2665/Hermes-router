@@ -164,10 +164,20 @@ Replies **stream** in just like any built-in model.
 
 ### Agent mode (tool calling)
 
-hermes-router supports **tool calling**, so it can work in Copilot **agent mode**: it can run
-terminal commands, edit files, and call MCP tools to complete a task. For reliable agent use,
-configure at least one model known to support function calling; the router prefers confirmed
-tool-capable models.
+hermes-router supports **tool-capable inference**, so it can be selected in Copilot **agent
+mode**. Copilot Agent Mode owns terminal commands, file edits, and MCP tools; Hermes routes the
+model requests and tool calls to a confirmed tool-capable provider/model. For reliable agent use,
+configure at least one model known to support function calling.
+
+```text
+VS Code / Copilot Agent Mode
+        ↓ owns tools, terminal, file edits, MCP
+Hermes Router
+        ↓ routes inference and tool calls
+capable provider/model
+```
+
+Hermes does not execute tools itself.
 
 > **It's also available to other extensions.** Anything that uses the VS Code `vscode.lm` API
 > can select the hermes-router model too — not just Copilot Chat.

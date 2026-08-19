@@ -45,6 +45,41 @@ to override a result manually with `<PROVIDER>_SUPPORTS_TOOLS`).
 new/unprobed), it doesn't hard-fail — it falls back to trying all of them rather than refusing the
 request outright.
 
+## Generic routing hints
+
+Clients with iterative tool loops or related requests can send optional headers on
+`/v1/chat/completions`. They only influence inference routing; they do **not** provide
+filesystem, shell, task-management, attachment-processing, or agent-execution APIs.
+
+### `X-Hermes-Tool-Loop`
+
+```http
+X-Hermes-Tool-Loop: true
+```
+
+Use this for an iterative caller-managed tool loop. Hermes requires tool definitions, routes only
+to a confirmed tool-capable model, and bypasses response caching for the loop's requests.
+
+### `X-Hermes-Session-Affinity`
+
+```http
+X-Hermes-Session-Affinity: session-123
+```
+
+Supplies an opaque session identifier. Hermes prefers the provider/model that most recently
+succeeded for that session, while normal provider and key failover remain available.
+
+### `X-Hermes-Workload-Hint`
+
+```http
+X-Hermes-Workload-Hint: coding
+```
+
+Supported values are `planning`, `coding`, `review`, `debug`, `vision`, and `general`. The first
+five can reorder otherwise viable candidates using existing capability metadata; `general`,
+missing, or unknown values leave the normal ordering unchanged. A `vision` hint only applies when
+the payload actually contains an image.
+
 ## Vision routing
 
 When your request includes an image, the router **only considers models known to accept image

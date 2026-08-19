@@ -33,7 +33,7 @@ optional features with `hr features` · one structured `auth.json` for all your 
 
 ## Documentation
 
-The docs read in order, from zero experience to a running, monitored agent:
+The docs read in order, from zero experience to a running, monitored router:
 
 **Start here** (assume no experience):
 

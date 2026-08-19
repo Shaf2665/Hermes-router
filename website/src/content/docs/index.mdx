@@ -1,9 +1,9 @@
 ---
 title: hermes-router
-description: Reduce provider interruptions with one endpoint, key rotation, failover, and smart routing across your configured AI providers.
+description: A self-hosted multi-provider AI model router / inference gateway with key rotation, failover, and smart routing.
 template: splash
 hero:
-  tagline: One endpoint for OpenAI-compatible chat and embeddings plus Anthropic Messages, with key rotation, failover, and smart routing across your configured providers.
+  tagline: A self-hosted multi-provider AI model router / inference gateway for OpenAI-compatible chat, embeddings, and Anthropic Messages.
   actions:
     - text: Get Started
       link: /getting-started/
@@ -22,28 +22,41 @@ Free and evaluation tiers are rate-limited. hermes-router sits between your app 
 of providers (Gemini, OpenRouter, Groq, and more). When one hits its limit, it tries the next
 configured candidate. A request can still fail when all candidates are exhausted or unavailable.
 
+> **Scope:** Hermes Router handles AI inference routing. Applications and agent frameworks such
+> as Hall of Wisdom, Copilot, or custom clients remain responsible for tools, filesystem access,
+> command execution, memory, and task orchestration.
+
 <CardGrid>
-  <Card title="Reduce interruptions" icon="rocket">
+  <Card title="Automatic failover" icon="rocket">
     Key rotation and provider failover keep trying while another configured candidate is available.
   </Card>
-  <Card title="Common API compatibility" icon="puzzle">
-    Supports OpenAI chat, embeddings, and models plus Anthropic Messages, including streaming and tool translation.
+  <Card title="Smart model routing" icon="setting">
+    Routes to the best-fitting configured model, including multiple models per provider.
   </Card>
-  <Card title="Smart, cheap routing" icon="setting">
-    Each request goes to the cheapest model that can handle it; unhealthy providers are skipped.
+  <Card title="Tool + vision aware" icon="puzzle">
+    Prefers models capable of function calling or image input; Hermes transports tool calls but never executes them.
   </Card>
-  <Card title="Run many routers" icon="rocket">
-    The dashboard can monitor existing routers or launch Docker-backed instances for agents and teams.
+  <Card title="Local + cloud routing" icon="setting">
+    Use Ollama or LM Studio locally, with cloud providers as automatic fallback.
   </Card>
-  <Card title="Yours to run" icon="approve-check">
-    A single self-hosted Python file. Your keys live in your own auth.json — nothing hidden.
+  <Card title="Quota + cost control" icon="setting">
+    Response, semantic, and persistent caching plus per-key rate limits, budgets, and estimated cost tracking.
+  </Card>
+  <Card title="Dashboard + observability" icon="approve-check">
+    Built-in dashboard, request logs, circuit breaker, Prometheus metrics, and multi-instance management.
+  </Card>
+  <Card title="OpenAI + Anthropic compatible" icon="puzzle">
+    Compatible chat, streaming, embeddings, and Messages APIs, including Codex provider support.
+  </Card>
+  <Card title="Self-hosted + VS Code" icon="rocket">
+    Run it yourself and use the provider pool from the VS Code extension or Copilot Chat.
   </Card>
 </CardGrid>
 
 ## Start here
 
 New here? The docs are built to read **in order** — each page ends with a **Next** link, so you
-can follow the path straight through from zero to a running, monitored agent.
+can follow the path straight through from zero to a running, monitored router.
 
 <CardGrid>
   <LinkCard title="1. Getting Started" href="/getting-started/" description="Zero-experience intro and your first message." />

@@ -7,6 +7,9 @@ hermes-router is a single Python file (`router.py`) running a small Flask/Waitre
 accepts OpenAI- or Anthropic-format requests and forwards each one to the best available
 provider in a pool, handling key rotation, failover, and format translation transparently.
 
+> **Scope:** Hermes Router routes inference only. Clients and agent frameworks own tools,
+> filesystem access, command execution, memory, attachments, and task orchestration.
+
 ## The request pipeline
 
 Every request flows through the same pipeline:

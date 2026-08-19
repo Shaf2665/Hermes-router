@@ -5,7 +5,13 @@ of Wisdom. Hall owns all agent execution: task lifecycle, worktrees, file
 editing, command execution, attachments, cancellation, and structured events.
 
 ```text
-Hall of Wisdom → Hall Hermes adapter/runtime → Hermes Router → provider/model
+Hall of Wisdom
+      ↓
+Hall-owned Hermes adapter/runtime
+      ↓
+Hermes Router
+      ↓
+provider/model
 ```
 
 Configure Hall with the router's OpenAI-compatible endpoint, client API key,
@@ -25,6 +31,10 @@ The integration may use these optional, generic routing hints:
 These headers do not create an agent API or expose filesystem, shell, task, or
 event operations through Hermes. Hall remains responsible for all execution
 policy and for never placing credentials in task or event payloads.
+
+Hall owns the agent loop, task lifecycle, worktrees, file edits, commands, attachments,
+cancellation, and execution events. Hermes owns inference routing, provider/model selection, key
+rotation, failover, capability-aware routing, session affinity, and workload hints.
 
 For normal clients, Hermes continues to support OpenAI-compatible chat
 completions and Anthropic-compatible messages without Hall-specific setup.
