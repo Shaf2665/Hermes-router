@@ -1,9 +1,10 @@
 ---
-title: hermes-router
-description: A self-hosted multi-provider AI model router / inference gateway with key rotation, failover, and smart routing.
+title: Hermes Router
+description: Self-hosted multi-provider AI gateway and AI model router with OpenAI-compatible and Anthropic-compatible APIs, automatic failover, and local models.
 template: splash
 hero:
-  tagline: A self-hosted multi-provider AI model router / inference gateway for OpenAI-compatible chat, embeddings, and Anthropic Messages.
+  title: Hermes Router
+  tagline: One endpoint. Multiple AI providers. Automatic failover.
   actions:
     - text: Get Started
       link: /getting-started/
@@ -12,20 +13,92 @@ hero:
       link: https://github.com/Shaf2665/Hermes-router
       icon: external
       variant: minimal
+head:
+  - tag: title
+    content: Hermes Router – Self-Hosted Multi-Provider AI Gateway
+  - tag: meta
+    attrs:
+      property: og:title
+      content: Hermes Router – Self-Hosted Multi-Provider AI Gateway
+  - tag: meta
+    attrs:
+      property: og:description
+      content: One endpoint for OpenAI-compatible and Anthropic-compatible AI with automatic failover, smart routing, and local models.
+  - tag: meta
+    attrs:
+      property: og:url
+      content: https://hermes-router.vercel.app/
+  - tag: meta
+    attrs:
+      property: og:type
+      content: website
+  - tag: meta
+    attrs:
+      property: og:image
+      content: https://hermes-router.vercel.app/og-image.png
+  - tag: meta
+    attrs:
+      name: twitter:card
+      content: summary_large_image
+  - tag: meta
+    attrs:
+      name: twitter:title
+      content: Hermes Router – Self-Hosted Multi-Provider AI Gateway
+  - tag: meta
+    attrs:
+      name: twitter:description
+      content: One endpoint for OpenAI-compatible and Anthropic-compatible AI with automatic failover, smart routing, and local models.
+  - tag: meta
+    attrs:
+      name: twitter:image
+      content: https://hermes-router.vercel.app/og-image.png
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: >-
+      {"@context":"https://schema.org","@graph":[{"@type":"WebSite","name":"Hermes Router","url":"https://hermes-router.vercel.app/"},{"@type":"SoftwareApplication","name":"Hermes Router","url":"https://hermes-router.vercel.app/","description":"A self-hosted multi-provider AI gateway and model router with OpenAI-compatible and Anthropic-compatible APIs, automatic failover, and local model support.","applicationCategory":"DeveloperApplication","operatingSystem":"Linux, macOS, Windows","license":"https://github.com/Shaf2665/Hermes-router/blob/main/LICENSE"}]}
 ---
 
 import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-## Why hermes-router?
+<p class="hero-supporting-copy">Self-hosted OpenAI/Anthropic-compatible AI gateway with smart routing, key rotation, local-model fallback, tool/vision-aware routing, caching, budgets, and observability.</p>
 
-Free and evaluation tiers are rate-limited. hermes-router sits between your app and a pool
-of providers (Gemini, OpenRouter, Groq, and more). When one hits its limit, it tries the next
-configured candidate. A request can still fail when all candidates are exhausted or unavailable.
+<div class="hero-install" aria-label="Install Hermes Router">
+  <span>Install</span><code>curl -fsSL https://raw.githubusercontent.com/Shaf2665/Hermes-router/main/get.sh | bash</code>
+</div>
+
+<nav class="social-proof" aria-label="Hermes Router project links">
+  <a href="https://github.com/Shaf2665/Hermes-router">Open Source</a>
+  <span aria-hidden="true">·</span>
+  <a href="https://github.com/Shaf2665/Hermes-router/blob/main/LICENSE">MIT</a>
+  <span aria-hidden="true">·</span>
+  <a href="https://github.com/Shaf2665/Hermes-router">GitHub</a>
+  <span aria-hidden="true">·</span>
+  <a href="https://marketplace.visualstudio.com/items?itemName=MohammedShafiq.hermes-router">VS Code Marketplace</a>
+</nav>
+
+## One resilient inference path
+
+<div class="architecture-strip" role="img" aria-label="Your application sends requests to Hermes Router, which routes them to Gemini, Groq, OpenRouter, Codex, Ollama, or other providers.">
+  <span>Your App</span><b aria-hidden="true">↓</b><strong>Hermes Router</strong><b aria-hidden="true">↓</b><span>Gemini · Groq · OpenRouter · Codex · Ollama · other providers</span>
+</div>
+
+<section class="dashboard-preview" aria-labelledby="dashboard-preview-title">
+  <div class="dashboard-browser-bar"><span></span><span></span><span></span><code>localhost:8319/dashboard</code></div>
+  <div class="dashboard-placeholder">
+    <p id="dashboard-preview-title">Live dashboard screenshot</p>
+    <p>A real capture will be displayed here when available.</p>
+    <code>Expected asset: /images/hermes-router-dashboard.png</code>
+  </div>
+</section>
 
 > **Scope:** Hermes Router handles AI inference routing. Applications and agent frameworks such
 > as Hall of Wisdom, Copilot, or custom clients remain responsible for tools, filesystem access,
 > command execution, memory, and task orchestration.
 
+## Routing that stays out of the way
+
+<div class="homepage-features">
 <CardGrid>
   <Card title="Automatic failover" icon="rocket">
     Key rotation and provider failover keep trying while another configured candidate is available.
@@ -52,32 +125,21 @@ configured candidate. A request can still fail when all candidates are exhausted
     Run it yourself and use the provider pool from the VS Code extension or Copilot Chat.
   </Card>
 </CardGrid>
+</div>
 
-## Start here
-
-New here? The docs are built to read **in order** — each page ends with a **Next** link, so you
-can follow the path straight through from zero to a running, monitored router.
+## Four ways in
 
 <CardGrid>
-  <LinkCard title="1. Getting Started" href="/getting-started/" description="Zero-experience intro and your first message." />
-  <LinkCard title="2. Core Concepts" href="/concepts/" description="Plain-language glossary — LLM, token, tool, agent…" />
-  <LinkCard title="3. Routing Features" href="/routing/" description="How the router picks a provider for chat, tools, vision, and embeddings." />
-  <LinkCard title="4. Deployment" href="/deployment/" description="Run it on Windows, macOS, Linux, Docker, or Hugging Face Spaces." />
-  <LinkCard title="5. Providers" href="/providers/" description="Add provider API keys — access notes, Codex, and local models." />
-  <LinkCard title="6. Usage" href="/usage/" description="Call it from the OpenAI or Anthropic SDK; tools, streaming." />
-  <LinkCard title="7. Build an Agent" href="/build-an-agent/" description="Chatbot → memory → tools, copy-paste." />
+  <LinkCard title="Install" href="/getting-started/" description="Start a router locally in minutes." />
+  <LinkCard title="Configure Providers" href="/providers/" description="Add cloud providers, Codex, or local models." />
+  <LinkCard title="Use the API" href="/usage/" description="Connect OpenAI or Anthropic-compatible clients." />
+  <LinkCard title="Monitor" href="/monitoring/" description="Inspect health, requests, limits, cost, and metrics." />
 </CardGrid>
 
-Already comfortable? Jump to **[How it works](/architecture/)** for the internals or the
-**[Monitoring](/monitoring/#instances-run-and-monitor-more-than-one-router)** page to run
-multiple router instances from the dashboard.
+Already comfortable? Jump to **[How it works](/architecture/)** for internals or explore the full
+documentation in the sidebar.
 
-## Quick start
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Shaf2665/Hermes-router/main/get.sh | bash
-hr setup        # add a key, start the router
-```
+## API-compatible from the first request
 
 ```python
 from openai import OpenAI

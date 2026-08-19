@@ -1,6 +1,9 @@
 ---
 title: "Providers"
-description: "Every free & paid provider, sign-up links, capabilities, plus Codex (ChatGPT subscription)."
+description: "Supported cloud AI providers, local models, and Codex options for building a resilient Hermes Router provider pool."
+head:
+  - tag: title
+    content: Supported AI Providers & Local Models | Hermes Router
 ---
 
 hermes-router routes across a pool of providers. You only need **one** configured provider

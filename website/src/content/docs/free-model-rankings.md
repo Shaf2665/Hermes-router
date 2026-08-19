@@ -1,6 +1,9 @@
 ---
 title: "Free Model Rankings"
-description: "Rank the free models built into Hermes Router by quality, speed, use case, and provider availability."
+description: "Compare free AI models for coding, agents, speed, quality, and availability across Hermes Router's supported providers."
+head:
+  - tag: title
+    content: Best Free AI Models for Coding & Agents | Hermes Router
 ---
 
 This page ranks the hosted models that Hermes Router uses by default on a free

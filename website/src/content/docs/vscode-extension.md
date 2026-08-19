@@ -1,6 +1,9 @@
 ---
 title: "VS Code Extension"
-description: "Monitor and manage hermes-router from inside VS Code — and use it as an AI model in Copilot Chat, including agent mode."
+description: "Use Hermes Router's provider pool in VS Code and Copilot Chat, with health monitoring, dashboard access, and tool-capable model routing."
+head:
+  - tag: title
+    content: Hermes Router VS Code Extension for Copilot
 ---
 
 The **hermes-router** VS Code extension turns your editor into a control panel for the router

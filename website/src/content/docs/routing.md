@@ -1,6 +1,9 @@
 ---
 title: "Routing Features"
-description: "Plain-language guide to how hermes-router decides where each request goes — chat, tools, vision, and embeddings."
+description: "How Hermes Router selects capable AI models, performs provider failover, and routes tool, vision, chat, and embedding requests."
+head:
+  - tag: title
+    content: AI Model Routing, Failover & Tool Routing | Hermes Router
 ---
 
 hermes-router doesn't just forward your request to the first provider it finds — it looks at

@@ -7,8 +7,8 @@ export default defineConfig({
 	site: 'https://hermes-router.vercel.app',
 	integrations: [
 		starlight({
-			title: 'hermes-router',
-			description: 'A self-hosted multi-provider AI router with key rotation, failover, and a built-in dashboard.',
+			title: 'Hermes Router',
+			description: 'Hermes Router is a self-hosted multi-provider AI gateway and model router with OpenAI-compatible and Anthropic-compatible APIs, automatic failover, and local model support.',
 			logo: { src: './src/assets/logo.png', alt: 'hermes-router' },
 			favicon: '/favicon.png',
 			customCss: ['./src/styles/custom.css'],

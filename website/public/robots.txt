@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://hermes-router.vercel.app/sitemap-index.xml
