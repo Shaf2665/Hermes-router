@@ -61,10 +61,14 @@ head:
 
 import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
+<div class="hero-kicker" aria-label="Project highlights">
+  <span>OPEN SOURCE</span><span>SELF-HOSTED</span><span>PROVIDER-AGNOSTIC</span>
+</div>
+
 <p class="hero-supporting-copy">Self-hosted OpenAI/Anthropic-compatible AI gateway with smart routing, key rotation, local-model fallback, tool/vision-aware routing, caching, budgets, and observability.</p>
 
 <div class="hero-install" aria-label="Install Hermes Router">
-  <span>Install</span><code>curl -fsSL https://raw.githubusercontent.com/Shaf2665/Hermes-router/main/get.sh | bash</code>
+  <span aria-hidden="true">$</span><code>curl -fsSL https://raw.githubusercontent.com/Shaf2665/Hermes-router/main/get.sh | bash</code>
 </div>
 
 <nav class="social-proof" aria-label="Hermes Router project links">
@@ -77,18 +81,37 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
   <a href="https://marketplace.visualstudio.com/items?itemName=MohammedShafiq.hermes-router">VS Code Marketplace</a>
 </nav>
 
+<div class="signal-rail" aria-hidden="true">
+  <span>ROUTE</span><b>→</b><span>RETRY</span><b>→</b><span>FALL BACK</span><b>→</b><span>OBSERVE</span><b>→</b><span>STAY ONLINE</span>
+</div>
+
 ## One resilient inference path
 
 <div class="architecture-strip" role="img" aria-label="Your application sends requests to Hermes Router, which routes them to Gemini, Groq, OpenRouter, Codex, Ollama, or other providers.">
-  <span>Your App</span><b aria-hidden="true">↓</b><strong>Hermes Router</strong><b aria-hidden="true">↓</b><span>Gemini · Groq · OpenRouter · Codex · Ollama · other providers</span>
+  <span class="route-node">01 / YOUR APP</span><b aria-hidden="true">→</b><strong>02 / HERMES ROUTER</strong><b aria-hidden="true">→</b><span class="route-node route-providers">03 / GEMINI · GROQ · OPENROUTER · CODEX · OLLAMA</span>
 </div>
 
 <section class="dashboard-preview" aria-labelledby="dashboard-preview-title">
-  <div class="dashboard-browser-bar"><span></span><span></span><span></span><code>localhost:8319/dashboard</code></div>
-  <div class="dashboard-placeholder">
-    <p id="dashboard-preview-title">Live dashboard screenshot</p>
-    <p>A real capture will be displayed here when available.</p>
-    <code>Expected asset: /images/hermes-router-dashboard.png</code>
+  <div class="dashboard-browser-bar">
+    <span>HERMES // CONTROL PLANE</span><code>localhost:8319/dashboard</code><b>● ONLINE</b>
+  </div>
+  <div class="dashboard-mock">
+    <div class="dashboard-stat dashboard-stat-main">
+      <span>REQUESTS ROUTED</span><strong>12,804</strong><small>↑ 18.6% / 24H</small>
+    </div>
+    <div class="dashboard-stat">
+      <span>SUCCESS RATE</span><strong>99.98%</strong><small>HEALTHY</small>
+    </div>
+    <div class="dashboard-stat">
+      <span>P95 LATENCY</span><strong>284ms</strong><small>− 31ms</small>
+    </div>
+    <div class="dashboard-log">
+      <p id="dashboard-preview-title"><span>LIVE ROUTE LOG</span><small>DEMO DATA</small></p>
+      <code><i>200</i> /v1/chat/completions <b>gemini-2.5-flash</b> 184ms</code>
+      <code><i>200</i> /v1/messages <b>openrouter/claude</b> 291ms</code>
+      <code><em>↻</em> provider retry <b>groq → codex</b> 422ms</code>
+      <code><i>200</i> /v1/embeddings <b>ollama/local</b> 38ms</code>
+    </div>
   </div>
 </section>
 
@@ -96,7 +119,7 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 > as Hall of Wisdom, Copilot, or custom clients remain responsible for tools, filesystem access,
 > command execution, memory, and task orchestration.
 
-## Routing that stays out of the way
+## Built to keep inference moving
 
 <div class="homepage-features">
 <CardGrid>
@@ -127,7 +150,7 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 </CardGrid>
 </div>
 
-## Four ways in
+## Pick your entry point
 
 <CardGrid>
   <LinkCard title="Install" href="/getting-started/" description="Start a router locally in minutes." />
