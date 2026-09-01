@@ -70,6 +70,24 @@ def test_tool_loop_bypasses_cache_and_records_session_affinity(monkeypatch):
     assert router._session_affinity_get("session-1") == ("tool-test", "tool-model")
 
 
+def test_non_streaming_request_records_session_affinity(monkeypatch):
+    provider = {"name": "aff-test", "model": "aff-model", "models": ["aff-model"], "keys": ["key"]}
+    candidate = {"provider": provider, "model": "aff-model", "list_index": 0}
+    monkeypatch.setattr(router, "_ordered_providers", lambda *_args: [candidate])
+    monkeypatch.setattr(router, "pool", _Pool())
+    monkeypatch.setattr(router, "forward", lambda *_args: _Response())
+    monkeypatch.setattr(router.cache, "get", lambda *_args: None)
+    monkeypatch.setattr(router.cache, "set", lambda *_args: None)
+    router._session_affinity.clear()
+    payload = {"model": "hermes-router", "messages": [{"role": "user", "content": "hi"}]}
+
+    with router.app.test_request_context(headers={"X-Hermes-Session-Affinity": "session-2"}):
+        result = router._route_completion(payload, False, "test")
+
+    assert result[0] == "json"
+    assert router._session_affinity_get("session-2") == ("aff-test", "aff-model")
+
+
 def test_tool_loop_requires_tool_definitions(monkeypatch):
     monkeypatch.setattr(router, "_ordered_providers", lambda *_args: [])
     with router.app.test_request_context(headers={"X-Hermes-Tool-Loop": "true"}):

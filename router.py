@@ -5788,8 +5788,7 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
                 _add_provider_tokens(name, data, model)
                 if not tool_loop:
                     cache.set(payload, data, ns, query_emb)
-                else:
-                    _session_affinity_set(session_affinity_id, name, model)
+                _session_affinity_set(session_affinity_id, name, model)
                 return ("json", data)
             if streaming:
                 if session_affinity_id is not None:
@@ -5841,8 +5840,7 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
                 _add_provider_tokens(name, data, model)
                 if not tool_loop:
                     cache.set(payload, data, ns, query_emb)
-                else:
-                    _session_affinity_set(session_affinity_id, name, model)
+                _session_affinity_set(session_affinity_id, name, model)
                 return ("json", data)
 
     return ("error", {"error": {"message": "All providers exhausted", "type": "router_error"}}, 503)
