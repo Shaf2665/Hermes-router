@@ -152,7 +152,9 @@ case "$cmd" in
       2) ok "installed + enabled on boot (install 'curl' to enable health checks)." ;;
       *) warn "service installed + enabled, but /health didn't respond yet — check: hr service status" ;;
     esac
-    [ "$SCOPE" = "user" ] && log "user service: starts on boot via linger. Use 'systemctl --user' to inspect."
+    if [ "$SCOPE" = "user" ]; then
+      log "user service: starts on boot via linger. Use 'systemctl --user' to inspect."
+    fi
     ;;
 
   uninstall|remove)

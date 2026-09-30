@@ -83,57 +83,90 @@ else
   fi
 fi
 
-# ── Step 3: Start the router ──────────────────────────────────────────────────
+# ── Step 3: Choose one process owner before starting the router ───────────────
 step 3 "Start the router"
+
+SERVICE="${HERMES_ROUTER_SERVICE:-hermes-router}"
+service_scope=""
+if command -v systemctl >/dev/null 2>&1; then
+  if systemctl cat "${SERVICE}.service" >/dev/null 2>&1; then
+    service_scope="system"
+  elif systemctl --user cat "${SERVICE}.service" >/dev/null 2>&1; then
+    service_scope="user"
+  fi
+fi
 
 if curl -sf "http://localhost:${PORT}/health" >/dev/null 2>&1; then
   ok "Router is already running on port $PORT"
+  if [ -z "$service_scope" ] && command -v systemctl >/dev/null 2>&1; then
+    # Do not put a second, service-managed process behind a live manual router.
+    warn "Boot service not installed: stop the running router before running 'hr service install'."
+  fi
 else
-  printf '\033[1;36m[setup]\033[0m Start the router now? [Y/n]: '
-  read -r ans
-  echo ""
-  case "${ans:-y}" in
-    [nN]*)
-      warn "Skipped — run 'hr start' when ready."
-      ;;
-    *)
-      log "Starting router (logs → $REPO/router.log)..."
-      PORT="$PORT" nohup "$VENV_PYTHON" "$REPO/router.py" \
-        >> "$REPO/router.log" 2>&1 &
-      ROUTER_PID=$!
-      echo "$ROUTER_PID" > "$REPO/router.pid"
+  # Installing the boot service starts the router too. Never launch nohup first,
+  # or fall back to it after a partial service install (the unit may be retrying).
+  if [ -z "$service_scope" ] && command -v systemctl >/dev/null 2>&1; then
+    printf '\033[1;36m[setup]\033[0m Install the boot service and start the router now? [Y/n]: '
+    read -r ans
+    echo ""
+    case "${ans:-y}" in
+      [nN]*) warn "Skipped boot service — your router will NOT restart after a reboot." ;;
+      *)
+        PORT="$PORT" bash "$REPO/scripts/service.sh" install || {
+          err "Could not install/start the boot service. Check 'hr service status' before retrying."
+          exit 1
+        }
+        service_scope="installed"
+        ;;
+    esac
+  fi
 
-      # Wait up to 6s for the router to bind
-      alive=0
-      for i in 1 2 3 4 5 6; do
-        sleep 1
-        if curl -sf "http://localhost:${PORT}/health" >/dev/null 2>&1; then
-          ok "Router started on port $PORT (PID $ROUTER_PID)"
-          alive=1
-          break
+  if [ "$service_scope" != "installed" ]; then
+    printf '\033[1;36m[setup]\033[0m Start the router now? [Y/n]: '
+    read -r ans
+    echo ""
+    case "${ans:-y}" in
+      [nN]*) warn "Skipped — run 'hr start' (or start your installed service) when ready." ;;
+      *)
+        if [ -n "$service_scope" ]; then
+          log "Starting existing $service_scope service '$SERVICE'..."
+          if [ "$service_scope" = "user" ]; then
+            systemctl --user start "${SERVICE}.service"
+          elif [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+            sudo systemctl start "${SERVICE}.service"
+          else
+            systemctl start "${SERVICE}.service"
+          fi
+          if [ "$?" -ne 0 ]; then
+            err "Could not start the service. Check: hr service status"
+            exit 1
+          fi
+        else
+          log "Starting router (logs → $REPO/router.log)..."
+          PORT="$PORT" nohup "$VENV_PYTHON" "$REPO/router.py" \
+            >> "$REPO/router.log" 2>&1 &
+          ROUTER_PID=$!
+          echo "$ROUTER_PID" > "$REPO/router.pid"
         fi
-      done
-      if [ "$alive" -eq 0 ]; then
-        err "Router didn't respond after 6s."
-        err "Check logs:  tail -20 $REPO/router.log"
-      fi
-      ;;
-  esac
-fi
 
-# ── Step 3b: Survive reboots (Linux/systemd) ──────────────────────────────────
-# A plain `hr start` is a foreground/background process that does NOT come back
-# after a server reboot. Offer to install a systemd service so it does.
-if command -v systemctl >/dev/null 2>&1 \
-   && ! systemctl cat "${HERMES_ROUTER_SERVICE:-hermes-router}.service" >/dev/null 2>&1; then
-  step 3b "Start on boot (recommended for servers)"
-  printf '\033[1;36m[setup]\033[0m Start hermes-router automatically on boot? [Y/n]: '
-  read -r ans
-  echo ""
-  case "${ans:-y}" in
-    [nN]*) warn "Skipped — your router will NOT restart after a reboot. Run 'hr service install' anytime." ;;
-    *)     bash "$REPO/scripts/service.sh" install || warn "Could not install the boot service — see the message above." ;;
-  esac
+        # Wait up to 6s for the selected owner to start the router.
+        alive=0
+        for i in 1 2 3 4 5 6; do
+          sleep 1
+          if curl -sf "http://localhost:${PORT}/health" >/dev/null 2>&1; then
+            ok "Router started on port $PORT"
+            alive=1
+            break
+          fi
+        done
+        if [ "$alive" -eq 0 ]; then
+          err "Router didn't respond after 6s."
+          err "Check logs: tail -20 $REPO/router.log (or 'hr service status' for a service)."
+          exit 1
+        fi
+        ;;
+    esac
+  fi
 fi
 
 # ── Step 4: Verify ────────────────────────────────────────────────────────────
