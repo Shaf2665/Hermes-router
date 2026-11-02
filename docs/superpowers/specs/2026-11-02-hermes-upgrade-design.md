@@ -1,8 +1,8 @@
 # Hermes Router: simpler experience, measured performance, broader compatibility
 
-Date: 2026-11-02. Status: proposed design for review; implementation has not started.
+Date: 2026-11-02. Status: approved; foundation preview implemented and verified locally. Later stages remain planned.
 Repository inspected: `Shaf2665/Hermes-router`, commit `9d87915`.
-Independent builder review completed: no important planning questions remain after clarifying the parity snapshot, budget semantics and team-readiness gate. User approval is pending.
+Independent builder review completed. The user approved proceeding with implementation and requested native Windows 10/11, Windows Server, native Linux, and Docker setup guidance. Later parity stages below remain a roadmap, not shipped functionality.
 
 ## What the user asked for
 

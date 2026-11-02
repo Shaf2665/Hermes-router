@@ -28,7 +28,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY router.py hermes-router ./
+COPY *.py dashboard.html hermes-router ./
 COPY scripts ./scripts
 
 # Put `hr` (and the full name) on PATH.
@@ -40,8 +40,12 @@ RUN chmod +x hermes-router scripts/*.sh \
 # there via env vars; .env is a symlink so `hr mode` / `hr model set` (which
 # write $REPO/.env) land on the volume too, and the router reads it back.
 RUN mkdir -p /app/data && ln -s /app/data/.env /app/.env
-ENV ROUTER_AUTH_FILE=/app/data/auth.json \
-    ROUTER_STATE_FILE=/app/data/router_state.json
+ENV HR_ENV_FILE=/app/data/.env \
+    ROUTER_AUTH_FILE=/app/data/auth.json \
+    ROUTER_STATE_FILE=/app/data/router_state.json \
+    HERMES_INSTANCES_FILE=/app/data/instances.json \
+    HR_USAGE_DB=/app/data/usage.db \
+    CACHE_DB_PATH=/app/data/cache.db
 VOLUME ["/app/data"]
 
 # Port 8319 serves the API (/v1/*), /health, /metrics, and the built-in

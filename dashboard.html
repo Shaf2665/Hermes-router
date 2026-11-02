@@ -1,0 +1,2056 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hermes Router — Dashboard</title>
+<style>
+[hidden]{display:none!important}
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0f1117;--surface:#181c27;--surface2:#1e2333;--border:#2a3050;
+  --text:#e2e8f0;--muted:#8892a4;--accent:#6c8cff;--green:#4ade80;
+  --yellow:#facc15;--red:#f87171;--orange:#fb923c;--purple:#c084fc;
+  --font:'Inter',system-ui,sans-serif;
+}
+body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;min-height:100vh}
+
+/* ── layout ── */
+header{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;
+  background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:10}
+header h1{font-size:15px;font-weight:600;letter-spacing:.3px;color:var(--text)}
+header h1 span{color:var(--accent)}
+.badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:3px 8px;
+  border-radius:99px;background:var(--surface2);border:1px solid var(--border);color:var(--muted)}
+.badge .dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 5px var(--green)}
+.badge .dot.err{background:var(--red);box-shadow:0 0 5px var(--red)}
+.header-right{display:flex;align-items:center;gap:10px}
+#last-update{font-size:11px;color:var(--muted)}
+.btn{cursor:pointer;font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);
+  background:var(--surface2);color:var(--text);transition:.15s}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+
+/* ── app shell / sidebar ── */
+.app-shell{display:flex;align-items:stretch;min-height:100vh}
+.sidebar{width:200px;flex:0 0 auto;background:var(--surface);border-right:1px solid var(--border);
+  display:flex;flex-direction:column;padding:16px 0;position:sticky;top:0;align-self:flex-start;
+  height:100vh}
+.sidebar-brand{padding:0 16px 14px;font-size:15px;font-weight:600;letter-spacing:.3px;
+  border-bottom:1px solid var(--border);margin-bottom:12px}
+.sidebar-brand span{color:var(--accent)}
+.sidebar-nav{display:flex;flex-direction:column;gap:2px;padding:0 8px}
+.nav-item{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;
+  text-align:left;padding:9px 10px;border-radius:7px;border:none;background:transparent;
+  color:var(--muted);font-size:12.5px;font-family:inherit;cursor:pointer;transition:.15s}
+.nav-item:hover{background:var(--surface2);color:var(--text)}
+.nav-item.active{background:var(--surface2);color:var(--accent);font-weight:600}
+.nav-item .nav-dot{width:6px;height:6px;border-radius:50%;background:var(--border);flex:0 0 auto}
+.nav-item .nav-dot.warn{background:var(--yellow);box-shadow:0 0 4px var(--yellow)}
+.nav-item .nav-dot.bad{background:var(--red);box-shadow:0 0 4px var(--red)}
+.app-main{flex:1;min-width:0;display:flex;flex-direction:column}
+@media(max-width:760px){
+  .app-shell{flex-direction:column}
+  .sidebar{width:100%;height:auto;position:static;flex-direction:row;overflow-x:auto;padding:10px 8px}
+  .sidebar-brand{display:none}
+  .sidebar-nav{flex-direction:row}
+  .nav-item{white-space:nowrap}
+}
+
+main{padding:18px 20px;display:grid;gap:16px;max-width:1180px;margin:0 auto;width:100%}
+.page{display:none}
+.page.active{display:grid;gap:16px}
+.page-intro{color:var(--muted);line-height:1.45}
+
+/* ── key input overlay ── */
+#key-gate{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;
+  align-items:center;justify-content:center;z-index:100}
+#key-gate.hidden{display:none}
+.gate-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;
+  padding:28px 32px;min-width:320px;text-align:center}
+.gate-box h2{margin-bottom:6px;font-size:15px}
+.gate-box p{color:var(--muted);font-size:12px;margin-bottom:18px}
+.gate-box input{width:100%;padding:8px 12px;border-radius:7px;border:1px solid var(--border);
+  background:var(--bg);color:var(--text);font-size:13px;outline:none;margin-bottom:10px}
+.gate-box input:focus{border-color:var(--accent)}
+.gate-box .btn{width:100%;padding:7px}
+
+/* ── stat cards ── */
+.stat-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;
+  padding:14px 16px}
+.stat-card .label{font-size:11px;color:var(--muted);margin-bottom:5px;text-transform:uppercase;
+  letter-spacing:.5px}
+.stat-card .value{font-size:22px;font-weight:700;color:var(--text)}
+.stat-card .sub{font-size:11px;color:var(--muted);margin-top:3px}
+
+/* ── simple overview ── */
+.overview-grid{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(280px,.75fr);gap:14px}
+@media(max-width:900px){.overview-grid{grid-template-columns:1fr}}
+.hero{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px}
+.hero-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.hero h2{font-size:20px;line-height:1.2;margin-bottom:6px}
+.hero-copy{color:var(--muted);line-height:1.45;max-width:760px}
+.hero-state{font-size:12px;padding:5px 10px;border-radius:999px;white-space:nowrap}
+.hero-state.good{background:rgba(74,222,128,.12);color:var(--green)}
+.hero-state.warn{background:rgba(250,204,21,.12);color:var(--yellow)}
+.hero-state.bad{background:rgba(248,113,113,.12);color:var(--red)}
+.quick-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-top:16px}
+.quick-card{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px}
+.quick-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px}
+.quick-value{font-size:15px;font-weight:700}
+.quick-sub{font-size:11px;color:var(--muted);margin-top:3px;line-height:1.4}
+.setup-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px}
+.setup-card h3{font-size:14px;margin-bottom:10px}
+.setup-list{display:grid;gap:8px}
+.setup-step{display:flex;align-items:center;gap:8px;color:var(--muted)}
+.setup-step strong{color:var(--text);font-weight:600}
+.step-dot{width:9px;height:9px;border-radius:50%;background:var(--border);flex:0 0 auto}
+.setup-step.done .step-dot{background:var(--green);box-shadow:0 0 6px var(--green)}
+.setup-step.warn .step-dot{background:var(--yellow);box-shadow:0 0 6px var(--yellow)}
+.setup-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.provider-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px;padding:12px}
+.provider-card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px}
+.provider-card.bad{border-color:rgba(248,113,113,.45)}
+.provider-card.warn{border-color:rgba(250,204,21,.45)}
+.provider-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:5px}
+.provider-name{font-weight:700}
+.provider-model{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.provider-meta{display:flex;justify-content:space-between;gap:8px;margin-top:10px;font-size:11px;color:var(--muted)}
+.advanced-panel summary{cursor:pointer;list-style:none}
+.advanced-panel summary::-webkit-details-marker{display:none}
+.advanced-panel .panel-header:after{content:"show";font-size:11px;color:var(--muted)}
+.advanced-panel[open] .panel-header:after{content:"hide"}
+.advanced-panel:not([open]) .panel-body{display:none}
+
+/* ── panels ── */
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden}
+.panel-header{display:flex;align-items:center;justify-content:space-between;
+  padding:10px 14px;border-bottom:1px solid var(--border);background:var(--surface2)}
+.panel-title{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;
+  color:var(--muted)}
+.panel-body{overflow-x:auto}
+.panel-body.pad{padding:12px}
+
+/* ── tables ── */
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{padding:7px 12px;text-align:left;color:var(--muted);font-weight:500;
+  font-size:11px;border-bottom:1px solid var(--border);white-space:nowrap}
+td{padding:7px 12px;border-bottom:1px solid var(--border);vertical-align:middle;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:rgba(108,140,255,.04)}
+
+/* ── status dots ── */
+.dot-ok{display:inline-block;width:8px;height:8px;border-radius:50%;
+  background:var(--green);box-shadow:0 0 5px var(--green);margin-right:5px}
+.dot-warn{display:inline-block;width:8px;height:8px;border-radius:50%;
+  background:var(--yellow);box-shadow:0 0 5px var(--yellow);margin-right:5px}
+.dot-err{display:inline-block;width:8px;height:8px;border-radius:50%;
+  background:var(--red);box-shadow:0 0 5px var(--red);margin-right:5px}
+
+/* ── pill badges ── */
+.pill{display:inline-block;padding:2px 7px;border-radius:99px;font-size:10px;font-weight:600}
+.pill-ok{background:rgba(74,222,128,.12);color:var(--green)}
+.pill-err{background:rgba(248,113,113,.12);color:var(--red)}
+.pill-cache{background:rgba(192,132,252,.12);color:var(--purple)}
+.pill-warn{background:rgba(250,204,21,.12);color:var(--yellow)}
+.pill-grey{background:rgba(136,146,164,.12);color:var(--muted)}
+
+/* ── rating bar ── */
+.rating-bar{display:flex;gap:3px;align-items:center}
+.rating-pip{width:9px;height:9px;border-radius:2px;background:var(--border)}
+.r1 .rating-pip.active{background:var(--green)}
+.r2 .rating-pip.active{background:#22d3ee}
+.r3 .rating-pip.active{background:var(--accent)}
+.r4 .rating-pip.active{background:var(--yellow)}
+.r5 .rating-pip.active{background:var(--red)}
+
+/* ── progress bar ── */
+.prog-track{background:var(--surface2);border-radius:99px;height:5px;min-width:80px;overflow:hidden}
+.prog-fill{height:100%;border-radius:99px;background:var(--accent);transition:width .4s}
+.prog-fill.green{background:var(--green)}
+.prog-fill.red{background:var(--red)}
+.prog-fill.yellow{background:var(--yellow)}
+
+/* ── add-on toggles ── */
+.addon-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px;padding:12px}
+.addon-card{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px}
+.addon-card.flag{cursor:pointer;transition:border-color .15s}
+.addon-card.flag:hover{border-color:var(--accent)}
+.addon-card.busy{opacity:.5;pointer-events:none}
+.addon-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
+.addon-name{font-size:12px;font-weight:600}
+.addon-desc{font-size:11px;color:var(--muted);line-height:1.4}
+
+/* ── provider scope picker ── */
+.scope-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;
+  margin:6px 0}
+.scope-item{display:flex;align-items:center;gap:6px;font-size:12px;padding:5px 8px;
+  border:1px solid var(--border);border-radius:6px;background:var(--surface2);cursor:pointer}
+.scope-item input{margin:0}
+.scope-item .cnt{color:var(--muted);font-size:10px;margin-left:auto}
+
+/* ── restart banner ── */
+#restart-banner{display:none;align-items:center;justify-content:space-between;gap:12px;
+  padding:10px 20px;background:rgba(250,204,21,.1);border-bottom:1px solid var(--yellow)}
+#restart-banner.show{display:flex}
+#restart-banner span{font-size:12px;color:var(--yellow)}
+#restart-banner .actions{display:flex;gap:8px}
+
+/* ── config forms ── */
+.config-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:14px}
+@media(max-width:820px){.config-grid{grid-template-columns:1fr}}
+.config-grid.narrow{grid-template-columns:1fr;max-width:440px}
+.config-intro{padding:12px 14px 0;color:var(--muted);line-height:1.45}
+.config-form{display:flex;flex-direction:column;gap:8px}
+.config-form label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
+.config-form select, .config-form input{
+  background:var(--surface2);border:1px solid var(--border);border-radius:6px;
+  color:var(--text);padding:7px 10px;font-size:12px;font-family:inherit;outline:none}
+.config-form select:focus, .config-form input:focus{border-color:var(--accent)}
+.config-form .row{display:flex;gap:8px}
+.config-form .row > *{flex:1}
+.config-msg{font-size:11px;min-height:16px}
+.config-msg.ok{color:var(--green)}
+.config-msg.err{color:var(--red)}
+.config-msg.warn{color:var(--yellow)}
+.default-hint{font-size:10px;color:var(--muted)}
+.config-form textarea{
+  background:var(--surface2);border:1px solid var(--border);border-radius:6px;
+  color:var(--text);padding:7px 10px;font-size:12px;font-family:monospace;outline:none;
+  min-height:86px;resize:vertical}
+.config-form textarea:focus{border-color:var(--accent)}
+.instance-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;padding:12px}
+.instance-card{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px}
+.instance-card.warn{border-color:rgba(250,204,21,.45)}
+.instance-card.bad{border-color:rgba(248,113,113,.45)}
+.instance-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.btn.primary{background:rgba(108,140,255,.16);border-color:var(--accent);color:var(--text);font-weight:600}
+.btn.danger:hover{border-color:var(--red);color:var(--red)}
+.mode-switch{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.mode-option{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;
+  text-align:left;padding:10px;border-radius:8px;border:1px solid var(--border);
+  background:var(--surface2);color:var(--text);font-family:inherit;cursor:pointer}
+.mode-option.active{border-color:var(--accent);background:rgba(108,140,255,.12)}
+.mode-option strong{display:block;font-size:12px;margin-bottom:3px}
+.mode-option span{display:block;font-size:11px;color:var(--muted);line-height:1.35}
+.mode-dot{width:9px;height:9px;border-radius:50%;margin-top:3px;background:var(--border);flex:0 0 auto}
+.mode-option.active .mode-dot{background:var(--accent);box-shadow:0 0 6px var(--accent)}
+.instance-form{padding:14px;display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,.85fr);gap:14px}
+@media(max-width:900px){.instance-form{grid-template-columns:1fr}.mode-switch{grid-template-columns:1fr}}
+.instance-form-col{display:flex;flex-direction:column;gap:10px}
+.field-hint{font-size:10.5px;color:var(--muted);line-height:1.35;margin-top:-3px}
+.field-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.field-line label{margin:0}
+.port-map{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:end}
+.port-arrow{color:var(--muted);font-size:15px;padding-bottom:9px}
+.instance-advanced{border:1px solid var(--border);border-radius:8px;background:rgba(15,17,23,.2)}
+.instance-advanced summary{cursor:pointer;padding:9px 10px;color:var(--muted);font-size:11px;
+  text-transform:uppercase;letter-spacing:.4px;list-style:none}
+.instance-advanced summary::-webkit-details-marker{display:none}
+.instance-advanced .advanced-body{padding:0 10px 10px;display:flex;flex-direction:column;gap:8px}
+.instance-empty{display:flex;align-items:center;justify-content:center;min-height:90px;color:var(--muted)}
+.instance-empty strong{color:var(--text);font-weight:600}
+.hidden-field{display:none!important}
+
+/* ── log table ── */
+#log-wrap{max-height:340px;overflow-y:auto}
+.log-row-success td:first-child{border-left:2px solid var(--green)}
+.log-row-error td:first-child{border-left:2px solid var(--red)}
+.log-row-cache_hit td:first-child{border-left:2px solid var(--purple)}
+
+/* ── two-col layout for lower panels ── */
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:820px){.two-col{grid-template-columns:1fr}}
+
+/* ── misc ── */
+.mono{font-family:monospace;font-size:11px}
+.right{text-align:right}
+.muted{color:var(--muted)}
+
+/* Hermes uses its request path as the visual anchor; data and controls stay quiet. */
+:root{color-scheme:light dark;--bg:#F5F7F7;--surface:#FFFFFF;--surface2:#EDF2F2;--border:#CDD9D9;--text:#172021;--muted:#536565;--accent:#2B7074;--green:#276848;--yellow:#8C590D;--red:#AA3434;--orange:#995212;--purple:#70458C;--font:'Segoe UI Variable','Segoe UI',system-ui,sans-serif}
+:root[data-theme="dark"]{color-scheme:dark;--bg:#101415;--surface:#1B2325;--surface2:#253134;--border:#405154;--text:#E6EFEF;--muted:#AFBFBF;--accent:#58B9BD;--green:#7BC79C;--yellow:#E6BC74;--red:#F29D9D;--purple:#C9A5E0}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#101415;--surface:#1B2325;--surface2:#253134;--border:#405154;--text:#E6EFEF;--muted:#AFBFBF;--accent:#58B9BD;--green:#7BC79C;--yellow:#E6BC74;--red:#F29D9D;--purple:#C9A5E0}}
+body{font-size:16px;line-height:1.5}button,input,select,textarea{font-family:inherit}button:disabled{opacity:.55;cursor:wait}:focus-visible{outline:3px solid var(--accent)!important;outline-offset:3px}main{padding:32px;max-width:1280px}.sidebar{width:192px}.sidebar-brand{font-size:19px}.nav-item{font-size:16px;padding:12px}.btn{font-size:14px;padding:8px 12px;min-height:40px}.primary{background:var(--accent)!important;color:var(--surface)!important}.panel-title,.setup-card h3{font-size:16px;letter-spacing:0;text-transform:none}.hero{padding:24px;border-top:4px solid var(--accent)}.hero h2{font-size:28px}.hero-copy{font-size:16px}.quick-label,.stat-card .label{font-size:13px;text-transform:none;letter-spacing:0}.quick-sub,.stat-card .sub,.field-hint,.page-intro,.provider-model{font-size:14px}.config-form input,.config-form select,.config-form textarea{font-size:16px;padding:10px;max-width:100%}.config-form label{font-size:14px;text-transform:none;letter-spacing:0}.config-msg{font-size:14px;min-height:24px}.config-msg:empty,#panel-errors:empty{display:none}.panel-body{overflow-x:auto}.page-heading h2{font-size:28px}.page-heading p{color:var(--muted)}.request-path{display:flex;align-items:center;flex-wrap:wrap;gap:14px;margin:24px 0;color:var(--muted)}.request-path strong{color:var(--accent);padding:8px 16px;border:1px solid var(--accent);border-radius:6px}.connect-steps{display:grid;gap:28px;padding:24px 24px 24px 48px;background:var(--surface);border:1px solid var(--border);border-radius:10px}.connect-steps li{padding-left:8px}.connect-steps p{max-width:72ch;margin:8px 0 12px}.connect-steps .config-form{display:list-item}.connect-steps .btn{margin-top:8px}.connect-steps select{font:inherit;padding:8px;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px}pre{padding:16px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;white-space:pre-wrap;overflow-wrap:anywhere;font-family:'Cascadia Code',Consolas,monospace;font-size:14px;margin-top:12px}code,.mono{font-family:'Cascadia Code',Consolas,monospace}.advanced-panel>summary{padding:16px;cursor:pointer;font-size:16px;font-weight:600}.advanced-panel[open]>summary{border-bottom:1px solid var(--border);margin-bottom:16px}.gate-box{max-width:460px;width:calc(100% - 32px);min-width:0;text-align:left}.gate-box h2{font-size:26px}.gate-box p{font-size:15px}.gate-box label{display:block;margin-bottom:8px}.gate-box input{font-size:16px}#panel-errors{color:var(--red);border-left:3px solid var(--red);padding:12px;background:var(--surface)}.header-right{flex-wrap:wrap}header{gap:12px}#last-update{font-size:12px}.setup-step{flex-wrap:wrap}.hero-top{flex-wrap:wrap}a{color:var(--accent)}
+@media(max-width:760px){.sidebar{width:100%}main{padding:16px}.sidebar-nav{width:100%;padding:0;gap:0;justify-content:space-between}.nav-item{font-size:14px;padding:10px 7px;width:auto}.sidebar{padding:8px}.overview-grid,.config-grid,.instance-grid,.instance-form{grid-template-columns:1fr!important}.hero{padding:18px}.hero h2{font-size:24px}header{position:static;flex-wrap:wrap;padding:16px}.header-right{gap:8px}.quick-grid{grid-template-columns:1fr}.connect-steps{padding:20px 16px 20px 36px}.panel-header{flex-wrap:wrap;gap:10px}.config-form .row{flex-wrap:wrap}.row>*{min-width:0}.provider-grid{grid-template-columns:1fr}.gate-box{padding:24px}.setup-step strong{font-size:14px}}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
+</style>
+</head>
+<body>
+
+<!-- API key gate -->
+<div id="key-gate">
+  <div class="gate-box">
+    <h2>Hermes Router</h2>
+    <p>Enter your administrator credential to manage Hermes.</p>
+    <label for="key-input">Administrator credential</label><input id="key-input" type="password" placeholder="Administrator credential" autocomplete="off">
+    <p role="alert" id="gate-error" style="color:var(--red);font-size:12px;min-height:16px;margin:8px 0 0"></p>
+    <button class="btn" onclick="submitKey()">Open Dashboard</button>
+  </div>
+</div>
+
+<div class="app-shell" inert hidden>
+  <aside class="sidebar">
+    <div class="sidebar-brand"><span>Hermes</span> Router</div>
+    <nav class="sidebar-nav" id="sidebar-nav" aria-label="Main navigation">
+<button class="nav-item active" data-page="overview" onclick="showPage('overview')">Home</button>
+<button class="nav-item" data-page="providers" onclick="showPage('providers')">Providers <span class="nav-dot" id="nav-dot-providers"></span></button>
+<button class="nav-item" data-page="connect" onclick="showPage('connect')">Connect</button>
+<button class="nav-item" data-page="logs" onclick="showPage('logs')">Activity</button>
+<button class="nav-item" data-page="settings" onclick="showPage('settings')">Settings</button></nav>
+  </aside>
+
+  <div class="app-main">
+    <header>
+      <h1><span>Hermes</span> Router &mdash; Dashboard</h1>
+      <div class="header-right">
+        <div class="badge"><div class="dot" id="hdr-dot"></div><span id="hdr-status">connecting</span></div>
+        <span id="last-update"></span>
+        <button class="btn" onclick="refresh()">Refresh</button><button class="btn" onclick="signOut()">Sign out</button>
+      </div>
+    </header>
+
+    <div id="restart-banner">
+      <span>⚠ Config changed — restart the router to apply it.</span>
+      <div class="actions">
+        <button class="btn" onclick="dismissBanner()">Later</button>
+        <button class="btn" onclick="runAction(this,()=>doRestart())" style="border-color:var(--yellow);color:var(--yellow)">↻ Restart Now</button>
+      </div>
+    </div>
+
+    <main><div id="panel-errors" role="status" aria-live="polite"></div>
+
+      <!-- ── Overview ─────────────────────────────────────────────────────── -->
+      <section class="page active" id="page-overview">
+        <section class="overview-grid">
+          <div class="hero">
+            <div class="hero-top">
+              <div>
+                <h2 id="plain-title">Checking router...</h2>
+                <div class="hero-copy" id="plain-message">Loading status from Hermes Router.</div>
+              </div>
+              <div class="hero-state warn" id="plain-state">checking</div>
+            </div>
+            <div class="request-path" aria-label="Request path"><span>Your tool</span><span aria-hidden="true">→</span><strong>Hermes</strong><span aria-hidden="true">→</span><span id="path-provider">Provider pool</span></div><button class="btn primary" onclick="showPage('connect')">Test a request</button><div class="quick-grid">
+              <div class="quick-card">
+                <div class="quick-label">API endpoint</div>
+                <div class="quick-value mono" id="quick-endpoint">/v1</div>
+                <div class="quick-sub">Use this as the OpenAI base URL.</div>
+              </div>
+              <div class="quick-card">
+                <div class="quick-label">Model name</div>
+                <div class="quick-value mono" id="quick-model">hermes-router</div>
+                <div class="quick-sub">Send this model from your app.</div>
+              </div>
+              <div class="quick-card">
+                <div class="quick-label">Spend</div>
+                <div class="quick-value" id="quick-spend">-</div>
+                <div class="quick-sub">Estimated since last restart.</div>
+              </div>
+            </div>
+          </div>
+          <div class="setup-card">
+            <h3>Setup checklist</h3>
+            <div class="setup-list">
+              <div class="setup-step" id="step-key"><span class="step-dot"></span><strong>Provider key</strong><span id="step-key-text">checking</span></div>
+              <div class="setup-step" id="step-health"><span class="step-dot"></span><strong>Provider health</strong><span id="step-health-text">checking</span></div>
+              <div class="setup-step" id="step-restart"><span class="step-dot"></span><strong>Restart</strong><span id="step-restart-text">not needed</span></div>
+            </div>
+            <div class="setup-actions">
+              <button class="btn" onclick="showPage('keys')">Add key</button>
+              <button class="btn" onclick="runAction(this,()=>doRestart())">Restart</button>
+              <button class="btn" onclick="refresh()">Refresh</button>
+            </div>
+          </div>
+        </section>
+
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Usage Summary</span></div>
+          <div class="panel-body pad">
+            <div class="stat-row" id="stat-row">
+              <div class="stat-card"><div class="label">Providers</div><div class="value" id="s-providers">—</div><div class="sub" id="s-providers-sub"></div></div>
+              <div class="stat-card"><div class="label">Uptime</div><div class="value" id="s-uptime">—</div><div class="sub">since last restart</div></div>
+              <div class="stat-card"><div class="label">Total Requests</div><div class="value" id="s-requests">—</div><div class="sub" id="s-requests-sub"></div></div>
+              <div class="stat-card"><div class="label">Total Tokens</div><div class="value" id="s-tokens">—</div><div class="sub" id="s-cost"></div></div>
+              <div class="stat-card"><div class="label">Cache Hit Rate</div><div class="value" id="s-hitrate">—</div><div class="sub" id="s-cache-sub"></div></div>
+              <div class="stat-card"><div class="label">Error Rate</div><div class="value" id="s-errrate">—</div><div class="sub" id="s-errrate-sub"></div></div>
+            </div>
+          </div>
+        </div>
+      </section>
+<section class="page" id="page-providers"><div class="page-heading"><h2>Providers</h2><p>Connect a provider, then check inference in Connect.</p></div>
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Provider Key Setup</span></div>
+          <div class="page-intro" style="padding:12px 14px 0">Keys the router uses to call upstream providers (Gemini, OpenAI, …) — not the keys your own apps use to call the router (see Settings → Application access for that).</div>
+          <div class="config-grid">
+            <div class="config-form">
+              <label>Add API key</label>
+              <div class="row">
+                <select id="cfg-key-provider"></select>
+              </div>
+              <input id="cfg-key-value" type="password" placeholder="paste provider API key" autocomplete="off">
+              <div class="row">
+                <button class="btn" onclick="runAction(this,()=>addKey())">Add key</button>
+              </div>
+              <div class="config-msg" id="cfg-key-msg"></div>
+            </div>
+
+            <div class="config-form">
+              <label>Key rotation</label>
+              <select id="cfg-rotation-value">
+                <option value="round-robin">Spread requests across keys</option>
+                <option value="sequential">Use one key before the next</option>
+              </select>
+              <div class="row">
+                <button class="btn" onclick="runAction(this,()=>setRotation())">Save rotation mode</button>
+              </div>
+              <div class="default-hint">Round-robin is best for most users because it spreads load across keys.</div>
+              <div class="config-msg" id="cfg-rotation-msg"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Key & Budget Usage</span></div>
+          <div class="panel-body">
+            <table>
+              <thead><tr>
+                <th>Key</th><th class="right">Requests</th>
+                <th class="right">Tokens (day)</th><th class="right">Cost (day)</th>
+                <th>RPM used</th>
+              </tr></thead>
+              <tbody id="keys-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Provider Health</span><span class="muted">attention first</span></div>
+          <div class="provider-grid" id="provider-card-grid"></div>
+        </div>
+
+        <details class="panel advanced-panel">
+          <summary class="panel-header"><span class="panel-title">Advanced Provider Details</span></summary>
+          <div class="panel-body">
+            <table>
+              <thead><tr>
+                <th>Provider</th><th>Model</th><th>Rating</th>
+                <th class="right">Requests</th><th class="right">Errors</th>
+                <th class="right">Err %</th><th class="right">Avg Latency</th>
+                <th class="right">Tokens</th><th class="right">Cost (USD)</th>
+                <th>Keys</th><th>Breaker</th><th>Status</th>
+              </tr></thead>
+              <tbody id="provider-tbody"></tbody>
+            </table>
+          </div>
+        </details>
+      <details class="advanced-panel"><summary>Model overrides and capabilities</summary>
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Provider Model</span></div>
+          <div class="page-intro" style="padding:12px 14px 0">Override which model a provider uses — comma-separate several models for per-model failover.</div>
+          <div class="config-grid narrow">
+            <div class="config-form">
+              <div class="row">
+                <select id="cfg-model-provider" onchange="onModelProviderChange()"></select>
+              </div>
+              <input id="cfg-model-value" type="text" placeholder="model or model1,model2,...">
+              <div class="default-hint" id="cfg-model-default"></div>
+              <div class="row">
+                <button class="btn" onclick="runAction(this,()=>setModel())">Save model</button>
+                <button class="btn" onclick="runAction(this,()=>resetModel())">Reset</button>
+              </div>
+              <div class="config-msg" id="cfg-model-msg"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Model Capabilities</span></div>
+          <div class="panel-body">
+            <table>
+              <thead><tr>
+                <th>Provider</th><th>Model</th><th>Rating</th><th>Tools</th><th>Reasoning</th>
+              </tr></thead>
+              <tbody id="model-caps-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </details></section>
+<section class="page" id="page-connect">
+<div class="page-heading"><h2>Connect your tool</h2><p>Check a real request, then use the same application key in your client.</p></div>
+<ol class="connect-steps"><li><strong>Connect a provider</strong><p>Add its credential in Providers, apply any required restart, then return here.</p><button class="btn" onclick="showPage('providers')">Open Providers</button></li>
+<li class="config-form"><strong>Create an application key</strong><p>This key can send requests. Keep your administrator credential for managing Hermes.</p><label for="connect-name">Application name</label><input id="connect-name" value="My first client"><button class="btn primary" id="connect-create" onclick="createConnectKey()">Create application key</button><div id="connect-key-panel" hidden><label for="connect-key">Copy this key now; it is shown once</label><div class="row"><input id="connect-key" readonly type="password" autocomplete="off"><button class="btn" onclick="copyConnectKey()">Copy application key</button><button class="btn" onclick="dismissConnectKey()">Forget key on this page</button></div></div><div id="connect-create-msg" class="config-msg" role="status"></div></li>
+<li><strong>Check the connection</strong><p>Sends “Reply with OK” through your configured provider using this application key. A small upstream charge may apply.</p><button class="btn primary" id="connect-test" onclick="testConnection()" disabled>Send test request</button><div id="connect-test-msg" class="config-msg" role="status"></div></li>
+<li><strong>Connect your client</strong><p>OpenAI-compatible endpoint: <code id="connect-endpoint"></code> · model: <code>hermes-router</code></p><label for="client-format">Client format</label><select id="client-format" onchange="renderClientSnippet()"><option value="curl">curl (POSIX shell)</option><option value="python">OpenAI Python SDK</option><option value="vscode">Hermes VS Code extension</option></select><pre id="client-snippet" tabindex="0"></pre><p class="field-hint">Replace YOUR_APPLICATION_KEY with your copied key. Snippets keep credentials out of the page after dismissal.</p></li></ol>
+</section><section class="page" id="page-logs"><div class="page-heading"><h2>Activity</h2><p>Recent requests across this router. Administrator access required.</p></div>
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">Live Request Log</span>
+            <div style="display:flex;gap:8px;align-items:center">
+              <select id="log-filter-status" style="background:var(--surface);color:var(--muted);border:1px solid var(--border);border-radius:5px;padding:2px 6px;font-size:11px">
+                <option value="">All statuses</option>
+                <option value="success">success</option>
+                <option value="error">error</option>
+                <option value="cache_hit">cache_hit</option>
+              </select>
+              <select id="log-filter-endpoint" style="background:var(--surface);color:var(--muted);border:1px solid var(--border);border-radius:5px;padding:2px 6px;font-size:11px">
+                <option value="">All endpoints</option>
+                <option value="chat">chat</option>
+                <option value="messages">messages</option>
+                <option value="embeddings">embeddings</option>
+              </select>
+            </div>
+          </div>
+          <div class="panel-body" id="log-wrap">
+            <table>
+              <thead><tr>
+                <th>Time</th><th>Endpoint</th><th>Provider</th><th>Model</th>
+                <th class="right">Latency</th><th class="right">Complexity</th>
+                <th class="right">Cascades</th><th class="right">Prompt tok</th>
+                <th class="right">Compl tok</th><th>Status</th>
+              </tr></thead>
+              <tbody id="log-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+<section class="page" id="page-settings"><div class="page-heading"><h2>Settings</h2><p>Optional features, instances and application access.</p></div><div class="config-form"><label for="theme">Appearance</label><select id="theme" onchange="document.documentElement.dataset.theme=this.value"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Feature Add-ons</span></div>
+          <div class="addon-grid" id="addon-grid"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Cache</span></div>
+          <div class="panel-body">
+            <table>
+              <tbody id="cache-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      <details id="settings-instances" class="advanced-panel" ontoggle="if(this.open) refresh()"><summary>Instances <span class="nav-dot" id="nav-dot-instances"></span></summary>
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Instance Manager</span><span class="muted">external or Docker-managed routers</span></div>
+          <div class="instance-grid" id="instance-summary-grid"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Add Instance</span></div>
+          <div class="instance-form">
+            <div class="instance-form-col config-form">
+              <label>Mode</label>
+              <div class="mode-switch">
+                <button type="button" class="mode-option active" id="mode-external" onclick="setInstanceMode('external')">
+                  <span><strong>Connect existing</strong><span>Track a router that is already running.</span></span><i class="mode-dot"></i>
+                </button>
+                <button type="button" class="mode-option" id="mode-docker" onclick="setInstanceMode('docker')">
+                  <span><strong>Launch Docker</strong><span>Create a managed router on a host port.</span></span><i class="mode-dot"></i>
+                </button>
+              </div>
+              <select id="inst-mode" class="hidden-field" onchange="onInstanceModeChange()">
+                <option value="external">external</option>
+                <option value="docker">docker</option>
+              </select>
+
+              <label>Name</label>
+              <input id="inst-name" type="text" placeholder="agent-a">
+
+              <label>OpenAI base URL</label>
+              <input id="inst-base-url" type="text" placeholder="http://localhost:8320/v1">
+              <div class="field-hint" id="inst-base-hint">Agents use this as their base URL.</div>
+
+              <div id="inst-port-fields">
+                <label>Port mapping</label>
+                <div class="port-map">
+                  <div>
+                    <div class="field-hint">Host</div>
+                    <input id="inst-host-port" type="number" min="1" max="65535" placeholder="8320">
+                  </div>
+                  <div class="port-arrow">to</div>
+                  <div>
+                    <div class="field-hint">Container</div>
+                    <input id="inst-container-port" type="number" min="1" max="65535" value="8319">
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="instance-form-col config-form">
+              <label id="inst-key-label">Router application key</label>
+              <input id="inst-api-key" type="password" placeholder="sk-router-..." autocomplete="off">
+              <div class="field-hint" id="inst-key-hint">Application key for this instance’s authenticated model-list check.</div>
+
+              <details class="instance-advanced" id="inst-docker-options">
+                <summary>Docker settings</summary>
+                <div class="advanced-body">
+                  <label>Image</label>
+                  <input id="inst-image" type="text" value="hermes-router:latest">
+                  <label>Use existing router keys</label>
+                  <div class="field-hint">Selected provider keys are copied into this instance at creation time.</div>
+                  <div class="scope-grid" id="inst-copy-provider-keys"></div>
+                  <label>Provider env vars</label>
+                  <textarea id="inst-env" spellcheck="false" placeholder="GEMINI_API_KEYS=...\nOPENAI_API_KEYS=..."></textarea>
+                </div>
+              </details>
+
+              <div class="row">
+                <button class="btn primary" id="inst-save-btn" onclick="runAction(this,()=>createInstance(false))">Register instance</button>
+                <button class="btn" id="inst-start-btn" onclick="runAction(this,()=>createInstance(true))">Create & Start</button>
+              </div>
+              <div class="config-msg" id="inst-msg"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel" id="new-instance-key-panel" style="display:none">
+          <div class="panel-header"><span class="panel-title">Generated Instance Key</span></div>
+          <div class="panel-body pad">
+            <p class="muted" style="margin-bottom:8px">This Docker instance was assigned a proxy API key. Use it with agents that call this instance.</p>
+            <div class="config-form">
+              <div class="row">
+                <input id="new-instance-key-value" type="text" readonly class="mono" style="flex:1">
+                <button class="btn" onclick="copyInstanceKey()" style="flex:0 0 auto">Copy</button>
+                <button class="btn" onclick="dismissInstanceKey()" style="flex:0 0 auto">Done</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Instances</span></div>
+          <div class="panel-body">
+            <table>
+              <thead><tr>
+                <th>Name</th><th>Mode</th><th>Base URL</th><th>Health</th>
+                <th>Docker</th><th>Key</th><th>Env</th><th>Actions</th>
+              </tr></thead>
+              <tbody id="instances-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </details><details id="settings-access" class="advanced-panel" ontoggle="if(this.open) refresh()"><summary>Application access and budgets</summary><p class="page-intro">Named keys identify applications. Human accounts and SSO are not available.</p>
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Create Access Key</span></div>
+          <div class="page-intro" style="padding:12px 14px 0">Create a named application key with optional provider scope and daily budgets. Changes apply immediately.</div>
+          <div class="config-grid narrow">
+            <div class="config-form">
+              <label>Name (optional)</label>
+              <input id="ak-name" type="text" placeholder="e.g. Bob, CI pipeline">
+              <label style="margin-top:4px">Limits (optional — blank means unlimited)</label>
+              <div class="row">
+                <input id="ak-rpm" type="number" min="0" placeholder="requests / min">
+                <input id="ak-reqday" type="number" min="0" placeholder="requests / day">
+              </div>
+              <div class="row">
+                <input id="ak-tokday" type="number" min="0" placeholder="tokens / day">
+                <input id="ak-costday" type="number" min="0" step="0.01" placeholder="cost / day ($)">
+              </div>
+              <label style="margin-top:4px">Providers this key may use (none checked = all)</label>
+              <div class="scope-grid" id="ak-provider-scope"></div>
+              <div class="row">
+                <button class="btn" onclick="runAction(this,()=>createAccessKey())">Create key</button>
+              </div>
+              <div class="config-msg" id="ak-create-msg"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel" id="new-key-panel" style="display:none">
+          <div class="panel-header"><span class="panel-title">New Key — copy it now</span></div>
+          <div class="panel-body pad">
+            <p class="muted" style="margin-bottom:8px">This is the only time the full key is shown. It is ready to use immediately.</p>
+            <div class="config-form">
+              <div class="row">
+                <input id="new-key-value" type="text" readonly class="mono" style="flex:1">
+                <button class="btn" onclick="copyNewKey()" style="flex:0 0 auto">Copy</button>
+                <button class="btn" onclick="dismissNewKey()" style="flex:0 0 auto">Done</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Access Keys</span></div>
+          <div class="panel-body">
+            <table>
+              <thead><tr>
+                <th>Name</th><th>Key</th><th class="right">RPM</th><th class="right">Req/day</th>
+                <th class="right">Tokens/day</th><th class="right">Cost/day</th>
+                <th class="right">Used today</th><th>Providers</th><th>Status</th><th></th>
+              </tr></thead>
+              <tbody id="access-keys-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </details></section>
+    </main>
+  </div>
+</div>
+
+<script>
+// Only the CSRF token and a one-time application key are held in memory.
+let csrfToken = '', authenticated = false, connectKey = '';
+let statusData = null, usageData = null, logsData = [], accessKeysData = [], instancesData = [];
+let editingKeyTail = null, autoInstanceBaseUrl = false;
+const INTERVAL = 5000;
+let sessionGeneration = 0, restartNeeded = false;
+let timer = null, refreshPromise = null, currentPage = 'overview', pageGeneration = 0;
+const panelErrors = new Map(), panelUpdated = new Map();
+const PAGES = ['overview', 'providers', 'connect', 'logs', 'settings'];
+const aliases = { keys: 'providers', models: 'providers', instances: 'settings', addons: 'settings', access: 'settings' };
+function showPage(name) {
+    const original = name;
+    name = aliases[name] || name;
+    if (!PAGES.includes(name))
+        name = 'overview';
+    if (currentPage !== name)
+        pageGeneration++;
+    currentPage = name;
+    document.querySelectorAll('.page').forEach(el => el.classList.toggle('active', el.id === 'page-' + name));
+    document.querySelectorAll('.nav-item').forEach(el => { el.classList.toggle('active', el.dataset.page === name); if (el.dataset.page === name)
+        el.setAttribute('aria-current', 'page');
+    else
+        el.removeAttribute('aria-current'); });
+    if (original === 'instances' || original === 'access')
+        document.getElementById('settings-' + original).open = true;
+    if (location.hash !== '#' + name)
+        location.hash = name;
+    window.scrollTo({ top: 0 });
+    renderClientSnippet();
+    if (authenticated) {
+        if (name === 'providers' || name === 'settings')
+            void loadConfigProviders();
+        void refresh();
+    }
+}
+async function adminFetch(url, options = {}) {
+    const session = sessionGeneration;
+    const headers = new Headers(options.headers || {});
+    if (!['GET', 'HEAD'].includes((options.method || 'GET').toUpperCase()))
+        headers.set('X-CSRF-Token', csrfToken);
+    const response = await fetch(url, { ...options, headers, credentials: 'same-origin', signal: options.signal || AbortSignal.timeout(20000) });
+    if (session !== sessionGeneration) throw new Error('Session changed. Retry after signing in.');
+    if (response.status === 401)
+        showGate('Your administrator session expired. Sign in again.');
+    return response;
+}
+function unlockSession(data) {
+    sessionGeneration++;
+    csrfToken = data.csrf_token;
+    authenticated = true;
+    document.getElementById('key-input').value = '';
+    document.getElementById('key-gate').classList.add('hidden');
+    document.querySelector('.app-shell').hidden = false;
+    document.querySelector('.app-shell').inert = false;
+    document.querySelector('.nav-item.active').focus();
+    start();
+}
+async function submitKey() {
+    const input = document.getElementById('key-input'), button = document.querySelector('#key-gate button');
+    if (!input.value.trim() || button.disabled)
+        return;
+    button.disabled = true;
+    try {
+        const r = await fetch('/v1/admin/session', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ api_key: input.value.trim() }) });
+        input.value = '';
+        const d = await r.json();
+        if (!r.ok)
+            throw new Error(apiError(d) || 'Administrator credential rejected. Check ADMIN_API_KEY in your local configuration.');
+        unlockSession(d);
+    }
+    catch (e) {
+        showGate(e.message + ' Check the credential and retry.');
+    }
+    finally {
+        button.disabled = false;
+    }
+}
+async function signOut() {
+    try {
+        const r = await adminFetch('/v1/admin/session', { method: 'DELETE' });
+        if (!r.ok)
+            throw new Error('Sign-out failed. Retry while the router is reachable.');
+        showGate();
+    }
+    catch (e) {
+        panelErrors.set('Session', e.message);
+        renderPanelErrors();
+    }
+}
+function start() { stop(); void refresh(); if (currentPage === 'providers' || currentPage === 'settings')
+    void loadConfigProviders(); }
+function stop() { clearTimeout(timer); timer = null; }
+function renderPanelErrors() { document.getElementById('panel-errors').textContent = [...panelErrors].map(([name, message]) => name + ': ' + message).join(' · '); }
+function refresh() {
+    stop();
+    if (!authenticated || document.hidden)
+        return Promise.resolve();
+    if (refreshPromise)
+        return refreshPromise;
+    const generation = pageGeneration, session = sessionGeneration;
+    const tasks = [];
+    const panel = (name, url, apply) => tasks.push((async () => {
+        try {
+            const r = await adminFetch(url);
+            if (!r.ok)
+                throw new Error('HTTP ' + r.status);
+            const d = await r.json();
+            if (!authenticated || session !== sessionGeneration)
+                return;
+            apply(d);
+            panelUpdated.set(name, new Date().toLocaleTimeString());
+            panelErrors.delete(name);
+            renderAll();
+        }
+        catch (e) {
+            if (!authenticated || session !== sessionGeneration) return;
+            panelErrors.set(name, e.message + (panelUpdated.has(name) ? '; showing data from '+panelUpdated.get(name)+'.' : '; no data loaded yet.') + ' Retry with Refresh.');
+        }
+        renderPanelErrors();
+    })());
+    if (['overview', 'providers', 'connect', 'settings'].includes(currentPage))
+        panel('Providers', '/v1/status', d => statusData = d);
+    if (['overview', 'providers'].includes(currentPage))
+        panel('Usage', '/v1/usage', d => usageData = d);
+    if (currentPage === 'logs') {
+        const q = new URLSearchParams({ limit: '100' });
+        for (const [name, id] of [['status', 'log-filter-status'], ['endpoint', 'log-filter-endpoint']]) {
+            const value = document.getElementById(id).value;
+            if (value)
+                q.set(name, value);
+        }
+        panel('Activity', '/v1/logs?' + q, d => logsData = d.entries || []);
+    }
+    if (currentPage === 'settings' && document.getElementById('settings-access').open)
+        panel('Application access', '/v1/config/proxy-keys', d => accessKeysData = d.keys || []);
+    if (currentPage === 'settings' && document.getElementById('settings-instances').open)
+        panel('Instances', '/v1/instances', d => instancesData = d.instances || []);
+    refreshPromise = Promise.allSettled(tasks).then(() => { if (authenticated)
+        setHeader(!panelErrors.size, panelErrors.size ? 'some panels unavailable' : ''); }).finally(() => {
+        refreshPromise = null;
+        if (authenticated && !document.hidden)
+            timer = setTimeout(refresh, generation === pageGeneration ? INTERVAL : 0);
+    });
+    return refreshPromise;
+}
+function showGate(message) {
+    sessionGeneration++;
+    authenticated = false;
+    csrfToken = '';
+    connectKey = '';
+    pageGeneration++;
+    stop();
+    statusData = null;
+    usageData = null;
+    logsData = [];
+    accessKeysData = [];
+    instancesData = [];
+    configProviders = null;
+    for (const id of ['connect-key', 'new-key-value', 'new-instance-key-value', 'cfg-key-value', 'inst-api-key', 'inst-env'])
+        document.getElementById(id).value = '';
+    document.getElementById('connect-key-panel').hidden = true;
+    document.getElementById('connect-test').disabled = true;
+    document.getElementById('new-key-panel').style.display = 'none';
+    document.getElementById('new-instance-key-panel').style.display = 'none';
+    for (const id of ['connect-test-msg', 'connect-create-msg', 'provider-card-grid', 'provider-tbody', 'access-keys-tbody', 'instances-tbody', 'log-tbody', 'addon-grid', 'keys-tbody'])
+        document.getElementById(id).textContent = '';
+    document.querySelector('.app-shell').hidden = true;
+    document.querySelector('.app-shell').inert = true;
+    panelErrors.clear();panelUpdated.clear();renderPanelErrors();
+    document.getElementById('key-gate').classList.remove('hidden');
+    document.getElementById('gate-error').textContent = message || '';
+    document.getElementById('key-input').value = '';
+    document.getElementById('key-input').focus();
+}
+async function createConnectKey() {
+    const button = document.getElementById('connect-create');
+    button.disabled = true;
+    try {
+        const r = await adminFetch('/v1/config/proxy-keys', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: document.getElementById('connect-name').value || 'My first client' }) });
+        const d = await r.json();
+        if (!r.ok)
+            throw new Error(apiError(d) || 'Could not create application key.');
+        connectKey = d.key;
+        document.getElementById('connect-key').value = connectKey;
+        document.getElementById('connect-key-panel').hidden = false;
+        document.getElementById('connect-test').disabled = false;
+        setMsg('connect-create-msg', 'Application key created. Copy it now, then send a test request.', true);
+    }
+    catch (e) {
+        setMsg('connect-create-msg', e.message + ' Check your administrator session and retry.', false);
+    }
+    finally {
+        button.disabled = false;
+    }
+}
+function dismissConnectKey() {
+    connectKey='';document.getElementById('connect-key').value='';
+    document.getElementById('connect-key-panel').hidden=true;document.getElementById('connect-test').disabled=true;
+    setMsg('connect-create-msg','Key forgotten on this page. Your saved client key remains active; revoke it in Settings when no longer needed.',true);
+}
+async function copyConnectKey() { try {
+    await navigator.clipboard.writeText(connectKey);
+    setMsg('connect-create-msg', 'Application key copied. Save it in your client.', true);
+}
+catch {
+    document.getElementById('connect-key').select();
+    setMsg('connect-create-msg', 'Clipboard unavailable. Select and copy the application key manually.', false);
+} }
+async function testConnection() {
+    const session = sessionGeneration;
+    if (!connectKey)
+        return;
+    const button = document.getElementById('connect-test');
+    button.disabled = true;
+    setMsg('connect-test-msg', 'Sending a small request…', true);
+    const start = performance.now();
+    try {
+        const r = await fetch('/v1/chat/completions', { method: 'POST', credentials: 'omit', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + connectKey }, body: JSON.stringify({ model: 'hermes-router', messages: [{ role: 'user', content: 'Reply with OK' }], max_tokens: 16, stream: false }) });
+        const d = await r.json();
+        if (!r.ok)
+            throw new Error(apiError(d) || 'HTTP ' + r.status);
+        if (!authenticated || session !== sessionGeneration) return;
+        const provider = r.headers.get('X-Provider') || d.provider || 'selected provider';
+        const model = d.model || 'hermes-router';
+        setMsg('connect-test-msg', 'Request succeeded via ' + provider + ' / ' + model + ' in ' + Math.round(performance.now() - start) + ' ms. Reply: ' + (d.choices?.[0]?.message?.content || '(empty)'), true);
+        document.getElementById('path-provider').textContent = provider;
+    }
+    catch (e) {
+        if (!authenticated || session !== sessionGeneration) return;
+        setMsg('connect-test-msg', 'Test failed: ' + e.message + '. Check provider credentials, readiness and application limits, then retry.', false);
+    }
+    finally {
+        button.disabled = !connectKey;
+    }
+}
+function renderClientSnippet() {
+    const endpoint = location.origin + '/v1';
+    document.getElementById('connect-endpoint').textContent = endpoint;
+    const snippets = {
+        python: `from openai import OpenAI
+client = OpenAI(base_url=${JSON.stringify(endpoint)}, api_key="YOUR_APPLICATION_KEY")
+print(client.chat.completions.create(model="hermes-router", messages=[{"role":"user","content":"Hello"}]))`,
+        vscode: `Hermes Router extension settings:
+hermesRouter.baseUrl = ${location.origin}
+hermesRouter.apiKey = YOUR_APPLICATION_KEY
+Select hermes-router in the Copilot Chat model picker.
+Optional owner controls: run “Hermes Router: Set Administrator Credential”.`,
+        curl: `curl ${JSON.stringify(endpoint + '/chat/completions')} -H 'Authorization: Bearer YOUR_APPLICATION_KEY' -H 'Content-Type: application/json' -d '{"model":"hermes-router","messages":[{"role":"user","content":"Hello"}]}'`
+    };
+    document.getElementById('client-snippet').textContent = snippets[document.getElementById('client-format').value];
+}
+window.addEventListener('DOMContentLoaded', async () => {
+    try {
+        localStorage.removeItem('hermes_dash_key');
+    }
+    catch { }
+    showPage((location.hash || '#overview').slice(1));
+    onInstanceModeChange();
+    document.getElementById('cfg-rotation-value').addEventListener('change', event => event.target.dataset.edited = '1');
+    document.getElementById('inst-host-port').addEventListener('input', updateDockerBaseUrl);
+    document.getElementById('inst-base-url').addEventListener('input', () => autoInstanceBaseUrl = false);
+    document.getElementById('key-input').addEventListener('keydown', e => { if (e.key === 'Enter')
+        void submitKey(); });
+    document.getElementById('log-filter-status').onchange = refresh;
+    document.getElementById('log-filter-endpoint').onchange = refresh;
+    document.addEventListener('visibilitychange', () => { stop(); if (!document.hidden)
+        void refresh(); });
+    window.addEventListener('hashchange', () => showPage(location.hash.slice(1)));
+    document.querySelectorAll('input,select,textarea').forEach(input => { if (input.id && !document.querySelector('label[for="' + input.id + '"]')) {
+        const label = input.closest('.config-form')?.querySelector('label');
+        input.setAttribute('aria-label', input.placeholder || label?.textContent || input.id.replaceAll('-', ' '));
+    } });
+    try {
+        const r = await fetch('/v1/admin/session', { credentials: 'same-origin' });
+        if (r.ok) {
+            const d = await r.json();
+            if (d.csrf_token)
+                unlockSession(d);
+        }
+    }
+    catch {
+        showGate('Router unreachable. Check that Hermes is running, then retry.');
+    }
+});
+function setHeader(ok, detail) {
+    const dot = document.getElementById('hdr-dot');
+    const lbl = document.getElementById('hdr-status');
+    dot.className = ok ? 'dot' : 'dot err';
+    lbl.textContent = ok ? 'live' : ('error' + (detail ? ' · ' + detail : ''));
+    document.getElementById('last-update').textContent =
+        (ok ? 'Updated ' : 'Checked ') + new Date().toLocaleTimeString();
+}
+// ── helpers ───────────────────────────────────────────────────────────────────
+async function runAction(button, action) {
+    if (button.disabled)
+        return;
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    try {
+        await action();
+    }
+    finally {
+        button.disabled = false;
+        button.removeAttribute('aria-busy');
+    }
+}
+function apiError(data) { return typeof data.error === 'string' ? data.error : data.error?.message; }
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
+function jsarg(s) { return attr(JSON.stringify(String(s))); }
+function safeUrl(s) { try {
+    const u = new URL(s);
+    return ['http:', 'https:'].includes(u.protocol) ? u.href : '#';
+}
+catch {
+    return '#';
+} }
+function attr(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+const fmt = {
+    num: n => n == null ? '—' : Number(n).toLocaleString(),
+    tok: n => { if (n == null || n === 0)
+        return '0'; if (n >= 1e9)
+        return (n / 1e9).toFixed(1) + 'B'; if (n >= 1e6)
+        return (n / 1e6).toFixed(1) + 'M'; if (n >= 1e3)
+        return (n / 1e3).toFixed(1) + 'K'; return esc(n); },
+    pct: n => n == null ? '—' : Number(n).toFixed(1) + '%',
+    ms: n => n == null ? '—' : (n >= 1000 ? (n / 1000).toFixed(1) + 's' : Math.round(n) + 'ms'),
+    usd: n => n == null ? '—' : (n < 0.0001 ? '<$0.0001' : '$' + Number(n).toFixed(4)),
+    uptime: s => { if (!s)
+        return '—'; const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return (h ? h + 'h ' : '') + m + 'm'; },
+    time: ts => { if (!ts)
+        return '—'; try {
+        return new Date(ts).toLocaleTimeString();
+    }
+    catch {
+        return ts;
+    } },
+};
+function el(tag, cls, html) {
+    const e = document.createElement(tag);
+    if (cls)
+        e.className = cls;
+    if (html != null)
+        e.innerHTML = html;
+    return e;
+}
+function ratingPips(r) {
+    if (!r)
+        return '<span class="muted">—</span>';
+    const cls = ['', 'r1', 'r2', 'r3', 'r4', 'r5'][r] || 'r5';
+    const labels = ['', 'Outstanding', 'Best', 'Good', 'Fair', 'Basic'];
+    let h = `<div class="rating-bar ${cls}" title="${labels[r] || ''}">`;
+    for (let i = 1; i <= 5; i++)
+        h += `<div class="rating-pip ${i <= r ? 'active' : ''}"></div>`;
+    return h + '</div>';
+}
+function statusPill(s, breaker) {
+    if (breaker)
+        return '<span class="pill pill-err">⨂ tripped</span>';
+    if (s && s.total_requests === 0)
+        return '<span class="pill pill-grey">idle</span>';
+    const erp = s ? (s.errors / (s.total_requests || 1) * 100) : 0;
+    if (erp > 20)
+        return '<span class="pill pill-err">degraded</span>';
+    if (erp > 5)
+        return '<span class="pill pill-warn">unstable</span>';
+    return '<span class="pill pill-ok">healthy</span>';
+}
+function keyDots(keys) {
+    if (!keys || !keys.length)
+        return '<span class="muted">—</span>';
+    return keys.map(k => {
+        const cls = k.status === 'cooling' ? 'dot-warn' : 'dot-ok';
+        const req = k.requests != null ? `${k.requests} req` : '';
+        const title = (k.status === 'cooling' ? `cooling (${k.ready_in}s)` : 'ready') + (req ? ` · ${req}` : '');
+        return `<span class="${cls}" title="${attr(title)}" style="display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:2px"></span>`;
+    }).join('');
+}
+// ── render all ────────────────────────────────────────────────────────────────
+function renderAll() {
+    renderPlainOverview();
+    renderNavHealth();
+    renderInstanceNavHealth();
+    renderRotationForm();
+    renderStats();
+    renderProviderCards();
+    renderInstances();
+    renderProviders();
+    renderLogs();
+    renderCache();
+    renderAddons();
+    renderKeys();
+    renderAccessKeys();
+    renderModelCaps();
+}
+function renderNavHealth() {
+    const dot = document.getElementById('nav-dot-providers');
+    if (!dot || !statusData)
+        return;
+    const vals = Object.values(statusData.providers || {});
+    const openBreakers = vals.filter(p => p.breaker?.open).length;
+    const totalReq = vals.reduce((a, p) => a + (p.stats?.total_requests || 0), 0);
+    const totalErr = vals.reduce((a, p) => a + (p.stats?.errors || 0), 0);
+    const errRate = totalReq ? totalErr / totalReq * 100 : 0;
+    dot.className = 'nav-dot' + (openBreakers ? ' bad' : errRate > 5 ? ' warn' : '');
+}
+function instanceHealthCounts() {
+    const total = instancesData.length;
+    const healthy = instancesData.filter(i => i.live?.status === 'healthy').length;
+    const unreachable = instancesData.filter(i => i.live?.status === 'unreachable').length;
+    const authErrors = instancesData.filter(i => i.live?.status === 'auth_error').length;
+    const unknown = instancesData.filter(i => !i.live?.status || i.live.status === 'unknown').length;
+    const unhealthy = Math.max(0, total - healthy);
+    return { total, healthy, unhealthy, unreachable, authErrors, unknown };
+}
+function renderInstanceNavHealth() {
+    const dot = document.getElementById('nav-dot-instances');
+    if (!dot)
+        return;
+    const c = instanceHealthCounts();
+    dot.className = 'nav-dot' + (c.unreachable || c.authErrors ? ' bad' : c.unhealthy ? ' warn' : '');
+}
+function renderRotationForm() {
+    const sel = document.getElementById('cfg-rotation-value');
+    if (sel && document.activeElement !== sel && !sel.dataset.edited && statusData?.rotation?.mode)
+        sel.value = statusData.rotation.mode;
+}
+function renderPlainOverview() {
+    if (!statusData)
+        return;
+    const prov = statusData.providers || {};
+    const vals = Object.values(prov);
+    const keyCount = vals.reduce((a, p) => a + ((p.keys || []).length), 0);
+    const readyKeys = vals.reduce((a, p) => a + ((p.keys || []).filter(k => k.status === 'ready').length), 0);
+    const openBreakers = vals.filter(p => p.breaker?.open).length;
+    const active = vals.filter(p => (p.stats?.total_requests || 0) > 0).length;
+    const totalReq = vals.reduce((a, p) => a + (p.stats?.total_requests || 0), 0);
+    const totalErr = vals.reduce((a, p) => a + (p.stats?.errors || 0), 0);
+    const errRate = totalReq ? totalErr / totalReq * 100 : 0;
+    const state = document.getElementById('plain-state');
+    const title = document.getElementById('plain-title');
+    const msg = document.getElementById('plain-message');
+    state.className = 'hero-state';
+    if (!keyCount) {
+        state.classList.add('bad');
+        state.textContent = 'needs a key';
+        title.textContent = 'Add one provider key to start routing';
+        msg.textContent = 'Open Providers to add a credential, then send a small test from Connect.';
+    }
+    else if (statusData.readiness?.state === 'initializing') {
+        state.classList.add('warn');state.textContent='checking providers';
+        title.textContent='Checking provider readiness';
+        msg.textContent='Hermes is running while provider checks finish. Confirm inference with an explicit test in Connect.';
+    }
+    else if (['unavailable','error'].includes(statusData.readiness?.state)) {
+        state.classList.add('bad');state.textContent='not ready';
+        title.textContent='No provider is ready yet';
+        msg.textContent='Check provider credentials, model settings and local runtime connectivity in Providers, then retry a test in Connect.';
+    }
+    else if (openBreakers || errRate > 25) {
+        state.classList.add('warn');
+        state.textContent = 'needs attention';
+        title.textContent = 'Hermes is running, but some providers are failing';
+        msg.textContent = 'Requests can still fall back to healthy providers. Add more keys or check providers with high errors.';
+    }
+    else if (restartNeeded) {
+        state.classList.add('warn');
+        state.textContent = 'restart required';
+        title.textContent = 'Apply your provider changes';
+        msg.textContent = 'Restart Hermes before checking the new provider in Connect.';
+    }
+    else {
+        state.classList.add('good');
+        state.textContent = 'ready';
+        title.textContent = 'Hermes Router is ready';
+        msg.textContent = active ? 'Traffic is flowing through your provider pool.' : 'No requests yet. Point your app at the endpoint below.';
+    }
+    document.getElementById('quick-endpoint').textContent = location.origin + '/v1';
+    document.getElementById('quick-model').textContent = 'hermes-router';
+    document.getElementById('quick-spend').textContent = fmt.usd(usageData?.totals?.cost?.usd);
+    setStep('step-key', keyCount > 0, `${readyKeys}/${keyCount} keys ready`);
+    setStep('step-health', (!statusData.readiness || statusData.readiness.state === 'ready') && !openBreakers && errRate <= 25, statusData.readiness && statusData.readiness.state !== 'ready' ? statusData.readiness.state : openBreakers ? `${openBreakers} breaker open` : (errRate ? `${fmt.pct(errRate)} errors` : 'ok'));
+}
+function setStep(id, done, text) {
+    const el = document.getElementById(id);
+    el.className = 'setup-step ' + (done ? 'done' : 'warn');
+    const label = document.getElementById(id + '-text');
+    if (label)
+        label.textContent = text;
+}
+function renderProviderCards() {
+    if (!statusData)
+        return;
+    const prov = statusData.providers || {};
+    const grid = document.getElementById('provider-card-grid');
+    const entries = Object.entries(prov).sort(([an, a], [bn, b]) => {
+        const badA = (a.breaker?.open ? 2 : 0) + ((a.stats?.errors || 0) > 0 ? 1 : 0);
+        const badB = (b.breaker?.open ? 2 : 0) + ((b.stats?.errors || 0) > 0 ? 1 : 0);
+        return badB - badA || an.localeCompare(bn);
+    }).slice(0, 8);
+    if (!entries.length) {
+        grid.innerHTML = '<div class="provider-card bad"><div class="provider-name">No providers configured</div><div class="provider-model">Add an API key below.</div></div>';
+        return;
+    }
+    grid.innerHTML = entries.map(([name, p]) => {
+        const req = p.stats?.total_requests || 0;
+        const err = p.stats?.errors || 0;
+        const erp = req ? err / req * 100 : 0;
+        const ready = (p.keys || []).filter(k => k.status === 'ready').length;
+        const brk = p.breaker?.open;
+        const cls = brk || erp > 25 ? 'bad' : erp > 5 ? 'warn' : '';
+        const pill = brk ? '<span class="pill pill-err">paused</span>' :
+            erp > 25 ? '<span class="pill pill-err">check</span>' :
+                erp > 5 ? '<span class="pill pill-warn">watch</span>' :
+                    '<span class="pill pill-ok">ready</span>';
+        return `<div class="provider-card ${cls}">
+      <div class="provider-head"><span class="provider-name">${esc(name)}</span>${pill}</div>
+      <div class="provider-model" title="${attr(p.model || '')}">${esc(p.model || 'no model')}</div>
+      <div class="provider-meta"><span>${ready} ready key${ready === 1 ? '' : 's'}</span><span>${fmt.ms(p.stats?.avg_latency_ms)}</span></div>
+    </div>`;
+    }).join('');
+}
+// ── instances ────────────────────────────────────────────────────────────────
+function renderInstances() {
+    const summary = document.getElementById('instance-summary-grid');
+    const tbody = document.getElementById('instances-tbody');
+    if (!summary || !tbody)
+        return;
+    const health = instanceHealthCounts();
+    const managed = instancesData.filter(i => i.mode === 'docker').length;
+    const running = instancesData.filter(i => i.docker?.running).length;
+    const attentionText = health.unreachable
+        ? `${health.unreachable} unreachable`
+        : health.authErrors
+            ? `${health.authErrors} auth issue${health.authErrors === 1 ? '' : 's'}`
+            : health.unhealthy
+                ? `${health.unhealthy} need attention`
+                : 'none';
+    const attentionSub = health.unreachable
+        ? 'health endpoint not reachable'
+        : health.authErrors
+            ? 'health ok, key rejected'
+            : health.unknown
+                ? 'waiting for first probe'
+                : 'all registered instances reachable';
+    const attentionClass = health.unreachable || health.authErrors ? 'bad' : health.unhealthy ? 'warn' : '';
+    summary.innerHTML = [
+        ['Registered', fmt.num(health.total), 'routers tracked by this dashboard', ''],
+        ['Healthy', `${health.healthy}/${health.total || 0}`, 'health endpoint reachable', health.unhealthy ? 'warn' : ''],
+        ['Needs attention', attentionText, attentionSub, attentionClass],
+        ['Docker managed', fmt.num(managed), `${running} running container${running === 1 ? '' : 's'}`, ''],
+    ].map(([label, value, sub, cls]) => `<div class="instance-card ${cls}">
+    <div class="quick-label">${label}</div><div class="quick-value">${value}</div><div class="quick-sub">${sub}</div>
+  </div>`).join('');
+    if (!instancesData.length) {
+        tbody.innerHTML = '<tr><td colspan="8"><div class="instance-empty"><div><strong>No instances yet</strong><br><span>Connect an existing router or launch a Docker router above.</span></div></div></td></tr>';
+        return;
+    }
+    tbody.innerHTML = instancesData.map(i => {
+        const live = i.live || {};
+        const docker = i.docker || {};
+        const healthCls = live.status === 'healthy' ? 'pill-ok' : live.status === 'auth_error' ? 'pill-warn' : 'pill-err';
+        const dockerPill = i.mode !== 'docker'
+            ? '<span class="pill pill-grey">external</span>'
+            : docker.running
+                ? '<span class="pill pill-ok">running</span>'
+                : docker.exists
+                    ? `<span class="pill pill-warn">${esc(docker.status || 'stopped')}</span>`
+                    : `<span class="pill pill-grey">${esc(docker.status || 'not created')}</span>`;
+        const env = i.env || {};
+        const actions = i.mode === 'docker'
+            ? `<button class="btn" onclick="runAction(this,()=>instanceAction(${jsarg(i.id)},'start'))">Start</button>
+         <button class="btn" onclick="runAction(this,()=>instanceAction(${jsarg(i.id)},'restart'))">Restart</button>
+         <button class="btn" onclick="runAction(this,()=>instanceAction(${jsarg(i.id)},'stop'))">Stop</button>
+         <button class="btn danger" onclick="runAction(this,()=>deleteInstance(${jsarg(i.id)}, true))">Delete</button>`
+            : `<button class="btn danger" onclick="runAction(this,()=>deleteInstance(${jsarg(i.id)}, false))">Delete</button>`;
+        return `<tr>
+      <td><strong>${esc(i.name)}</strong><br><span class="mono muted">${esc(i.id)}</span></td>
+      <td>${esc(i.mode)}</td>
+      <td class="mono"><a style="color:var(--accent)" href="${attr(safeUrl(i.base_url))}" target="_blank" rel="noreferrer">${esc(i.base_url)}</a></td>
+      <td><span class="pill ${healthCls}" title="${attr(live.message || '')}">${esc(live.status || 'unchecked')}</span>${i.freshness ? '<br><span class="muted">' + esc(i.freshness.state === 'pending' ? 'unchecked' : i.freshness.state) + (i.freshness.age_seconds == null ? '' : ' · '+fmt.num(Math.round(i.freshness.age_seconds))+'s ago') + '</span>' : ''}</td>
+      <td>${dockerPill}</td>
+      <td class="mono muted">${i.api_key?.configured ? '...' + esc(i.api_key.tail) : 'none'}</td>
+      <td class="muted" title="${attr((env.keys || []).join(', '))}">${fmt.num(env.count || 0)} var${(env.count || 0) === 1 ? '' : 's'}</td>
+      <td><div class="instance-actions">${actions}</div></td>
+    </tr>`;
+    }).join('');
+}
+function setInstanceMode(mode) {
+    document.getElementById('inst-mode').value = mode;
+    onInstanceModeChange();
+}
+function onInstanceModeChange() {
+    const mode = document.getElementById('inst-mode').value;
+    const base = document.getElementById('inst-base-url');
+    const image = document.getElementById('inst-image');
+    const env = document.getElementById('inst-env');
+    const external = mode === 'external';
+    document.getElementById('mode-external').classList.toggle('active', external);
+    document.getElementById('mode-docker').classList.toggle('active', !external);
+    document.getElementById('inst-port-fields').classList.toggle('hidden-field', external);
+    document.getElementById('inst-docker-options').classList.toggle('hidden-field', external);
+    document.getElementById('inst-start-btn').classList.toggle('hidden-field', external);
+    document.getElementById('inst-save-btn').textContent = external ? 'Register instance' : 'Create instance';
+    if (mode === 'docker') {
+        image.disabled = false;
+        env.disabled = false;
+        base.placeholder = 'auto from host port';
+        document.getElementById('inst-base-hint').textContent = 'Filled from the host port unless you override it.';
+        document.getElementById('inst-key-label').textContent = 'Instance access key';
+        document.getElementById('inst-key-hint').textContent = 'Leave blank to generate one for this container.';
+        document.getElementById('inst-api-key').placeholder = 'generated if blank';
+        updateDockerBaseUrl();
+    }
+    else {
+        image.disabled = true;
+        env.disabled = true;
+        base.placeholder = 'http://localhost:8320/v1';
+        document.getElementById('inst-base-hint').textContent = 'Agents use this as their base URL.';
+        document.getElementById('inst-key-label').textContent = 'Router application key';
+        document.getElementById('inst-key-hint').textContent = 'Application key for this instance’s authenticated model-list check.';
+        document.getElementById('inst-api-key').placeholder = 'sk-router-...';
+    }
+}
+function updateDockerBaseUrl() {
+    if (document.getElementById('inst-mode').value !== 'docker')
+        return;
+    const port = document.getElementById('inst-host-port').value.trim();
+    const base = document.getElementById('inst-base-url');
+    if (!port)
+        return;
+    if (!base.value.trim() || autoInstanceBaseUrl) {
+        base.value = `http://localhost:${port}/v1`;
+        autoInstanceBaseUrl = true;
+    }
+}
+function parseInstanceEnv() {
+    const raw = document.getElementById('inst-env').value;
+    const env = {};
+    for (const line of raw.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#'))
+            continue;
+        const idx = trimmed.indexOf('=');
+        if (idx < 1)
+            throw new Error('Env lines must be KEY=value.');
+        const key = trimmed.slice(0, idx).trim();
+        const value = trimmed.slice(idx + 1).trim();
+        env[key] = value;
+    }
+    return env;
+}
+async function createInstance(start) {
+    let env = {};
+    try {
+        env = parseInstanceEnv();
+    }
+    catch (e) {
+        setMsg('inst-msg', e.message, false);
+        return;
+    }
+    const mode = document.getElementById('inst-mode').value;
+    if (mode === 'external')
+        env = {};
+    const name = document.getElementById('inst-name').value.trim();
+    const baseUrl = document.getElementById('inst-base-url').value.trim();
+    const hostPort = document.getElementById('inst-host-port').value.trim();
+    if (!name) {
+        setMsg('inst-msg', 'Name this instance first.', false);
+        return;
+    }
+    if (mode === 'external' && !baseUrl) {
+        setMsg('inst-msg', 'Enter the router base URL.', false);
+        return;
+    }
+    if (mode === 'docker' && !hostPort) {
+        setMsg('inst-msg', 'Choose a host port for the Docker router.', false);
+        return;
+    }
+    const body = {
+        name,
+        mode,
+        base_url: baseUrl,
+        host_port: hostPort,
+        container_port: document.getElementById('inst-container-port').value,
+        image: document.getElementById('inst-image').value,
+        api_key: document.getElementById('inst-api-key').value,
+        env,
+        copy_provider_keys: mode === 'docker'
+            ? [...document.querySelectorAll('#inst-copy-provider-keys input:checked')].map(el => el.value)
+            : [],
+        start,
+    };
+    try {
+        const r = await adminFetch('/v1/instances', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const d = await r.json();
+        if (!r.ok) {
+            setMsg('inst-msg', apiError(d) || 'Failed to save instance.', false);
+            return;
+        }
+        ['inst-name', 'inst-base-url', 'inst-host-port', 'inst-api-key', 'inst-env'].forEach(id => document.getElementById(id).value = '');
+        document.querySelectorAll('#inst-copy-provider-keys input:checked').forEach(el => el.checked = false);
+        autoInstanceBaseUrl = false;
+        if (d.generated_api_key) {
+            document.getElementById('new-instance-key-value').value = d.generated_api_key;
+            document.getElementById('new-instance-key-panel').style.display = 'block';
+        }
+        await refresh();
+        const saved = instancesData.find(i => i.id === d.instance?.id);
+        const savedStatus = saved?.live?.status;
+        if (d.action && !d.action.ok) {
+            setWarnMsg('inst-msg', 'Saved, but Docker start failed: ' + d.action.message);
+        }
+        else if (savedStatus && savedStatus !== 'healthy') {
+            setWarnMsg('inst-msg', `Instance saved, but it is ${savedStatus}.`);
+        }
+        else {
+            setMsg('inst-msg', 'Instance saved.', true);
+        }
+    }
+    catch (e) {
+        setMsg('inst-msg', 'Network error: ' + e.message, false);
+    }
+}
+async function instanceAction(id, action) {
+    try {
+        const r = await adminFetch(`/v1/instances/${encodeURIComponent(id)}/${action}`, {
+            method: 'POST',
+            headers: {},
+        });
+        const d = await r.json();
+        if (!r.ok || !d.ok) {
+            alert(d.message || apiError(d) || 'Instance action failed.');
+            return;
+        }
+        await refresh();
+    }
+    catch (e) {
+        alert('Network error: ' + e.message);
+    }
+}
+async function deleteInstance(id, managed) {
+    const msg = managed
+        ? 'Delete this instance from the registry and remove its Docker container?'
+        : 'Delete this instance from the registry?';
+    if (!confirm(msg))
+        return;
+    const qs = managed ? '?remove_container=1' : '';
+    try {
+        const r = await adminFetch('/v1/instances/' + encodeURIComponent(id) + qs, {
+            method: 'DELETE',
+            headers: {},
+        });
+        const d = await r.json();
+        if (!r.ok) {
+            alert(apiError(d) || 'Failed to delete instance.');
+            return;
+        }
+        await refresh();
+    }
+    catch (e) {
+        alert('Network error: ' + e.message);
+    }
+}
+function copyInstanceKey() {
+    const el = document.getElementById('new-instance-key-value');
+    el.select();
+    navigator.clipboard?.writeText(el.value).catch(() => document.execCommand('copy'));
+}
+function dismissInstanceKey() {
+    document.getElementById('new-instance-key-panel').style.display = 'none';
+    document.getElementById('new-instance-key-value').value = '';
+}
+// ── stat cards ────────────────────────────────────────────────────────────────
+function renderStats() {
+    if (!statusData)
+        return;
+    const prov = statusData.providers || {};
+    const nProv = Object.keys(prov).length;
+    const broken = Object.values(prov).filter(p => p.breaker && p.breaker.open).length;
+    document.getElementById('s-providers').textContent = nProv;
+    document.getElementById('s-providers-sub').textContent =
+        broken ? `${broken} breaker(s) tripped` : 'all healthy';
+    document.getElementById('s-uptime').textContent = fmt.uptime(usageData?.uptime_s);
+    const totReq = Object.values(prov).reduce((a, p) => a + (p.stats?.total_requests || 0), 0);
+    const totErr = Object.values(prov).reduce((a, p) => a + (p.stats?.errors || 0), 0);
+    document.getElementById('s-requests').textContent = fmt.num(totReq);
+    document.getElementById('s-requests-sub').textContent =
+        totReq ? fmt.pct(totErr / totReq * 100) + ' error rate' : '';
+    const tot = usageData?.totals || {};
+    document.getElementById('s-tokens').textContent = usageData ? fmt.tok(tot.tokens) : '—';
+    document.getElementById('s-cost').textContent = 'est. ' + fmt.usd(tot.cost?.usd);
+    const cache = statusData.cache || {};
+    document.getElementById('s-hitrate').textContent = fmt.pct((cache.hit_rate || 0) * 100);
+    document.getElementById('s-cache-sub').textContent =
+        `${fmt.num(cache.hits)} hits / ${fmt.num(cache.misses)} misses`;
+    const errRate = totReq ? (totErr / totReq * 100) : 0;
+    const errEl = document.getElementById('s-errrate');
+    errEl.textContent = fmt.pct(errRate);
+    errEl.style.color = errRate > 10 ? 'var(--red)' : errRate > 3 ? 'var(--yellow)' : 'var(--green)';
+    document.getElementById('s-errrate-sub').textContent = fmt.num(totErr) + ' total errors';
+}
+// ── provider table ────────────────────────────────────────────────────────────
+function renderProviders() {
+    if (!statusData)
+        return;
+    const prov = statusData.providers || {};
+    const tbody = document.getElementById('provider-tbody');
+    tbody.innerHTML = '';
+    Object.entries(prov).forEach(([name, p]) => {
+        const s = p.stats || {};
+        const req = s.total_requests || 0;
+        const err = s.errors || 0;
+        const erp = req ? err / req * 100 : 0;
+        const lat = s.avg_latency_ms;
+        const brk = p.breaker?.open || false;
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+      <td><strong>${esc(name)}</strong></td>
+      <td class="muted mono" style="max-width:160px;overflow:hidden;text-overflow:ellipsis" title="${attr(p.model || '')}">${esc(p.model || '—')}</td>
+      <td>${ratingPips(p.rating)}</td>
+      <td class="right">${fmt.num(req)}</td>
+      <td class="right ${err > 0 ? '' : 'muted'}">${fmt.num(err)}</td>
+      <td class="right" style="color:${erp > 10 ? 'var(--red)' : erp > 3 ? 'var(--yellow)' : 'var(--muted)'}">${req ? fmt.pct(erp) : '—'}</td>
+      <td class="right">${fmt.ms(lat)}</td>
+      <td class="right muted">${fmt.tok(p.tokens)}</td>
+      <td class="right muted">${fmt.usd(p.cost_usd)}</td>
+      <td>${keyDots(p.keys)}</td>
+      <td>${brk ? '<span class="pill pill-err">open</span>' : '<span class="pill pill-ok">closed</span>'}</td>
+      <td>${statusPill(s, brk)}</td>
+    `;
+        tbody.appendChild(tr);
+    });
+}
+// ── live log ──────────────────────────────────────────────────────────────────
+function renderLogs() {
+    const tbody = document.getElementById('log-tbody');
+    if (!logsData.length) {
+        tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:24px">No requests logged yet</td></tr>';
+        return;
+    }
+    tbody.innerHTML = '';
+    logsData.forEach(e => {
+        const tr = document.createElement('tr');
+        tr.className = 'log-row-' + (e.status || '');
+        const sp = e.status === 'success' ? 'pill-ok' : e.status === 'error' ? 'pill-err' : 'pill-cache';
+        const cascBadge = e.cascades > 0
+            ? `<span class="pill pill-warn">${fmt.num(e.cascades)}</span>`
+            : '<span class="muted">0</span>';
+        const cmpx = e.complexity;
+        const cmpxColor = !cmpx ? 'var(--muted)' : cmpx <= 2 ? 'var(--red)' : cmpx >= 5 ? 'var(--green)' : 'var(--yellow)';
+        tr.innerHTML = `
+      <td class="mono muted">${esc(fmt.time(e.ts))}</td>
+      <td>${esc(e.endpoint || '—')}</td>
+      <td><strong>${esc(e.provider || '—')}</strong></td>
+      <td class="muted mono" style="max-width:140px;overflow:hidden;text-overflow:ellipsis" title="${attr(e.model || '')}">${esc(e.model || '—')}</td>
+      <td class="right">${fmt.ms(e.latency_ms)}</td>
+      <td class="right" style="color:${cmpxColor}">${esc(cmpx || '—')}</td>
+      <td class="right">${cascBadge}</td>
+      <td class="right muted">${e.prompt_tokens != null ? fmt.num(e.prompt_tokens) : '—'}</td>
+      <td class="right muted">${e.completion_tokens != null ? fmt.num(e.completion_tokens) : '—'}</td>
+      <td><span class="pill ${sp}">${esc(e.status || '—')}</span></td>
+    `;
+        tbody.appendChild(tr);
+    });
+}
+// ── cache panel ───────────────────────────────────────────────────────────────
+function renderCache() {
+    if (!statusData)
+        return;
+    const c = statusData.cache || {};
+    const sem = c.semantic || {};
+    const rows = [
+        ['Enabled', c.enabled ? '<span class="pill pill-ok">yes</span>' : '<span class="pill pill-grey">no</span>'],
+        ['TTL', c.ttl_s != null ? esc(c.ttl_s) + 's' : '—'],
+        ['Size', `${fmt.num(c.size)} / ${fmt.num(c.max_size)}`],
+        ['Persistent', c.persistent ? '<span class="pill pill-ok">yes</span>' : '<span class="pill pill-grey">no</span>'],
+        ['Hits', fmt.num(c.hits)],
+        ['Misses', fmt.num(c.misses)],
+        ['Hit rate', fmt.pct((c.hit_rate || 0) * 100)],
+        ['Semantic cache', sem.enabled ? '<span class="pill pill-ok">yes</span>' : '<span class="pill pill-grey">no</span>'],
+        ['Semantic hits', fmt.num(sem.hits)],
+        ['Sem. threshold', sem.threshold != null ? esc(sem.threshold) : '—'],
+    ];
+    const tbody = document.getElementById('cache-tbody');
+    tbody.innerHTML = rows.map(([k, v]) => `<tr><td class="muted" style="width:50%">${k}</td><td>${v}</td></tr>`).join('');
+}
+// ── add-ons panel ─────────────────────────────────────────────────────────────
+function renderAddons() {
+    if (!statusData?.features)
+        return;
+    const addons = statusData.features.addons || [];
+    const grid = document.getElementById('addon-grid');
+    grid.innerHTML = addons.map(a => {
+        const clickable = a.kind === 'flag';
+        const attrs = clickable ? `onclick="runAction(this,()=>toggleAddon(${jsarg(a.name)}, ${!a.enabled}))" title="Click to ${a.enabled ? 'disable' : 'enable'}"` : '';
+        return `
+    <button type="button" style="text-align:left;color:var(--text);font:inherit" class="addon-card ${clickable ? 'flag' : ''}" id="addon-${attr(a.name)}" ${clickable ? '' : 'disabled'} ${attrs}>
+      <div class="addon-top">
+        <span class="addon-name">${esc(a.title || a.name)}</span>
+        <span class="pill ${a.enabled ? 'pill-ok' : 'pill-grey'}">${a.enabled ? 'on' : 'off'}</span>
+      </div>
+      <div class="addon-desc">${esc(a.desc || '')}</div>
+      ${a.env ? `<div class="mono muted" style="margin-top:5px;font-size:10px">${esc(a.env)}</div>` : ''}
+    </button>
+  `;
+    }).join('');
+}
+// ── config: add-ons toggle ───────────────────────────────────────────────────
+async function toggleAddon(name, enable) {
+    const card = document.getElementById('addon-' + name);
+    if (card)
+        card.classList.add('busy');
+    try {
+        const r = await adminFetch('/v1/config/features/' + encodeURIComponent(name), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: enable }),
+        });
+        const d = await r.json();
+        if (!r.ok) {
+            alert(apiError(d) || 'Failed to toggle ' + name);
+            return;
+        }
+        showRestartBanner();
+        await refresh();
+    }
+    catch (e) {
+        alert('Network error: ' + e.message);
+    }
+    finally {
+        if (card)
+            card.classList.remove('busy');
+    }
+}
+// ── config: providers / add key / model ──────────────────────────────────────
+let configProviders = null, configPromise = null;
+function loadConfigProviders() {
+    if (configPromise)
+        return configPromise;
+    configPromise = fetchConfigProviders().finally(() => configPromise = null);
+    return configPromise;
+}
+async function fetchConfigProviders() {
+    const session = sessionGeneration;
+    try {
+        const r = await adminFetch('/v1/config/providers', { headers: {} });
+        if (!r.ok)
+            throw new Error('HTTP ' + r.status);
+        const data = await r.json();
+        if (!authenticated || session !== sessionGeneration)
+            return;
+        configProviders = data;
+        const keySel = document.getElementById('cfg-key-provider');
+        keySel.innerHTML = configProviders.key_settable.map(p => `<option value="${attr(p)}">${esc(p)}</option>`).join('');
+        const modelSel = document.getElementById('cfg-model-provider');
+        modelSel.innerHTML = configProviders.model_settable.map(p => `<option value="${attr(p)}">${esc(p)}</option>`).join('');
+        onModelProviderChange();
+        renderProviderScopePicker();
+        renderInstanceCopyKeyPicker();
+        renderAccessKeys(); // re-render now that provider names/counts are known
+        panelErrors.delete('Provider configuration');
+        renderPanelErrors();
+    }
+    catch (e) {
+        panelErrors.set('Provider configuration', e.message + '; retry by opening Providers.');
+        renderPanelErrors();
+    }
+}
+// Providers a caller might sensibly scope an access key to — anything with a
+// live key count, or already model-settable (covers keyless "local"). Sorted
+// with the most-provisioned providers first, since those are the likely picks.
+function scopeableProviders() {
+    if (!configProviders)
+        return [];
+    const counts = configProviders.key_counts || {};
+    const names = new Set([...Object.keys(counts), ...configProviders.model_settable]);
+    return [...names].sort((a, b) => (counts[b] || 0) - (counts[a] || 0) || a.localeCompare(b));
+}
+function renderProviderScopePicker() {
+    const grid = document.getElementById('ak-provider-scope');
+    if (!grid)
+        return;
+    grid.innerHTML = renderScopeCheckboxes([]);
+}
+function renderInstanceCopyKeyPicker() {
+    const grid = document.getElementById('inst-copy-provider-keys');
+    if (!grid)
+        return;
+    const counts = configProviders?.copyable_provider_keys || {};
+    const names = Object.keys(counts).filter(name => counts[name] > 0)
+        .sort((a, b) => counts[b] - counts[a] || a.localeCompare(b));
+    if (!names.length) {
+        grid.innerHTML = '<div class="field-hint">No configured provider keys are available to copy yet.</div>';
+        return;
+    }
+    grid.innerHTML = names.map(name => {
+        const n = counts[name] || 0;
+        return `<label class="scope-item"><input type="checkbox" value="${attr(name)}"> ${esc(name)}<span class="cnt">${fmt.num(n)} key${n === 1 ? '' : 's'}</span></label>`;
+    }).join('');
+}
+function onModelProviderChange() {
+    if (!configProviders)
+        return;
+    const p = document.getElementById('cfg-model-provider').value;
+    const def = configProviders.defaults[p] || '';
+    document.getElementById('cfg-model-default').textContent = 'default: ' + def;
+    const current = statusData?.providers?.[p]?.model || '';
+    document.getElementById('cfg-model-value').value = (current && current !== def) ? current : '';
+    document.getElementById('cfg-model-value').placeholder = def;
+}
+function setMsg(id, text, ok) {
+    const el = document.getElementById(id);
+    el.textContent = text;
+    el.className = 'config-msg ' + (ok ? 'ok' : 'err');
+}
+function setWarnMsg(id, text) {
+    const el = document.getElementById(id);
+    el.textContent = text;
+    el.className = 'config-msg warn';
+}
+async function addKey() {
+    const provider = document.getElementById('cfg-key-provider').value;
+    const key = document.getElementById('cfg-key-value').value.trim();
+    if (!key) {
+        setMsg('cfg-key-msg', 'Enter a key first.', false);
+        return;
+    }
+    try {
+        const r = await adminFetch('/v1/config/keys/' + encodeURIComponent(provider), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key }),
+        });
+        const d = await r.json();
+        if (!r.ok) {
+            setMsg('cfg-key-msg', apiError(d) || 'Failed.', false);
+            return;
+        }
+        if (d.duplicate) {
+            setMsg('cfg-key-msg', 'Already stored — no change.', false);
+            return;
+        }
+        document.getElementById('cfg-key-value').value = '';
+        setMsg('cfg-key-msg', `Saved — ${provider} now has ${d.total_keys} key(s).`, true);
+        showRestartBanner();
+    }
+    catch (e) {
+        setMsg('cfg-key-msg', 'Network error: ' + e.message, false);
+    }
+}
+async function setModel() {
+    const provider = document.getElementById('cfg-model-provider').value;
+    const model = document.getElementById('cfg-model-value').value.trim();
+    if (!model) {
+        setMsg('cfg-model-msg', 'Enter a model first.', false);
+        return;
+    }
+    try {
+        const r = await adminFetch('/v1/config/model/' + encodeURIComponent(provider), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model }),
+        });
+        const d = await r.json();
+        if (!r.ok) {
+            setMsg('cfg-model-msg', apiError(d) || 'Failed.', false);
+            return;
+        }
+        setMsg('cfg-model-msg', `Set ${provider} → ${model}`, true);
+        showRestartBanner();
+    }
+    catch (e) {
+        setMsg('cfg-model-msg', 'Network error: ' + e.message, false);
+    }
+}
+async function resetModel() {
+    const provider = document.getElementById('cfg-model-provider').value;
+    try {
+        const r = await adminFetch('/v1/config/model/' + encodeURIComponent(provider), {
+            method: 'DELETE',
+            headers: {},
+        });
+        const d = await r.json();
+        if (!r.ok) {
+            setMsg('cfg-model-msg', apiError(d) || 'Failed.', false);
+            return;
+        }
+        document.getElementById('cfg-model-value').value = '';
+        setMsg('cfg-model-msg', `Reset ${provider} to default.`, true);
+        showRestartBanner();
+    }
+    catch (e) {
+        setMsg('cfg-model-msg', 'Network error: ' + e.message, false);
+    }
+}
+async function setRotation() {
+    const mode = document.getElementById('cfg-rotation-value').value;
+    try {
+        const r = await adminFetch('/v1/config/rotation', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode }),
+        });
+        const d = await r.json();
+        if (!r.ok) {
+            setMsg('cfg-rotation-msg', apiError(d) || 'Failed.', false);
+            return;
+        }
+        setMsg('cfg-rotation-msg', 'Saved rotation mode.', true);
+        showRestartBanner();
+    }
+    catch (e) {
+        setMsg('cfg-rotation-msg', 'Network error: ' + e.message, false);
+    }
+}
+// ── restart ───────────────────────────────────────────────────────────────────
+function showRestartBanner() {
+    restartNeeded = true;
+    document.getElementById('restart-banner').classList.add('show');
+    setStep('step-restart', false, 'needed');
+    renderPlainOverview();
+}
+function dismissBanner() { document.getElementById('restart-banner').classList.remove('show'); }
+async function doRestart() {
+    if (!confirm('Restart the router now? Active requests may be interrupted.'))
+        return;
+    try {
+        const r = await adminFetch('/v1/config/restart', { method: 'POST' });
+        const d = await r.json();
+        if (!r.ok || d.ok === false)
+            throw new Error(apiError(d) || d.message || 'Restart is unavailable on this installation.');
+        restartNeeded = false;
+        dismissBanner();
+        setStep('step-restart', true, 'restart requested');
+        setHeader(false, 'restart requested');
+        start();
+    }
+    catch (e) {
+        panelErrors.set('Restart', e.message + ' Native Windows: stop the current router and run ./start.ps1 in PowerShell. Minimal Docker: run docker restart <container> on the host.');
+        renderPanelErrors();
+    }
+}
+// ── key usage ─────────────────────────────────────────────────────────────────
+function renderKeys() {
+    if (!usageData)
+        return;
+    const keys = usageData.keys || [];
+    const limData = statusData?.limits || {};
+    const tbody = document.getElementById('keys-tbody');
+    if (!keys.length) {
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:18px">No key data</td></tr>';
+        return;
+    }
+    tbody.innerHTML = keys.map(k => {
+        const limEntry = (limData.keys || []).find(l => l.key_tail === k.key_tail);
+        const lim = limEntry?.limits || {};
+        const rpmUsed = k.rpm_current || 0;
+        const rpmMax = lim.rpm || 0;
+        const rpmPct = rpmMax ? Math.min(rpmUsed / rpmMax * 100, 100) : 0;
+        const rpmColor = rpmPct > 80 ? 'red' : rpmPct > 50 ? 'yellow' : 'green';
+        return `<tr>
+      <td class="mono">...${esc(k.key_tail)}</td>
+      <td class="right">${fmt.num(k.req_total)}</td>
+      <td class="right">
+        ${fmt.tok(k.tokens_today)}
+        ${lim.tokens_day ? `<br><span class="muted" style="font-size:10px">/ ${fmt.tok(lim.tokens_day)}</span>` : ''}
+      </td>
+      <td class="right">
+        ${fmt.usd(k.cost_today)}
+        ${lim.cost_day ? `<br><span class="muted" style="font-size:10px">/ ${fmt.usd(lim.cost_day)}</span>` : ''}
+      </td>
+      <td style="min-width:100px">
+        ${rpmMax
+            ? `<div class="prog-track"><div class="prog-fill ${rpmColor}" style="width:${rpmPct}%"></div></div>
+             <span class="muted" style="font-size:10px">${fmt.num(rpmUsed)}/${fmt.num(rpmMax)} rpm</span>`
+            : '<span class="muted">unlimited</span>'}
+      </td>
+    </tr>`;
+    }).join('');
+}
+// ── access keys (proxy keys others use to call the router) ───────────────────
+function renderAccessKeys(force = false) {
+    if (editingKeyTail && !force)
+        return;
+    const tbody = document.getElementById('access-keys-tbody');
+    if (!tbody)
+        return;
+    if (!accessKeysData.length) {
+        tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:18px">No access keys yet</td></tr>';
+        return;
+    }
+    tbody.innerHTML = accessKeysData.map(k => {
+        const tail = k.key_tail;
+        const lim = k.limits || {};
+        const used = k.usage || {};
+        const allowed = k.allowed_providers || [];
+        const statusPill = k.pending_restart
+            ? '<span class="pill pill-warn">pending restart</span>'
+            : '<span class="pill pill-ok">active</span>';
+        if (editingKeyTail === tail) {
+            return `<tr>
+        <td><input aria-label="Application name" id="edit-name-${attr(tail)}" type="text" value="${attr(k.name || '')}" style="width:110px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:4px 6px;font-size:11px"></td>
+        <td class="mono muted">...${esc(tail)}</td>
+        <td class="right"><input aria-label="Requests per minute" id="edit-rpm-${attr(tail)}" type="number" min="0" value="${attr(lim.rpm || '')}" placeholder="∞" style="width:55px;text-align:right;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:4px 6px;font-size:11px"></td>
+        <td class="right"><input aria-label="Requests per day" id="edit-reqday-${attr(tail)}" type="number" min="0" value="${attr(lim.req_per_day || '')}" placeholder="∞" style="width:65px;text-align:right;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:4px 6px;font-size:11px"></td>
+        <td class="right"><input aria-label="Tokens per day" id="edit-tokday-${attr(tail)}" type="number" min="0" value="${attr(lim.tokens_per_day || '')}" placeholder="∞" style="width:75px;text-align:right;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:4px 6px;font-size:11px"></td>
+        <td class="right"><input aria-label="Cost per day" id="edit-costday-${attr(tail)}" type="number" min="0" step="0.01" value="${attr(lim.cost_per_day || '')}" placeholder="∞" style="width:65px;text-align:right;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:4px 6px;font-size:11px"></td>
+        <td class="right muted">${fmt.num(used.req_today)}</td>
+        <td><div class="scope-grid" id="edit-scope-${attr(tail)}" style="min-width:180px">${renderScopeCheckboxes(allowed)}</div></td>
+        <td>${statusPill}</td>
+        <td style="white-space:nowrap"><button class="btn" onclick="runAction(this,()=>saveEditAccessKey(${jsarg(tail)}))">Save</button> <button class="btn" onclick="cancelEditAccessKey()">Cancel</button></td>
+      </tr>`;
+        }
+        return `<tr>
+      <td>${esc(k.name || '—')}</td>
+      <td class="mono muted">...${esc(tail)}</td>
+      <td class="right">${esc(lim.rpm || '∞')}</td>
+      <td class="right">${esc(lim.req_per_day || '∞')}</td>
+      <td class="right">${lim.tokens_per_day ? fmt.tok(lim.tokens_per_day) : '∞'}</td>
+      <td class="right">${lim.cost_per_day ? fmt.usd(lim.cost_per_day) : '∞'}</td>
+      <td class="right muted">${fmt.num(used.req_today)}</td>
+      <td class="muted">${allowed.length ? esc(allowed.join(', ')) : 'all'}</td>
+      <td>${statusPill}</td>
+      <td style="white-space:nowrap"><button class="btn" onclick="startEditAccessKey(${jsarg(tail)})">Edit</button> <button class="btn" onclick="runAction(this,()=>revokeAccessKey(${jsarg(tail)}))">Revoke</button></td>
+    </tr>`;
+    }).join('');
+}
+function renderScopeCheckboxes(selected) {
+    const sel = new Set(selected || []);
+    return scopeableProviders().map(name => {
+        const n = (configProviders && configProviders.key_counts || {})[name];
+        const cnt = n != null ? `<span class="cnt">${fmt.num(n)} key${n === 1 ? '' : 's'}</span>` : '';
+        const checked = sel.has(name) ? ' checked' : '';
+        return `<label class="scope-item"><input type="checkbox" value="${attr(name)}"${checked}> ${esc(name)}${cnt}</label>`;
+    }).join('');
+}
+function startEditAccessKey(tail) { editingKeyTail = tail; renderAccessKeys(true); }
+function cancelEditAccessKey() { editingKeyTail = null; renderAccessKeys(); }
+async function saveEditAccessKey(tail) {
+    const scopeEl = document.getElementById(`edit-scope-${tail}`);
+    const allowedProviders = scopeEl ? [...scopeEl.querySelectorAll('input:checked')].map(el => el.value) : [];
+    const body = {
+        name: document.getElementById(`edit-name-${tail}`).value,
+        rpm: document.getElementById(`edit-rpm-${tail}`).value,
+        req_per_day: document.getElementById(`edit-reqday-${tail}`).value,
+        tokens_per_day: document.getElementById(`edit-tokday-${tail}`).value,
+        cost_per_day: document.getElementById(`edit-costday-${tail}`).value,
+        allowed_providers: allowedProviders,
+    };
+    try {
+        const r = await adminFetch('/v1/config/proxy-keys/' + encodeURIComponent(tail), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const d = await r.json();
+        if (!r.ok) {
+            alert(apiError(d) || 'Failed to save.');
+            return;
+        }
+        editingKeyTail = null;
+        await refresh();
+    }
+    catch (e) {
+        alert('Network error: ' + e.message);
+    }
+}
+async function revokeAccessKey(tail) {
+    if (!confirm('Revoke access key ...' + tail + '? Anyone using it will lose access immediately.'))
+        return;
+    try {
+        const r = await adminFetch('/v1/config/proxy-keys/' + encodeURIComponent(tail), {
+            method: 'DELETE',
+            headers: {},
+        });
+        const d = await r.json();
+        if (!r.ok) {
+            alert(apiError(d) || 'Failed to revoke.');
+            return;
+        }
+        await refresh();
+    }
+    catch (e) {
+        alert('Network error: ' + e.message);
+    }
+}
+async function createAccessKey() {
+    const checked = [...document.querySelectorAll('#ak-provider-scope input:checked')].map(el => el.value);
+    const body = {
+        name: document.getElementById('ak-name').value,
+        rpm: document.getElementById('ak-rpm').value,
+        req_per_day: document.getElementById('ak-reqday').value,
+        tokens_per_day: document.getElementById('ak-tokday').value,
+        cost_per_day: document.getElementById('ak-costday').value,
+        allowed_providers: checked,
+    };
+    try {
+        const r = await adminFetch('/v1/config/proxy-keys', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const d = await r.json();
+        if (!r.ok) {
+            setMsg('ak-create-msg', apiError(d) || 'Failed to create key.', false);
+            return;
+        }
+        ['ak-name', 'ak-rpm', 'ak-reqday', 'ak-tokday', 'ak-costday'].forEach(id => document.getElementById(id).value = '');
+        document.querySelectorAll('#ak-provider-scope input:checked').forEach(el => el.checked = false);
+        setMsg('ak-create-msg', 'Key created.', true);
+        document.getElementById('new-key-value').value = d.key;
+        document.getElementById('new-key-panel').style.display = 'block';
+        document.getElementById('new-key-panel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        await refresh();
+    }
+    catch (e) {
+        setMsg('ak-create-msg', 'Network error: ' + e.message, false);
+    }
+}
+function copyNewKey() {
+    const el = document.getElementById('new-key-value');
+    el.select();
+    navigator.clipboard?.writeText(el.value).catch(() => document.execCommand('copy'));
+}
+function dismissNewKey() {
+    document.getElementById('new-key-panel').style.display = 'none';
+    document.getElementById('new-key-value').value = '';
+}
+// ── model capabilities (per-provider, per-model rating/tools/reasoning) ──────
+function renderModelCaps() {
+    const tbody = document.getElementById('model-caps-tbody');
+    if (!tbody || !statusData)
+        return;
+    const prov = statusData.providers || {};
+    const rows = [];
+    Object.entries(prov).forEach(([name, p]) => {
+        const caps = p.model_caps;
+        if (caps && caps.length) {
+            caps.forEach(mc => rows.push({ provider: name, model: mc.model, rating: mc.rating,
+                tools: mc.supports_tools, reasoning: mc.reasoning }));
+        }
+        else if (p.model) {
+            rows.push({ provider: name, model: p.model, rating: p.rating,
+                tools: p.supports_tools, reasoning: p.reasoning });
+        }
+    });
+    if (!rows.length) {
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:18px">No providers configured</td></tr>';
+        return;
+    }
+    rows.sort((a, b) => a.provider.localeCompare(b.provider) || (a.rating || 9) - (b.rating || 9));
+    tbody.innerHTML = rows.map(r => `<tr>
+    <td>${esc(r.provider)}</td>
+    <td class="mono muted">${esc(r.model || '—')}</td>
+    <td>${ratingPips(r.rating)}</td>
+    <td>${r.tools ? '<span class="pill pill-ok">yes</span>' : '<span class="pill pill-grey">no</span>'}</td>
+    <td>${r.reasoning ? '<span class="pill pill-ok">yes</span>' : '<span class="pill pill-grey">no</span>'}</td>
+  </tr>`).join('');
+}
+</script>
+</body>
+</html>

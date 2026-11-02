@@ -28,7 +28,10 @@ if [ -f "$REPO/venv/bin/python" ]; then
 else
   PYTHON="${PYTHON:-python3}"
 fi
-PORT="${PORT:-8319}"
+ENV_FILE="${HR_ENV_FILE:-$REPO/.env}"
+configured_port=""
+if [ -f "$ENV_FILE" ]; then configured_port="$(sed -n 's/^[[:space:]]*PORT=//p' "$ENV_FILE" | head -1)"; fi
+PORT="${PORT:-${configured_port:-8319}}"
 SERVICE="${HERMES_ROUTER_SERVICE:-hermes-router}"
 
 log() { printf '\033[1;36m[restart]\033[0m %s\n' "$*"; }
@@ -39,7 +42,8 @@ ok()  { printf '\033[1;32m[restart]\033[0m %s\n' "$*"; }
 health_ok() {
   command -v curl >/dev/null 2>&1 || return 2
   for _ in $(seq 1 15); do
-    curl -fsS "http://localhost:${PORT}/health" >/dev/null 2>&1 && return 0
+    if [ -n "${ROUTER_PID:-}" ] && ! kill -0 "$ROUTER_PID" 2>/dev/null; then return 1; fi
+    curl -fsS --max-time 2 "http://localhost:${PORT}/health" >/dev/null 2>&1 && return 0
     sleep 1
   done
   return 1
@@ -55,10 +59,25 @@ report_health() {
 }
 
 # 1) systemd path -----------------------------------------------------------------
-if command -v systemctl >/dev/null 2>&1 \
-   && systemctl cat "${SERVICE}.service" >/dev/null 2>&1; then
+scope=""
+if command -v systemctl >/dev/null 2>&1; then
+  if systemctl cat "${SERVICE}.service" >/dev/null 2>&1; then scope="system"
+  elif systemctl --user cat "${SERVICE}.service" >/dev/null 2>&1; then scope="user"; fi
+fi
+if [ -n "$scope" ]; then
+  if [ "$scope" = "user" ]; then
+    unit_directory="$(systemctl --user show --property=WorkingDirectory --value "${SERVICE}.service" 2>/dev/null)"
+  else
+    unit_directory="$(systemctl show --property=WorkingDirectory --value "${SERVICE}.service" 2>/dev/null)"
+  fi
+  if [ "$unit_directory" != "$REPO" ]; then
+    err "service '${SERVICE}' does not belong to this installation; choose its HERMES_ROUTER_SERVICE name"
+    exit 1
+  fi
   log "restarting systemd service '${SERVICE}'…"
-  if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+  if [ "$scope" = "user" ]; then
+    systemctl --user restart "${SERVICE}.service" || { err "systemctl --user restart failed."; exit 1; }
+  elif [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
     sudo systemctl restart "$SERVICE" || { err "systemctl restart failed."; exit 1; }
   else
     systemctl restart "$SERVICE" || { err "systemctl restart failed."; exit 1; }
@@ -68,26 +87,36 @@ if command -v systemctl >/dev/null 2>&1 \
 fi
 
 # 2) standalone process path ------------------------------------------------------
-# Find a running router.py belonging to this repo (best-effort).
-pids="$(pgrep -f "${REPO}/router.py" 2>/dev/null || pgrep -f "router.py" 2>/dev/null || true)"
-if [ -n "$pids" ]; then
-  log "stopping running router (pid: $(echo "$pids" | tr '\n' ' '))…"
-  # shellcheck disable=SC2086
-  kill $pids 2>/dev/null || true
+# Only stop a tracked Python process whose command names this installation.
+pid="$(cat "$REPO/router.pid" 2>/dev/null || true)"
+if [ -n "$pid" ]; then
+  if ! [[ "$pid" =~ ^[0-9]{1,10}$ ]] || [ "$pid" -le 1 ]; then
+    err "invalid router.pid; inspect it before restarting"; exit 1
+  fi
+fi
+if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+  executable="$(ps -p "$pid" -o comm= 2>/dev/null)"
+  command_line="$(ps -p "$pid" -o args= 2>/dev/null)"
+  case "${executable##*/}" in python*|pypy*) ;; *) err "tracked PID is not Python; refusing to stop it"; exit 1;; esac
+  case " $command_line " in *" ${REPO}/router.py "*) ;; *) err "tracked PID belongs to another process; refusing to stop it"; exit 1;; esac
+  log "stopping tracked router (pid: $pid)…"
+  kill "$pid" || { err "could not stop tracked router"; exit 1; }
   for _ in $(seq 1 10); do
-    pgrep -f "${REPO}/router.py" >/dev/null 2>&1 || break
+    kill -0 "$pid" 2>/dev/null || break
     sleep 1
   done
-  # force-kill anything still alive
-  pids="$(pgrep -f "${REPO}/router.py" 2>/dev/null || true)"
-  # shellcheck disable=SC2086
-  [ -n "$pids" ] && kill -9 $pids 2>/dev/null || true
+  if kill -0 "$pid" 2>/dev/null; then err "tracked router did not stop; inspect it before retrying"; exit 1; fi
 else
-  log "no running router found — starting a fresh one."
+  log "no live tracked router found."
+fi
+if curl -fsS --max-time 2 "http://localhost:${PORT}/health" >/dev/null 2>&1; then
+  err "port $PORT has an untracked server; stop its foreground process or use its service manager"; exit 1
 fi
 
 log "launching router in the background (logging to ${REPO}/router.log)…"
 nohup "$PYTHON" "$REPO/router.py" >> "$REPO/router.log" 2>&1 &
+ROUTER_PID=$!
+(umask 077; printf '%s\n' "$ROUTER_PID" > "$REPO/router.pid") || { err "could not save router.pid"; exit 1; }
 disown 2>/dev/null || true
 
 report_health

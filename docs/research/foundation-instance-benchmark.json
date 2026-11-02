@@ -1,0 +1,150 @@
+{
+  "python": "3.13.14",
+  "platform": "Windows-11-10.0.26300-SP0",
+  "samples_per_case": 7,
+  "probe_delay_ms": 10,
+  "max_workers": 4,
+  "baseline": "Emulated previous serial live serializer in current authenticated Flask endpoint",
+  "results": [
+    {
+      "instances": 1,
+      "serial_ms": [
+        22.217,
+        21.207,
+        21.616,
+        22.038,
+        21.606,
+        21.475,
+        21.944
+      ],
+      "cold_snapshot_ms": [
+        1.489,
+        0.755,
+        0.575,
+        0.511,
+        0.561,
+        0.479,
+        0.476
+      ],
+      "warm_snapshot_ms": [
+        0.537,
+        0.554,
+        0.447,
+        0.461,
+        0.477,
+        0.426,
+        0.449
+      ],
+      "serial_median_ms": 21.616,
+      "cold_median_ms": 0.561,
+      "warm_median_ms": 0.461,
+      "background_checks": 1,
+      "peak_parallel_checks": 1
+    },
+    {
+      "instances": 5,
+      "serial_ms": [
+        105.368,
+        104.382,
+        104.077,
+        105.556,
+        105.296,
+        104.058,
+        105.033
+      ],
+      "cold_snapshot_ms": [
+        2.811,
+        1.11,
+        0.753,
+        0.727,
+        0.61,
+        0.614,
+        0.781
+      ],
+      "warm_snapshot_ms": [
+        0.839,
+        0.915,
+        0.969,
+        1.084,
+        1.199,
+        0.932,
+        0.736
+      ],
+      "serial_median_ms": 105.033,
+      "cold_median_ms": 0.753,
+      "warm_median_ms": 0.932,
+      "background_checks": 5,
+      "peak_parallel_checks": 4
+    },
+    {
+      "instances": 10,
+      "serial_ms": [
+        209.409,
+        210.932,
+        208.388,
+        208.808,
+        209.364,
+        207.175,
+        208.911
+      ],
+      "cold_snapshot_ms": [
+        1.921,
+        0.835,
+        1.026,
+        0.684,
+        0.77,
+        0.999,
+        1.026
+      ],
+      "warm_snapshot_ms": [
+        0.873,
+        0.808,
+        1.041,
+        3.345,
+        1.033,
+        0.73,
+        0.69
+      ],
+      "serial_median_ms": 208.911,
+      "cold_median_ms": 0.999,
+      "warm_median_ms": 0.873,
+      "background_checks": 10,
+      "peak_parallel_checks": 4
+    },
+    {
+      "instances": 50,
+      "serial_ms": [
+        1040.951,
+        1039.457,
+        1043.855,
+        1072.431,
+        1051.748,
+        1037.959,
+        1042.023
+      ],
+      "cold_snapshot_ms": [
+        3.806,
+        2.692,
+        2.417,
+        2.057,
+        1.76,
+        1.547,
+        2.47
+      ],
+      "warm_snapshot_ms": [
+        2.129,
+        1.887,
+        1.591,
+        2.443,
+        2.455,
+        2.205,
+        1.835
+      ],
+      "serial_median_ms": 1042.023,
+      "cold_median_ms": 2.417,
+      "warm_median_ms": 2.129,
+      "background_checks": 50,
+      "peak_parallel_checks": 4
+    }
+  ]
+}

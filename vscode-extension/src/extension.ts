@@ -16,7 +16,15 @@ function makeClient(): RouterClient {
 export function activate(context: vscode.ExtensionContext) {
   const out = vscode.window.createOutputChannel("hermes-router");
   const statusBar = new StatusBar();
-  const dashboard = new DashboardProvider(makeClient);
+  // Owner credentials are scoped to this router and never stored in settings.
+  const adminSecret = () => "hermesRouter.admin:" + makeClient().dashboardUrl();
+  const makeAdminClient = async () => {
+    const credential = await context.secrets.get(adminSecret());
+    if (!credential) throw new Error("Owner controls need an administrator credential. Run Hermes Router: Set Administrator Credential. Your existing apiKey remains for chat.");
+    const cfg = vscode.workspace.getConfiguration("hermesRouter");
+    return new RouterClient(cfg.get<string>("baseUrl", "http://localhost:8319"), credential);
+  };
+  const dashboard = new DashboardProvider(makeAdminClient);
 
   context.subscriptions.push(
     out,
@@ -35,20 +43,25 @@ export function activate(context: vscode.ExtensionContext) {
   // a `status` or `error` message to it, so the panel can never get stuck on
   // "Loading…". The /health probe only feeds the status bar; a health blip must not
   // block the panel from rendering (that was the old bug).
+  let refreshing = false;
   const refresh = async () => {
-    const status = await dashboard.refresh();
-    if (status) {
-      statusBar.setHealthy(status);
-      return;
-    }
-    // getStatus failed (unreachable or bad key). Fall back to /health so the status
-    // bar can distinguish "router down" from "router up but /v1/status rejected".
+    if (refreshing) return;
+    refreshing = true;
     try {
-      await makeClient().getHealth();
-      statusBar.setUnknown();
-    } catch (e: any) {
-      statusBar.setUnreachable(e?.message || "no response");
-    }
+      const status = await dashboard.refresh();
+      if (status) {
+        statusBar.setHealthy(status);
+        return;
+      }
+      // getStatus failed (unreachable or bad key). Fall back to /health so the status
+      // bar can distinguish "router down" from "router up but /v1/status rejected".
+      try {
+        await makeClient().getHealth();
+        statusBar.setUnknown();
+      } catch (e: any) {
+        statusBar.setUnreachable(e?.message || "no response");
+      }
+    } finally { refreshing = false; }
   };
 
   // ── Commands ─────────────────────────────────────────────────────────────────
@@ -67,11 +80,22 @@ export function activate(context: vscode.ExtensionContext) {
     await vscode.env.openExternal(vscode.Uri.parse(url));
   });
   reg("hermesRouter.refresh", refresh);
+  reg("hermesRouter.setAdminCredential", async () => {
+    const credential = await vscode.window.showInputBox({
+      title: "Hermes Router administrator credential",
+      prompt: "Optional: enables owner status and remote restart. Stored in VS Code SecretStorage for this router. Your application key setting continues to power chat.",
+      password: true, ignoreFocusOut: true,
+    });
+    if (credential === undefined) return;
+    if (credential.trim()) await context.secrets.store(adminSecret(), credential.trim());
+    else await context.secrets.delete(adminSecret());
+    await refresh();
+  });
 
   reg("hermesRouter.restart", async () => {
     if (!isDocker() && !isLocal()) {
       try {
-        await makeClient().restart();
+        await (await makeAdminClient()).restart();
         vscode.window.showInformationMessage("Restart requested. Hermes Router will reconnect in a few seconds.");
       } catch (e: any) {
         vscode.window.showWarningMessage(e?.message || "Could not restart the remote router.");

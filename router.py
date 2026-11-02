@@ -19,15 +19,15 @@ Supported providers (configure via .env or auth.json):
   Local: OpenAI-compatible servers such as Ollama or LM Studio
 
 Quick start:
-  pip install -r requirements.txt
-  cp .env.example .env   # add your API keys
-  python router.py
+  Use install.ps1/start.ps1 on Windows or install.sh on Linux/macOS.
+  See documentation/setup.md for the first provider and request.
 """
 
-import json, os, time, threading, logging, hashlib, hmac, itertools, re, sqlite3, subprocess, secrets, uuid
+import json, os, time, threading, logging, hashlib, hmac, itertools, re, sqlite3, subprocess, secrets, uuid, math, shutil
 from pathlib import Path
+from functools import wraps
 from collections import deque, OrderedDict, defaultdict
-from flask import Flask, request, jsonify, Response, stream_with_context, redirect
+from flask import Flask, request, jsonify, Response, stream_with_context, redirect, g, has_request_context
 from urllib.parse import urlparse, urlunparse
 import requests
 
@@ -44,7 +44,7 @@ def _load_env(path: str = ".env"):
             k, _, v = line.partition("=")
             os.environ.setdefault(k.strip(), v.strip())
 
-_load_env()
+_load_env(os.environ.get("HR_ENV_FILE", ".env"))
 
 logging.basicConfig(
     level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO),
@@ -72,46 +72,44 @@ PORT              = int(os.environ.get("PORT", 8319))
 HOST              = os.environ.get("HOST", "0.0.0.0")
 
 # Well-known placeholder values shipped in .env.example / the old hardcoded
-# fallback. PROXY_API_KEYS now gates real config-write power (add provider keys,
-# mint/revoke access keys, restart) via the dashboard, not just chat — so an
-# install left on one of these would share a publicly-documented credential with
-# every other install that never edited it. See _ensure_real_proxy_key below.
+# fallback. Application inference keys must also be unique per installation.
 _KNOWN_DEFAULT_PROXY_KEYS = {"sk-router-1", "sk-my-router-key-1"}
 
 
-def _ensure_real_proxy_key(env_path: str = ".env") -> list[str]:
-    """If no PROXY_API_KEYS is set, or it's still one of the placeholder values
-    above, generate a real random key and persist it to .env — so every install
-    gets a unique dashboard/API secret on first boot without the operator needing
-    to remember to change it. A no-op once a real key is in place."""
-    raw = os.environ.get("PROXY_API_KEYS", "").strip()
-    current = [k.strip() for k in raw.split(",") if k.strip()]
-    if current and not all(k in _KNOWN_DEFAULT_PROXY_KEYS for k in current):
-        return current   # already a real, user-set key (or keys) — leave it alone
-
-    new_key = "sk-router-" + secrets.token_urlsafe(24)
-    p = Path(env_path)
-    lines = p.read_text().splitlines() if p.exists() else []
-    found, out = False, []
-    for line in lines:
-        if line.strip().startswith("PROXY_API_KEYS="):
-            out.append(f"PROXY_API_KEYS={new_key}")
-            found = True
-        else:
-            out.append(line)
-    if not found:
-        out.append(f"PROXY_API_KEYS={new_key}")
-    p.write_text("\n".join(out) + "\n")
-    os.environ["PROXY_API_KEYS"] = new_key
-    log.warning("=" * 72)
-    log.warning("No unique proxy API key was configured — generated one and saved")
-    log.warning(f"it to {env_path}. Use this to access the dashboard and the API:")
-    log.warning(f"    {new_key}")
-    log.warning("=" * 72)
-    return [new_key]
+def _ensure_secret(name: str, prefix: str, env_path: str) -> str:
+    current = os.environ.get(name, "").strip()
+    if current and current not in _KNOWN_DEFAULT_PROXY_KEYS:
+        return current
+    value = prefix + secrets.token_urlsafe(32)
+    path = Path(env_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = path.read_text().splitlines() if path.exists() else []
+    lines = [line for line in lines if not line.strip().startswith(name + "=")]
+    lines.append(name + "=" + value)
+    temp = path.with_name(path.name + ".tmp")
+    temp.write_text("\n".join(lines) + "\n")
+    try:
+        os.chmod(temp, 0o600)
+    except OSError:
+        pass
+    os.replace(temp, path)
+    os.environ[name] = value
+    log.warning("Generated %s; retrieve it locally from %s", name, path)
+    return value
 
 
-PROXY_API_KEYS    = _ensure_real_proxy_key()
+def _ensure_real_proxy_key(env_path: str | None = None) -> list[str]:
+    current = [k.strip() for k in os.environ.get("PROXY_API_KEYS", "").split(",") if k.strip()]
+    if current and all(k in _KNOWN_DEFAULT_PROXY_KEYS for k in current):
+        os.environ.pop("PROXY_API_KEYS", None)
+    return [k.strip() for k in _ensure_secret("PROXY_API_KEYS", "sk-router-", env_path or os.environ.get("HR_ENV_FILE", ".env")).split(",") if k.strip()]
+
+
+PROXY_API_KEYS = _ensure_real_proxy_key()
+ADMIN_API_KEY = _ensure_secret("ADMIN_API_KEY", "sk-admin-", os.environ.get("HR_ENV_FILE", ".env"))
+if ADMIN_API_KEY in PROXY_API_KEYS:
+    raise ValueError("ADMIN_API_KEY must differ from application keys")
+_ACCESS_LOCK = threading.RLock()
 ROUTER_MODEL      = os.environ.get("ROUTER_MODEL_ID", "hermes-router")
 CACHE_TTL         = int(os.environ.get("CACHE_TTL_SECONDS", 300))   # 0 = disabled
 CACHE_MAX_SIZE    = int(os.environ.get("CACHE_MAX_SIZE", 100))
@@ -148,6 +146,8 @@ INSTANCE_FILE     = Path(os.environ.get("HERMES_INSTANCES_FILE", "./instances.js
 INSTANCE_DOCKER_IMAGE = os.environ.get("HERMES_INSTANCE_IMAGE", "hermes-router:latest")
 INSTANCE_CONTAINER_PORT = int(os.environ.get("HERMES_INSTANCE_CONTAINER_PORT", "8319"))
 INSTANCE_DOCKER_PREFIX = os.environ.get("HERMES_INSTANCE_DOCKER_PREFIX", "hermes-router")
+REQUEST_TIMEOUT = max(0.1, float(os.environ.get("ROUTER_REQUEST_TIMEOUT_SECONDS", "180")))
+SEMANTIC_EMBED_TIMEOUT = max(0.1, float(os.environ.get("SEMANTIC_EMBED_TIMEOUT_SECONDS", "3")))
 # In-memory request log: last N requests kept in a ring buffer. Pure RAM, no disk
 # writes. Set REQUEST_LOG_SIZE=0 to disable. Exposed via GET /v1/logs.
 REQUEST_LOG_SIZE  = max(0, int(os.environ.get("REQUEST_LOG_SIZE", "500")))
@@ -269,7 +269,7 @@ class CodexCredentials:
             doc = {}
         doc["codex_accounts"] = list(self.accounts.values())
         try:
-            AUTH_FILE.write_text(json.dumps(doc, indent=2) + "\n")
+            _atomic_write_text(AUTH_FILE, json.dumps(doc, indent=2) + "\n")
             os.chmod(AUTH_FILE, 0o600)
         except Exception as e:
             log.warning(f"  could not persist codex tokens: {e}")
@@ -389,6 +389,7 @@ PROVIDER_QUALITY_RANKS: dict = {
     "huggingface": 90, "local": 95,
 }
 _provider_state: dict = {}   # populated at startup by _initialize_ratings()
+_INITIALIZATION_STATE = {"state": "initializing"}
 # Per-(provider, model) capability — rating + tool/reasoning support. Keyed by
 # (provider_name, model). Lets smart routing treat each model in a provider's
 # comma-separated list as its own candidate, instead of inheriting the primary's.
@@ -874,27 +875,53 @@ def _env_write_line(key: str, value: str | None) -> None:
             out.append(line)
     if not found and value is not None:
         out.append(f"{key}={value}")
-    ENV_FILE_PATH.write_text("\n".join(out) + "\n")
+    _atomic_write_text(ENV_FILE_PATH, "\n".join(out) + "\n")
 
 
+def _atomic_write_text(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
+    try:
+        temp.write_text(text)
+        try:
+            os.chmod(temp, 0o600)
+        except OSError:
+            pass
+        os.replace(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def _locked_access(fn):
+    @wraps(fn)
+    def locked(*args, **kwargs):
+        with _ACCESS_LOCK:
+            return fn(*args, **kwargs)
+    return locked
+
+
+_env_write_line = _locked_access(_env_write_line)
+
+
+def _read_auth_doc():
+    doc = json.loads(AUTH_FILE.read_text()) if AUTH_FILE.exists() else {}
+    if not isinstance(doc, dict):
+        raise ValueError("auth.json must contain an object")
+    return doc
+
+
+@_locked_access
 def _auth_json_add_key(provider: str, key: str) -> tuple[bool, int]:
     """Append `key` to auth.json's providers[provider] list (creating the file/
     section as needed). Returns (added, total_count) — added=False on duplicate.
     Mirrors scripts/auth.sh's append_key."""
-    doc = {}
-    if AUTH_FILE.exists():
-        try:
-            doc = json.loads(AUTH_FILE.read_text())
-        except Exception:
-            doc = {}
-    if not isinstance(doc, dict):
-        doc = {}
+    doc = _read_auth_doc()
     providers = doc.setdefault("providers", {})
     keys = providers.setdefault(provider, [])
     if key in keys:
         return False, len(keys)
     keys.append(key)
-    AUTH_FILE.write_text(json.dumps(doc, indent=2) + "\n")
+    _atomic_write_text(AUTH_FILE, json.dumps(doc, indent=2) + "\n")
     try:
         os.chmod(AUTH_FILE, 0o600)   # keys are secrets — owner read/write only
     except OSError:
@@ -907,8 +934,7 @@ def _auth_json_add_key(provider: str, key: str) -> tuple[bool, int]:
 # itself (PROXY_API_KEYS) — distinct from provider keys above, which the router
 # uses to authenticate to upstream providers. Lets the dashboard mint new keys
 # for teammates/other apps, with optional per-key budgets, without hand-editing
-# .env/auth.json. Same proxy-key auth as every other /v1/config/* endpoint —
-# this project has one flat admin tier, not per-key permission levels.
+# .env/auth.json. Management requires the separate owner credential/session.
 
 def _generate_proxy_key() -> str:
     """A new, cryptographically random proxy key. Shown once at creation time —
@@ -918,14 +944,9 @@ def _generate_proxy_key() -> str:
 
 
 def _read_proxy_api_keys_live() -> list[str]:
-    """Fresh-read PROXY_API_KEYS from .env (not the process's stale in-memory
-    PROXY_API_KEYS global), so a just-created/revoked key is reflected in the
-    dashboard immediately, before a restart makes it actually active."""
-    raw = _env_read_line("PROXY_API_KEYS")
-    if raw is None:
-        return list(PROXY_API_KEYS)   # .env has no override line — use the running default
-    keys = [k.strip() for k in raw.split(",") if k.strip()]
-    return keys or list(PROXY_API_KEYS)
+    """Runtime state is authoritative; dashboard mutations update it under lock."""
+    with _ACCESS_LOCK:
+        return list(PROXY_API_KEYS)
 
 
 def _read_proxy_keys_meta() -> dict:
@@ -940,43 +961,50 @@ def _read_proxy_keys_meta() -> dict:
     return pk if isinstance(pk, dict) else {}
 
 
+@_locked_access
 def _write_proxy_key_meta(key: str, patch: dict) -> None:
     """Merge `patch` into auth.json's proxy_keys[key] (creating it if absent)."""
-    doc = {}
-    if AUTH_FILE.exists():
-        try:
-            doc = json.loads(AUTH_FILE.read_text())
-        except Exception:
-            doc = {}
-    if not isinstance(doc, dict):
-        doc = {}
+    doc = _read_auth_doc()
     pk = doc.setdefault("proxy_keys", {})
     spec = pk.get(key, {})
     spec.update(patch)
     pk[key] = spec
-    AUTH_FILE.write_text(json.dumps(doc, indent=2) + "\n")
+    _atomic_write_text(AUTH_FILE, json.dumps(doc, indent=2) + "\n")
     try:
         os.chmod(AUTH_FILE, 0o600)
     except OSError:
         pass
 
 
+@_locked_access
 def _delete_proxy_key_meta(key: str) -> None:
     if not AUTH_FILE.exists():
         return
-    try:
-        doc = json.loads(AUTH_FILE.read_text())
-    except Exception:
-        return
-    if not isinstance(doc, dict):
-        return
+    doc = _read_auth_doc()
     pk = doc.get("proxy_keys")
     if isinstance(pk, dict) and pk.pop(key, None) is not None:
-        AUTH_FILE.write_text(json.dumps(doc, indent=2) + "\n")
+        _atomic_write_text(AUTH_FILE, json.dumps(doc, indent=2) + "\n")
         try:
             os.chmod(AUTH_FILE, 0o600)
         except OSError:
             pass
+
+
+def _persist_access_keys(keys):
+    doc = _read_auth_doc()
+    doc["access_keys"] = keys
+    _atomic_write_text(AUTH_FILE, json.dumps(doc, indent=2) + "\n")
+    PROXY_API_KEYS[:] = keys
+    os.environ["PROXY_API_KEYS"] = ",".join(keys)
+    _reload_access_policy()
+
+
+def _reload_access_policy():
+    global KEY_LIMITS, KEY_LIMITS_ON, KEY_PROVIDER_SCOPE, KEY_MODEL_SCOPE
+    KEY_LIMITS = _load_key_limits()
+    KEY_LIMITS_ON = any(any(v.values()) for v in KEY_LIMITS.values())
+    KEY_PROVIDER_SCOPE = _load_key_provider_scope()
+    KEY_MODEL_SCOPE = _load_key_model_scope()
 
 
 def _resolve_proxy_key_by_tail(tail: str, keys: list[str]) -> str | None:
@@ -984,15 +1012,19 @@ def _resolve_proxy_key_by_tail(tail: str, keys: list[str]) -> str | None:
     return matches[0] if len(matches) == 1 else None
 
 
-def _trigger_restart(delay_s: float = 1.2) -> None:
-    """Restart the router shortly after this call returns, so the HTTP response
-    triggering it has time to reach the client first. Delegates to the same,
-    already-tested scripts/restart.sh used by `hr restart` (handles both the
-    systemd and standalone-process cases) rather than duplicating that logic."""
+def _trigger_restart(delay_s: float = 1.2) -> bool:
+    """Schedule a restart only for a verified standalone process managed by the CLI."""
     script = Path(__file__).resolve().parent / "scripts" / "restart.sh"
-    if not script.exists():
-        log.warning("restart requested but scripts/restart.sh not found — skipping")
-        return
+    if os.name == "nt" or not script.exists() or not shutil.which("bash"):
+        return False
+    # Service/container permissions cannot be established by accepting an HTTP request.
+    if os.environ.get("INVOCATION_ID") or Path("/.dockerenv").exists():
+        return False
+    try:
+        if int((script.parent.parent / "router.pid").read_text().strip()) != os.getpid():
+            return False
+    except (OSError, ValueError):
+        return False
 
     def _go():
         try:
@@ -1004,6 +1036,7 @@ def _trigger_restart(delay_s: float = 1.2) -> None:
             log.error(f"restart trigger failed: {e}")
 
     threading.Timer(delay_s, _go).start()
+    return True
 
 
 # ── Instance registry / Docker launcher ────────────────────────────────────────
@@ -1012,6 +1045,79 @@ def _trigger_restart(delay_s: float = 1.2) -> None:
 # containers created by this process when the host has Docker available.
 
 _INSTANCE_LOCK = threading.Lock()
+_INSTANCE_SNAPSHOT_LOCK = threading.Lock()
+_INSTANCE_SNAPSHOTS = {}
+_INSTANCE_PROBING = set()
+_INSTANCE_GENERATIONS = {}
+_INSTANCE_PROBE_SLOTS = threading.BoundedSemaphore(4)
+_INSTANCE_FRESH_SECONDS = 15
+
+
+def _instance_identity(entry):
+    owner = (os.path.abspath(INSTANCE_FILE), entry.get("id"))
+    return (*owner, hashlib.sha256(json.dumps(entry, sort_keys=True).encode()).hexdigest(),
+            _INSTANCE_GENERATIONS.get(owner, 0))
+
+
+def _invalidate_instance_snapshot(entry):
+    owner = (os.path.abspath(INSTANCE_FILE), entry.get("id"))
+    with _INSTANCE_SNAPSHOT_LOCK:
+        _INSTANCE_GENERATIONS[owner] = _INSTANCE_GENERATIONS.get(owner, 0) + 1
+        for identity in list(_INSTANCE_SNAPSHOTS):
+            if identity[:2] == owner:
+                del _INSTANCE_SNAPSHOTS[identity]
+
+
+def _refresh_instance(entry, identity, registry_file):
+    try:
+        snapshot = {"live": _probe_instance(entry), "checked_at": _utc_now(),
+                    "checked_ts": time.monotonic()}
+        if entry.get("mode") == "docker":
+            snapshot["docker"] = _docker_state(entry)
+        with _INSTANCE_LOCK:
+            if INSTANCE_FILE != registry_file:
+                return
+            _, current = _find_instance(_read_instances_doc(), entry.get("id"))
+            if current is None or _instance_identity(current) != identity:
+                return
+            with _INSTANCE_SNAPSHOT_LOCK:
+                _INSTANCE_SNAPSHOTS[identity] = snapshot
+    except Exception:
+        log.warning("Instance refresh failed", exc_info=True)
+    finally:
+        with _INSTANCE_SNAPSHOT_LOCK:
+            _INSTANCE_PROBING.discard(identity)
+        _INSTANCE_PROBE_SLOTS.release()
+
+
+def _instance_snapshot(entry):
+    identity = _instance_identity(entry)
+    with _INSTANCE_SNAPSHOT_LOCK:
+        snapshot = dict(_INSTANCE_SNAPSHOTS.get(identity, {}))
+        age = max(0, time.monotonic() - snapshot["checked_ts"]) if snapshot else None
+        fresh = age is not None and age < _INSTANCE_FRESH_SECONDS
+        if not fresh and identity not in _INSTANCE_PROBING and _INSTANCE_PROBE_SLOTS.acquire(False):
+            _INSTANCE_PROBING.add(identity)
+            # Copy nested env data before handing mutable configuration to a worker.
+            thread = threading.Thread(target=_refresh_instance,
+                                      args=(json.loads(json.dumps(entry)), identity, INSTANCE_FILE), daemon=True)
+            try:
+                thread.start()
+            except Exception:
+                _INSTANCE_PROBING.discard(identity)
+                _INSTANCE_PROBE_SLOTS.release()
+                raise
+        checking = identity in _INSTANCE_PROBING
+    snapshot.pop("checked_ts", None)
+    snapshot.setdefault("live", {"status": "unknown", "health_ok": False, "auth_ok": None,
+                                  "latency_ms": None, "message": "Awaiting background check"})
+    if entry.get("mode") == "docker":
+        snapshot.setdefault("docker", {"status": "unknown", "available": None,
+                                       "exists": None, "running": None, "message": "Awaiting background check"})
+    snapshot["freshness"] = {"state": "fresh" if fresh else "checking" if checking else "stale" if age is not None else "pending",
+                             "age_seconds": round(age, 1) if age is not None else None,
+                             "checked_at": snapshot.pop("checked_at", None)}
+    return snapshot
 
 
 def _utc_now() -> str:
@@ -1040,12 +1146,22 @@ def _read_instances_doc() -> dict:
 
 
 def _write_instances_doc(doc: dict) -> None:
+    previous = _read_instances_doc().get("instances", [])
     INSTANCE_FILE.parent.mkdir(parents=True, exist_ok=True)
     INSTANCE_FILE.write_text(json.dumps(doc, indent=2) + "\n")
     try:
         os.chmod(INSTANCE_FILE, 0o600)
     except OSError:
         pass
+    current = {e.get("id"): e for e in doc.get("instances", [])}
+    for entry in previous:
+        if current.get(entry.get("id")) != entry:
+            _invalidate_instance_snapshot(entry)
+    identities = {_instance_identity(e) for e in doc.get("instances", [])}
+    with _INSTANCE_SNAPSHOT_LOCK:
+        for identity in list(_INSTANCE_SNAPSHOTS):
+            if identity not in identities:
+                del _INSTANCE_SNAPSHOTS[identity]
 
 
 def _normalize_instance_base_url(raw: str | None, host_port: int | None = None) -> tuple[str | None, str | None]:
@@ -1094,9 +1210,7 @@ def _instance_public(entry: dict, *, include_live: bool = True) -> dict:
         "secret_keys": sorted(k for k in env if "KEY" in k or "TOKEN" in k or "SECRET" in k),
     }
     if include_live:
-        out["live"] = _probe_instance(entry)
-        if entry.get("mode") == "docker":
-            out["docker"] = _docker_state(entry)
+        out.update(_instance_snapshot(entry))
     return out
 
 
@@ -1259,6 +1373,7 @@ def _probe_instance(entry: dict) -> dict:
     started = time.time()
     result = {"status": "unknown", "health_ok": False, "auth_ok": None,
               "latency_ms": None, "message": ""}
+    resp = None
     try:
         resp = _HTTP.get(_instance_health_url(base_url), timeout=1.5)
         result["latency_ms"] = round((time.time() - started) * 1000, 1)
@@ -1270,9 +1385,13 @@ def _probe_instance(entry: dict) -> dict:
         result["status"] = "unreachable"
         result["message"] = str(e)[:160]
         return result
+    finally:
+        if resp is not None:
+            resp.close()
 
     api_key = entry.get("api_key") or ""
     if api_key:
+        mr = None
         try:
             mr = _HTTP.get(_instance_models_url(base_url),
                            headers={"Authorization": "Bearer " + api_key},
@@ -1286,6 +1405,9 @@ def _probe_instance(entry: dict) -> dict:
         except Exception as e:
             result["auth_ok"] = False
             result["message"] = f"health ok, models check failed: {str(e)[:120]}"
+        finally:
+            if mr is not None:
+                mr.close()
     return result
 
 
@@ -1341,23 +1463,28 @@ def _docker_run_instance(entry: dict) -> tuple[bool, str]:
 def _docker_action(entry: dict, action: str) -> tuple[bool, str]:
     if entry.get("mode") != "docker":
         return False, "This instance is registered as external; Docker actions are unavailable."
-    state = _docker_state(entry)
-    if action == "start":
-        if not state.get("available"):
-            return False, state.get("message") or "Docker unavailable."
-        if not state.get("exists"):
-            return _docker_run_instance(entry)
-        ok, out, _ = _docker_cmd(["start", entry["container_name"]], timeout=15)
-        return ok, out
-    if action == "stop":
-        ok, out, _ = _docker_cmd(["stop", entry["container_name"]], timeout=20)
-        return ok, out
-    if action == "restart":
-        if state.get("exists"):
-            ok, out, _ = _docker_cmd(["restart", entry["container_name"]], timeout=20)
+    _invalidate_instance_snapshot(entry)
+    try:
+        state = _docker_state(entry)
+        if action == "start":
+            if not state.get("available"):
+                return False, state.get("message") or "Docker unavailable."
+            if not state.get("exists"):
+                return _docker_run_instance(entry)
+            ok, out, _ = _docker_cmd(["start", entry["container_name"]], timeout=15)
             return ok, out
-        return _docker_run_instance(entry)
-    return False, f"unknown Docker action: {action}"
+        if action == "stop":
+            ok, out, _ = _docker_cmd(["stop", entry["container_name"]], timeout=20)
+            return ok, out
+        if action == "restart":
+            if state.get("exists"):
+                ok, out, _ = _docker_cmd(["restart", entry["container_name"]], timeout=20)
+                return ok, out
+            return _docker_run_instance(entry)
+        return False, f"unknown Docker action: {action}"
+
+    finally:
+        _invalidate_instance_snapshot(entry)
 
 # ── Credential pool ────────────────────────────────────────────────────────────
 
@@ -2040,6 +2167,26 @@ def _initialize_ratings(providers: list, pool_ref):
         log.warning(f"[ratings] Could not persist state: {e}")
 
 
+def _initialize_providers(providers, pool_ref):
+    """One background worker owns capability discovery and its global snapshots."""
+    global _INITIALIZATION_STATE
+    _INITIALIZATION_STATE = {"state": "initializing"}
+    try:
+        _initialize_ratings(providers, pool_ref)
+    except Exception:
+        _INITIALIZATION_STATE = {"state": "error"}
+        log.exception("Provider capability initialization failed")
+    else:
+        _INITIALIZATION_STATE = {"state": "ready"}
+
+
+def _readiness():
+    state = _INITIALIZATION_STATE["state"]
+    available = sum(bool(_provider_state.get(p["name"], {}).get("available")) for p in PROVIDERS)
+    return {"state": state if state != "ready" or available else "unavailable",
+            "configured_providers": len(PROVIDERS), "available_providers": available}
+
+
 class CredentialPool:
     """Thread-safe key pool with per-key cooldown tracking.
 
@@ -2147,7 +2294,7 @@ class CredentialPool:
 pool = CredentialPool(PROVIDERS)
 
 # Background: validate providers, fix models, assign ratings
-threading.Thread(target=_initialize_ratings, args=(PROVIDERS, pool), daemon=True).start()
+threading.Thread(target=_initialize_providers, args=(PROVIDERS, pool), daemon=True).start()
 
 # ── Per-provider stats ─────────────────────────────────────────────────────────
 
@@ -2242,7 +2389,8 @@ class ProviderStats:
 
     def all_summaries(self) -> dict:
         with self.lock:
-            return {name: self.summary(name) for name in self._data}
+            names = list(self._data)
+        return {name: self.summary(name) for name in names}
 
 
 stats = ProviderStats()
@@ -2469,9 +2617,18 @@ class ResponseCache:
             self.misses += 1
         return None
 
-    def set(self, payload: dict, data: dict, ns: str = "", embedding: list | None = None):
-        if self.ttl <= 0:
+    def _semantic_signature(self, payload):
+        messages = payload.get("messages")
+        if not isinstance(messages, list) or not messages or messages[-1].get("role") != "user" or not isinstance(messages[-1].get("content"), str):
+            return None
+        compatible = {**payload, "messages": [*messages[:-1], {**messages[-1], "content": ""}]}
+        return self._hash(compatible)
+
+    def set(self, payload: dict, data: dict, ns: str = "", embedding=None):
+        if self.ttl <= 0 or self.max_size <= 0:
             return
+        if isinstance(embedding, dict):
+            embedding = {**embedding, "signature": self._semantic_signature(payload)}
         key = self._hash(payload, ns)
         ts  = time.time()
         with self.lock:
@@ -2482,22 +2639,25 @@ class ResponseCache:
             self._store.move_to_end(key)
             self._db_upsert(key, data, ts, ns, embedding)
 
-    def semantic_lookup(self, query_emb: list, ns: str = "") -> dict | None:
+    def semantic_lookup(self, query_emb, ns: str = "", payload: dict | None = None) -> dict | None:
         """Return the cached response whose stored prompt embedding is most similar
         to query_emb (same namespace, same vector dimension), if it clears
         SEMANTIC_THRESHOLD. Bounded linear scan over the LRU (max_size)."""
-        if self.ttl <= 0 or not query_emb:
+        signature = self._semantic_signature(payload or {})
+        if self.ttl <= 0 or not signature or not isinstance(query_emb, dict) or not query_emb.get("identity"):
             return None
         now = time.time()
-        qlen = len(query_emb)
+        vector = query_emb.get("vector") or []
+        qlen = len(vector)
         best_key, best_data, best_sim = None, None, 0.0
         with self.lock:
             for key, (data, ts, ens, emb) in self._store.items():
-                if emb is None or ens != ns or len(emb) != qlen:
+                # Legacy vectors lack provenance and stay exact-only after restart.
+                if not isinstance(emb, dict) or ens != ns or emb.get("signature") != signature or emb.get("identity") != query_emb["identity"] or len(emb.get("vector", [])) != qlen:
                     continue
                 if now - ts >= self.ttl:
                     continue
-                sim = _cosine(query_emb, emb)
+                sim = _cosine(vector, emb["vector"])
                 if sim > best_sim:
                     best_key, best_data, best_sim = key, data, sim
             if best_key is not None and best_sim >= SEMANTIC_THRESHOLD:
@@ -2528,8 +2688,7 @@ cache = ResponseCache(ttl=CACHE_TTL, max_size=CACHE_MAX_SIZE,
 # ── Per-key budgets & rate limits ("virtual keys" lite) ─────────────────────────
 # Each PROXY_API_KEYS entry can carry a requests-per-minute ceiling and per-UTC-day
 # request/token budgets, which helps control usage when a team shares a router.
-# These limits are not an authorization boundary: every valid proxy key can use
-# the router's authenticated configuration endpoints. Limits come
+# Application keys cannot administer the router. Limits come
 # from auth.json under "proxy_keys" ({ "<key>": {"rpm","req_per_day","tokens_per_day"} }),
 # with env-var globals (PROXY_LIMIT_RPM / PROXY_LIMIT_REQ_DAY / PROXY_LIMIT_TOKENS_DAY)
 # as defaults. 0/absent everywhere = unlimited → identical to the prior behavior.
@@ -2558,7 +2717,21 @@ def _load_key_limits() -> dict:
             "tokens_per_day": int(spec.get("tokens_per_day", g_tokens) or 0),
             "cost_per_day":   float(spec.get("cost_per_day", g_cost) or 0),
         }
+        if any(not math.isfinite(v) or v < 0 for v in limits[k].values()):
+            raise ValueError("access-key limits must be finite and nonnegative")
     return limits
+
+# Access-key edits are persisted separately from immutable process environment.
+if AUTH_FILE.exists():
+    try:
+        _saved_keys = json.loads(AUTH_FILE.read_text()).get("access_keys")
+        if isinstance(_saved_keys, list) and all(isinstance(k, str) and k for k in _saved_keys):
+            if ADMIN_API_KEY in _saved_keys:
+                raise ValueError("administrator credential cannot be an application key")
+            PROXY_API_KEYS = _saved_keys
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("cannot safely read access-key state") from exc
+
 
 KEY_LIMITS    = _load_key_limits()
 KEY_LIMITS_ON = any(any(v.values()) for v in KEY_LIMITS.values())
@@ -2588,6 +2761,15 @@ def _load_key_provider_scope() -> dict:
 KEY_PROVIDER_SCOPE = _load_key_provider_scope()
 
 
+def _load_key_model_scope():
+    meta = _read_proxy_keys_meta()
+    return {key: set(meta[key]["allowed_models"]) if meta.get(key, {}).get("allowed_models") else None
+            for key in PROXY_API_KEYS}
+
+
+KEY_MODEL_SCOPE = _load_key_model_scope()
+
+
 def _utc_day() -> str:
     return time.strftime("%Y-%m-%d", time.gmtime())
 
@@ -2596,84 +2778,9 @@ def _secs_to_utc_midnight() -> int:
     return max(1, 86400 - (t.tm_hour * 3600 + t.tm_min * 60 + t.tm_sec))
 
 
-class KeyUsage:
-    """Thread-safe per-key counters: a rolling 60s window for RPM, plus per-UTC-day
-    request and token tallies. In-memory (resets on restart)."""
+from usage_store import KeyUsage
 
-    def __init__(self):
-        self.lock = threading.Lock()
-        self._win  = defaultdict(deque)   # key -> deque[timestamps] within the last 60s
-        self._day  = defaultdict(lambda: {"day": "", "req": 0, "tokens": 0, "cost": 0.0})
-        self._life = defaultdict(lambda: {"req": 0, "tokens": 0, "cost": 0.0})  # since start
-
-    def _roll(self, key, now):
-        w = self._win[key]
-        cutoff = now - 60
-        while w and w[0] < cutoff:
-            w.popleft()
-
-    def _day_bucket(self, key):
-        d = self._day[key]
-        today = _utc_day()
-        if d["day"] != today:
-            d.update(day=today, req=0, tokens=0, cost=0.0)
-        return d
-
-    def check_and_record(self, key, limits):
-        """Atomically enforce this key's limits and, if allowed, count the request
-        (RPM window + per-day + lifetime). `limits` may be all-zero, in which case
-        nothing is gated and the request is simply recorded — so usage analytics
-        work whether or not limits are configured. Returns (ok, retry, reason)."""
-        rpm     = limits.get("rpm", 0)
-        req_day = limits.get("req_per_day", 0)
-        tpd     = limits.get("tokens_per_day", 0)
-        cpd     = limits.get("cost_per_day", 0)
-        now = time.time()
-        with self.lock:
-            d = self._day_bucket(key)
-            self._roll(key, now)
-            if cpd and d["cost"] >= cpd:
-                return (False, _secs_to_utc_midnight(), f"${cpd:g} cost/day")
-            if tpd and d["tokens"] >= tpd:
-                return (False, _secs_to_utc_midnight(), f"{tpd} tokens/day")
-            if rpm and len(self._win[key]) >= rpm:
-                return (False, max(1, int(60 - (now - self._win[key][0]))), f"{rpm} requests/min")
-            if req_day and d["req"] >= req_day:
-                return (False, _secs_to_utc_midnight(), f"{req_day} requests/day")
-            self._win[key].append(now)
-            d["req"] += 1
-            self._life[key]["req"] += 1
-            return (True, 0, "")
-
-    def add_tokens(self, key, n):
-        n = int(n or 0)
-        if not n:
-            return
-        with self.lock:
-            self._day_bucket(key)["tokens"] += n
-            self._life[key]["tokens"] += n
-
-    def add_cost(self, key, usd):
-        usd = float(usd or 0)
-        if not usd:
-            return
-        with self.lock:
-            self._day_bucket(key)["cost"] += usd
-            self._life[key]["cost"] += usd
-
-    def snapshot(self, key):
-        with self.lock:
-            d = self._day_bucket(key)
-            self._roll(key, time.time())
-            l = self._life[key]
-            return {"req_today": d["req"], "tokens_today": d["tokens"],
-                    "cost_today": round(d["cost"], 6),
-                    "rpm_window": len(self._win[key]),
-                    "req_total": l["req"], "tokens_total": l["tokens"],
-                    "cost_total": round(l["cost"], 6)}
-
-
-key_usage = KeyUsage()
+key_usage = KeyUsage(os.environ.get("HR_USAGE_DB", "./usage.db"))
 
 # Cumulative tokens + estimated cost served per provider (from provider-reported
 # usage). Streaming responses that include a usage chunk are counted too; those
@@ -2774,37 +2881,88 @@ def _streaming_generator(resp: requests.Response):
         yield buf
 
 
+class _ManagedStream:
+    """Own cleanup even when a response is closed before its first iteration."""
+    def __init__(self, gen, cleanup):
+        self.gen, self.cleanup, self.closed = iter(gen), cleanup, False
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.closed:
+            raise StopIteration
+        try:
+            return next(self.gen)
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self):
+        if not self.closed:
+            self.closed = True
+            try:
+                close = getattr(self.gen, "close", None)
+                if close:
+                    close()
+            finally:
+                self.cleanup()
+
+
 def _with_cleanup(resp: requests.Response, gen):
-    """Drive a streaming generator and always release the upstream connection
-    when done — including when the client disconnects mid-stream (GeneratorExit).
-    Without this, an aborted stream could keep an upstream socket checked out of
-    the connection pool until garbage collection."""
-    try:
-        yield from gen
-    finally:
-        resp.close()
+    return _ManagedStream(gen, resp.close)
 
 
 def _streaming_with_usage(gen, name: str, model: str | None = None):
-    """Wrap a streaming generator to capture the usage block from the final SSE
-    chunk (present when stream_options.include_usage=true is sent upstream) and
-    record tokens + cost in _provider_tokens/_provider_cost. Yields every chunk
-    unchanged."""
-    usage: dict = {}
-    for chunk in gen:
-        text = chunk.decode("utf-8", errors="replace") if isinstance(chunk, bytes) else chunk
-        for line in text.split("\n"):
-            if line.startswith("data: ") and line != "data: [DONE]":
+    from flask import g
+    try:
+        reservation = getattr(g, "usage_reservation", None)
+    except RuntimeError:
+        reservation = None
+    usage, has_output, completed = {}, False, False
+    started = getattr(_req_ctx, "started", time.monotonic())
+    deadline = getattr(_req_ctx, "deadline", started + REQUEST_TIMEOUT)
+
+    def iterate():
+        nonlocal usage, has_output, completed
+        buf = ""
+        for chunk in gen:
+            if time.monotonic() >= deadline:
+                raise requests.Timeout("Router request deadline exceeded")
+            buf += chunk.decode("utf-8", errors="replace") if isinstance(chunk, bytes) else chunk
+            while "\n" in buf:
+                line, buf = buf.split("\n", 1)
+                if not line.startswith("data:"):
+                    continue
                 try:
-                    event = json.loads(line[6:])
-                    u = event.get("usage") or {}
-                    if u.get("total_tokens"):
-                        usage = u
-                except Exception:
+                    event = json.loads(line[5:].strip())
+                    if isinstance(event.get("usage"), dict):
+                        usage = event["usage"]
+                    has_output = has_output or any(
+                        bool((choice.get("delta") or {}).get("content") or (choice.get("delta") or {}).get("tool_calls"))
+                        for choice in event.get("choices", []))
+                except (ValueError, TypeError):
                     pass
-        yield chunk
-    if usage:
-        _add_provider_tokens(name, {"usage": usage}, model)
+            yield chunk
+        completed = True
+
+    def finalize():
+        try:
+            gen.close()
+        finally:
+            if usage:
+                _add_provider_tokens(name, {"usage": usage}, model)
+            if completed and has_output:
+                stats.record_success(name, time.monotonic() - started)
+                stats.record_health(name, True)
+            else:
+                stats.record_error(name)
+                if not completed:
+                    stats.record_health(name, False)
+            if reservation is not None:
+                _settle_request_usage(reservation, usage or None, model, cached=False,
+                                      failed=not completed and not has_output and not usage)
+    return _ManagedStream(iterate(), finalize)
 
 # ── Anthropic format translation ──────────────────────────────────────────────
 # Anthropic's Messages API uses a different format from OpenAI. These helpers
@@ -2900,7 +3058,7 @@ def _to_anthropic_body(payload: dict, model: str) -> dict:
     body: dict = {
         "model":      model,
         "messages":   messages,
-        "max_tokens": payload.get("max_tokens") or 1024,
+        "max_tokens": payload.get("max_completion_tokens") or payload.get("max_tokens") or 1024,
     }
     if system_parts:
         system_text = "\n".join(system_parts)
@@ -2964,6 +3122,7 @@ def _anthropic_streaming_generator(resp: requests.Response):
     created      = int(time.time())
     finish_reason = "stop"
     first_chunk  = True
+    usage = {}
 
     buf = b""
     for raw_chunk in resp.iter_content(chunk_size=None):
@@ -2985,6 +3144,7 @@ def _anthropic_streaming_generator(resp: requests.Response):
                 msg    = event.get("message", {})
                 msg_id = msg.get("id", msg_id)
                 model  = msg.get("model", "")
+                usage.update(msg.get("usage") or {})
                 # Emit role chunk
                 chunk = {"id": msg_id, "object": "chat.completion.chunk", "created": created,
                          "model": model,
@@ -3004,6 +3164,7 @@ def _anthropic_streaming_generator(resp: requests.Response):
                     yield ("data: " + json.dumps(chunk) + "\n\n").encode()
 
             elif etype == "message_delta":
+                usage.update(event.get("usage") or {})
                 sr = event.get("delta", {}).get("stop_reason", "end_turn")
                 finish_reason = "stop" if sr in ("end_turn", "stop_sequence") else "length"
 
@@ -3012,6 +3173,11 @@ def _anthropic_streaming_generator(resp: requests.Response):
                          "model": model,
                          "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}]}
                 yield ("data: " + json.dumps(chunk) + "\n\n").encode()
+                if usage:
+                    normalized = {"prompt_tokens": usage.get("input_tokens", 0),
+                                  "completion_tokens": usage.get("output_tokens", 0)}
+                    normalized["total_tokens"] = sum(normalized.values())
+                    yield ("data: " + json.dumps({"choices": [], "usage": normalized}) + "\n\n").encode()
                 yield b"data: [DONE]\n\n"
 
 
@@ -3481,6 +3647,12 @@ def _codex_streaming_generator(resp: requests.Response):
             if d:
                 yield chunk({"content": d})
         elif etype == "response.completed" and isinstance(ev.get("response"), dict):
+            usage = ev["response"].get("usage")
+            if usage:
+                normalized = {"prompt_tokens": usage.get("input_tokens", 0),
+                              "completion_tokens": usage.get("output_tokens", 0)}
+                normalized["total_tokens"] = usage.get("total_tokens", sum(normalized.values()))
+                yield "data: " + json.dumps({"choices": [], "usage": normalized}) + "\n\n"
             _, tcs = _codex_text_and_tools(ev["response"])
             if tcs:
                 finish = "tool_calls"
@@ -3501,6 +3673,13 @@ def _resolve_model(provider: dict, payload: dict, model: str | None) -> str:
     if not m or m in ("", ROUTER_MODEL, "auto"):
         return provider["model"]
     return m
+
+
+def _upstream_timeout(read_seconds=120):
+    remaining = getattr(_req_ctx, "deadline", time.monotonic() + REQUEST_TIMEOUT) - time.monotonic()
+    if remaining <= 0:
+        raise requests.Timeout("Router request deadline exceeded")
+    return requests.adapters.TimeoutSauce(total=remaining, connect=min(10, remaining), read=min(read_seconds, remaining))
 
 
 def forward(provider: dict, key: str, payload: dict, streaming: bool,
@@ -3526,7 +3705,7 @@ def forward(provider: dict, key: str, payload: dict, streaming: bool,
         }
         try:
             return _HTTP.post(provider["base_url"].rstrip("/") + "/responses",
-                              headers=hdrs, json=body, stream=True, timeout=(10, 180))
+                              headers=hdrs, json=body, stream=True, timeout=_upstream_timeout(180))
         except requests.exceptions.RequestException as e:
             log.error(f"  Network error → codex: {e}")
             return None
@@ -3540,10 +3719,12 @@ def forward(provider: dict, key: str, payload: dict, streaming: bool,
             _strip_message(m)
             cleaned.append(m)
         body = _to_anthropic_body({**payload, "messages": cleaned}, model)
+        if provider.get("max_output_tokens"):
+            body["max_tokens"] = min(body["max_tokens"], provider["max_output_tokens"])
         hdrs = {"x-api-key": key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"}
         try:
             return _HTTP.post("https://api.anthropic.com/v1/messages",
-                              headers=hdrs, json=body, stream=streaming, timeout=(10, 120))
+                              headers=hdrs, json=body, stream=streaming, timeout=_upstream_timeout())
         except requests.exceptions.RequestException as e:
             log.error(f"  Network error → anthropic: {e}")
             return None
@@ -3606,7 +3787,7 @@ def forward(provider: dict, key: str, payload: dict, streaming: bool,
 
     url = provider["base_url"].rstrip("/") + "/chat/completions"
     try:
-        return _HTTP.post(url, headers=headers, json=body, stream=streaming, timeout=(10, 120))
+        return _HTTP.post(url, headers=headers, json=body, stream=streaming, timeout=_upstream_timeout())
     except requests.exceptions.RequestException as e:
         log.error(f"  Network error → {provider['name']}: {e}")
         return None
@@ -3623,7 +3804,15 @@ def _embed_ordered() -> list[dict]:
 
     For STRICT single-dimension guarantees, disable the others' embed models
     (e.g. MISTRAL_EMBED_MODEL= and COHERE_EMBED_MODEL= empty in .env)."""
-    embed_providers = [p for p in PROVIDERS if p.get("embed_model")]
+    try:
+        scope = _caller_scope()
+        models = _caller_models()
+    except RuntimeError:
+        scope = None
+        models = None
+    embed_providers = [p for p in PROVIDERS if p.get("embed_model")
+                       and (scope is None or p["name"] in scope)
+                       and (models is None or p["embed_model"] in models)]
     return sorted(embed_providers, key=lambda p: (1 if stats.breaker_open(p["name"]) else 0,
                                                   stats.health_bucket(p["name"])))
 
@@ -3633,27 +3822,40 @@ def _prompt_text(messages: list) -> str:
     return " ".join(_message_text(m) for m in messages if m.get("content")).strip()[:8000]
 
 
-def _embed_text(text: str) -> list | None:
+def _embed_text(text: str):
     """Embed text via the internal embeddings pipeline (used by the semantic cache).
     Returns a vector, or None if no embed provider is available / all are cooling."""
     if not text:
         return None
-    body = {"input": text}
-    for provider in _embed_ordered():
-        em  = provider["embed_model"]
-        key = pool.get_key(provider["name"], em)
-        if not key:
-            continue
-        try:
-            resp = forward_embeddings(provider, key, body)
-        except Exception:
+    original = getattr(_req_ctx, "deadline", None)
+    _req_ctx.deadline = min(original or float("inf"), time.monotonic() + SEMANTIC_EMBED_TIMEOUT)
+    try:
+        for provider in _embed_ordered():
+            if time.monotonic() >= _req_ctx.deadline:
+                break
+            em = provider["embed_model"]
+            key = pool.get_key(provider["name"], em)
+            if not key:
+                continue
             resp = None
-        if resp is not None and 200 <= resp.status_code < 300:
             try:
-                return resp.json()["data"][0]["embedding"]
+                resp = forward_embeddings(provider, key, {"input": text})
+                if resp is not None and 200 <= resp.status_code < 300:
+                    vector = resp.json()["data"][0]["embedding"]
+                    if isinstance(vector, list) and vector and all(isinstance(n, (int, float)) for n in vector):
+                        identity = json.dumps([provider["name"], provider["base_url"], em, provider.get("headers", {})], sort_keys=True)
+                        return {"identity": hashlib.sha256(identity.encode()).hexdigest(), "vector": vector}
             except Exception:
                 pass
-    return None
+            finally:
+                if resp is not None:
+                    resp.close()
+        return None
+    finally:
+        if original is None:
+            del _req_ctx.deadline
+        else:
+            _req_ctx.deadline = original
 
 
 def forward_embeddings(provider: dict, key: str, payload: dict) -> requests.Response | None:
@@ -3668,7 +3870,7 @@ def forward_embeddings(provider: dict, key: str, payload: dict) -> requests.Resp
     body["model"] = provider["embed_model"]   # always the provider's real embed model
     url = provider["base_url"].rstrip("/") + "/embeddings"
     try:
-        return _HTTP.post(url, headers=headers, json=body, timeout=(10, 120))
+        return _HTTP.post(url, headers=headers, json=body, timeout=_upstream_timeout())
     except requests.exceptions.RequestException as e:
         log.error(f"  Network error → {provider['name']} embeddings: {e}")
         return None
@@ -3676,6 +3878,9 @@ def forward_embeddings(provider: dict, key: str, payload: dict) -> requests.Resp
 # ── Flask app ──────────────────────────────────────────────────────────────────
 
 app = Flask(__name__)
+if os.environ.get("HR_TRUST_PROXY") == "1":
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=0, x_proto=1, x_host=0, x_port=0, x_prefix=0)
 # Cap request bodies so a buggy client can't exhaust memory (Flask returns 413)
 app.config["MAX_CONTENT_LENGTH"] = _int_env("MAX_REQUEST_BYTES", 10 * 1024 * 1024)
 START_TIME = time.time()   # for uptime in /metrics
@@ -3693,1798 +3898,230 @@ def _caller_token() -> str:
 
 def _auth_check():
     token = _caller_token()
-    # compare_digest keeps the comparison constant-time per key
-    if not any(hmac.compare_digest(token, k) for k in PROXY_API_KEYS):
-        return jsonify({"error": "unauthorized"}), 401
+    with _ACCESS_LOCK:
+        if not token or not any(hmac.compare_digest(token.encode(), k.encode()) for k in PROXY_API_KEYS):
+            return jsonify({"error": "unauthorized"}), 401
+        g.caller_limits = dict(KEY_LIMITS.get(token) or {})
+        scope = KEY_PROVIDER_SCOPE.get(token)
+        g.caller_scope = set(scope) if scope is not None else None
+        models = KEY_MODEL_SCOPE.get(token)
+        g.caller_models = set(models) if models is not None else None
+
+
+def _caller_limits():
+    if not has_request_context():
+        return {}
+    return getattr(g, "caller_limits", KEY_LIMITS.get(_caller_token()) or {})
+
+
+def _caller_scope():
+    if not has_request_context():
+        return None
+    return getattr(g, "caller_scope", KEY_PROVIDER_SCOPE.get(_caller_token()))
+
+
+def _caller_models():
+    if not has_request_context():
+        return None
+    return getattr(g, "caller_models", KEY_MODEL_SCOPE.get(_caller_token()))
+
+
+_SESSION_COOKIE = "hermes_admin_session"
+_SESSION_TTL = max(60, int(os.environ.get("HR_ADMIN_SESSION_TTL", "3600")))
+_ADMIN_SESSIONS = {}
+_SESSION_LOCK = threading.Lock()
+
+
+def _same_origin():
+    origin = request.headers.get("Origin")
+    if not origin:
+        return request.headers.get("Sec-Fetch-Site", "") not in ("cross-site", "same-site")
+    return origin.rstrip("/") == request.host_url.rstrip("/")
+
+
+def _session_record():
+    sid = request.cookies.get(_SESSION_COOKIE, "")
+    with _SESSION_LOCK:
+        now = time.time()
+        for expired in [key for key, value in _ADMIN_SESSIONS.items() if value["expires"] <= now]:
+            _ADMIN_SESSIONS.pop(expired, None)
+        return _ADMIN_SESSIONS.get(sid)
+
+
+def _admin_check():
+    token = _caller_token()
+    if token:
+        if not hmac.compare_digest(token.encode(), ADMIN_API_KEY.encode()):
+            return jsonify({"error": "unauthorized"}), 401
+    else:
+        session = _session_record()
+        if not session:
+            return jsonify({"error": "unauthorized"}), 401
+        if not _same_origin():
+            return jsonify({"error": "cross-origin administration denied"}), 403
+        if request.method not in ("GET", "HEAD", "OPTIONS"):
+            csrf = request.headers.get("X-CSRF-Token", "")
+            if not hmac.compare_digest(csrf.encode(), session["csrf_token"].encode()):
+                return jsonify({"error": "CSRF token required"}), 403
+    if request.method in ("POST", "PUT", "PATCH") and request.data and not isinstance(request.get_json(force=True, silent=True), dict):
+        return jsonify({"error": {"message": "request body must be a JSON object", "type": "invalid_request_error"}}), 400
+
+
+@app.route("/v1/admin/session", methods=["POST", "GET", "DELETE"])
+def admin_session():
+    if request.method == "POST":
+        if not _same_origin():
+            return jsonify({"error": "cross-origin administration denied"}), 403
+        body = request.get_json(silent=True)
+        key = body.get("api_key", "") if isinstance(body, dict) else ""
+        if not isinstance(key, str) or not hmac.compare_digest(key.encode(), ADMIN_API_KEY.encode()):
+            return jsonify({"error": "unauthorized"}), 401
+        sid = secrets.token_urlsafe(32)
+        record = {"csrf_token": secrets.token_urlsafe(32), "expires": time.time()+_SESSION_TTL}
+        with _SESSION_LOCK:
+            _ADMIN_SESSIONS.pop(request.cookies.get(_SESSION_COOKIE, ""), None)
+            # Bounded process-local sessions; restarting safely signs browsers out.
+            if len(_ADMIN_SESSIONS) >= 256:
+                _ADMIN_SESSIONS.pop(next(iter(_ADMIN_SESSIONS)))
+            _ADMIN_SESSIONS[sid] = record
+        response = jsonify({"authenticated": True, "csrf_token": record["csrf_token"]})
+        response.set_cookie(_SESSION_COOKIE, sid, max_age=_SESSION_TTL, httponly=True,
+                            secure=request.is_secure or os.environ.get("HR_ADMIN_COOKIE_SECURE") == "1",
+                            samesite="Strict", path="/")
+    else:
+        err = _admin_check()
+        if err:
+            return err
+        if request.method == "DELETE":
+            with _SESSION_LOCK:
+                _ADMIN_SESSIONS.pop(request.cookies.get(_SESSION_COOKIE, ""), None)
+            response = jsonify({"authenticated": False})
+            response.delete_cookie(_SESSION_COOKIE, path="/")
+        else:
+            record = _session_record()
+            response = jsonify({"authenticated": True, "csrf_token": record["csrf_token"] if record else None})
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 def _cache_ns() -> str:
-    """Cache namespace = the authenticated caller, so different API keys never
-    share a cached response for an identical request."""
-    return _caller_token()
+    """Key and current scope isolate responses after restrictive policy changes."""
+    token = _caller_token()
+    scope = _caller_scope()
+    models = _caller_models()
+    policy = json.dumps([sorted(scope) if scope is not None else None,
+                         sorted(models) if models is not None else None])
+    return hashlib.sha256((token + policy).encode()).hexdigest()
 
 
-def _admit_request(token: str):
-    """Enforce this caller's rate/budget limits AND record the request for usage
-    analytics (recording happens whether or not limits are set). Returns a Flask
-    (response, 429) tuple to short-circuit when over limit, or None to proceed."""
-    limits = KEY_LIMITS.get(token) or {}
-    ok, retry, reason = key_usage.check_and_record(token, limits)
-    if ok:
+def _known_price(model):
+    return (any(part in str(model).lower() for part in MODEL_PRICES)
+            and all(math.isfinite(v) and v >= 0 for v in _price_model(model)))
+
+
+def _output_bound(payload, provider=None, model=None):
+    values = [payload[field] for field in ("max_tokens", "max_completion_tokens") if field in payload]
+    if not values or any(not isinstance(v, int) or isinstance(v, bool) or v <= 0 for v in values):
         return None
-    resp = jsonify({"error": {"message": f"quota exceeded ({reason})",
-                              "type": "rate_limit_error"}})
-    resp.headers["Retry-After"] = str(retry)
-    return resp, 429
+    bound = max(values)
+    if provider and _model_caps(provider["name"], model).get("reasoning"):
+        bound += max(0, _int_env("REASONING_TOKEN_RESERVE", 4096))
+    if provider and provider.get("max_output_tokens"):
+        bound = min(bound, provider["max_output_tokens"])
+    return bound
+
+
+def _budget_candidate_allowed(provider, model, payload):
+    try:
+        limits = _caller_limits()
+        models = _caller_models()
+    except RuntimeError:
+        return True
+    if models is not None and model not in models:
+        return False
+    if (limits.get("cost_per_day") or limits.get("tokens_per_day")) and (
+            provider.get("name") == "codex" or _output_bound(payload, provider, model) is None):
+        # The Codex subscription protocol does not enforce an output token ceiling.
+        return False
+    if not limits.get("cost_per_day"):
+        return True
+    # Only plain-text token billing has a conservative bound in this release.
+    return (provider.get("name") not in ("codex", "anthropic") and _known_price(model)
+            and _output_bound(payload, provider, model) is not None)
+
+
+@_locked_access
+def _admit_request(token: str, payload=None, embedding=False):
+    payload = payload if payload is not None else request.get_json(silent=True) or {}
+    if not embedding and (not isinstance(payload.get("messages", []), list) or
+            any(not isinstance(message, dict) for message in payload.get("messages", []))):
+        return jsonify({"error": {"message": "messages must be an array of objects", "type": "invalid_request_error"}}), 400
+    g.caller_limits = dict(KEY_LIMITS.get(token) or {})
+    scope = KEY_PROVIDER_SCOPE.get(token)
+    g.caller_scope = set(scope) if scope is not None else None
+    models = KEY_MODEL_SCOPE.get(token)
+    g.caller_models = set(models) if models is not None else None
+    limits = _caller_limits()
+    money = bool(limits.get("cost_per_day"))
+    token_limit = bool(limits.get("tokens_per_day"))
+    bound = _output_bound(payload)
+    if (money or token_limit) and (embedding or bound is None or payload.get("tools") or
+            payload.get("n", 1) != 1 or payload.get("best_of", 1) != 1 or
+            any(not isinstance(m.get("content", ""), str) for m in payload.get("messages", []) if isinstance(m, dict))):
+        return jsonify({"error": {"message": "budget requires plain-text input and an enforceable positive output bound", "type": "invalid_request_error"}}), 400
+    input_ceiling = len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+    tokens = input_ceiling + (bound or 0)
+    cost = 0.0
+    if money or token_limit:
+        candidates = _ordered_providers(payload, str(payload.get("model", "")).endswith(":fast"))
+        scope = _caller_scope()
+        candidates = [c for c in candidates if (scope is None or c["provider"]["name"] in scope)
+                      and _budget_candidate_allowed(c["provider"], c["model"], payload)]
+        if not candidates:
+            return jsonify({"error": {"message": "no eligible model with an enforceable output bound and required pricing", "type": "invalid_request_error"}}), 400
+        tokens = max([input_ceiling + _output_bound(payload, c["provider"], c["model"]) for c in candidates] or [tokens])
+        if money:
+            cost = max(_cost(c["model"], input_ceiling, _output_bound(payload, c["provider"], c["model"])) for c in candidates)
+    # Revocation/policy edits and reservation admission have one serialization point.
+    with _ACCESS_LOCK:
+        if token not in PROXY_API_KEYS:
+            return jsonify({"error": "unauthorized"}), 401
+        rid, retry, reason = key_usage.reserve(token, limits, tokens, cost)
+    if rid:
+        g.usage_reservation = rid
+        return None
+    response = jsonify({"error": {"message": f"quota exceeded ({reason})", "type": "rate_limit_error"}})
+    response.headers["Retry-After"] = str(retry)
+    return response, 429
+
+
+def _settle_request_usage(reservation_id, usage, model, cached=False, failed=False):
+    usage = usage if isinstance(usage, dict) else {}
+    pt = usage.get("prompt_tokens", usage.get("input_tokens"))
+    ct = usage.get("completion_tokens", usage.get("output_tokens"))
+    total = usage.get("total_tokens")
+    valid_count = lambda value: isinstance(value, int) and not isinstance(value, bool) and value >= 0
+    split = valid_count(pt) and valid_count(ct)
+    if split:
+        total = max(total if valid_count(total) else 0, pt + ct)
+    valid = valid_count(total)
+    cost = _cost(model, pt, ct) if split and _known_price(model) else None
+    key_usage.settle(reservation_id, total if valid else None, cost, failed=failed, cached=cached,
+                     source="unknown_price" if not cached and not _known_price(model) else
+                            "reported" if valid and cost is not None else "estimated")
 
 
 def _record_request_tokens(token: str, payload: dict, result):
-    """Post-flight: add this request's tokens (and estimated cost) to the caller's
-    tally (daily + lifetime). Uses provider-reported usage when present, else an
-    estimate (e.g. streaming). Cost uses the response model's prompt/completion
-    split when available; $0 for free/unpriced models."""
-    n = 0
-    if result and result[0] == "json":
-        data  = result[1]
-        usage = data.get("usage") or {}
-        n = usage.get("total_tokens") or 0
-        cost = _cost(data.get("model") or payload.get("model") or "",
-                     usage.get("prompt_tokens"), usage.get("completion_tokens"))
-        if cost:
-            key_usage.add_cost(token, cost)
-    if not n:
-        n = _estimated_tokens(payload.get("messages", []))
-    key_usage.add_tokens(token, n)
-
-
-_DASHBOARD_HTML = r"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Hermes Router — Dashboard</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-:root{
-  --bg:#0f1117;--surface:#181c27;--surface2:#1e2333;--border:#2a3050;
-  --text:#e2e8f0;--muted:#8892a4;--accent:#6c8cff;--green:#4ade80;
-  --yellow:#facc15;--red:#f87171;--orange:#fb923c;--purple:#c084fc;
-  --font:'Inter',system-ui,sans-serif;
-}
-body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;min-height:100vh}
-
-/* ── layout ── */
-header{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;
-  background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:10}
-header h1{font-size:15px;font-weight:600;letter-spacing:.3px;color:var(--text)}
-header h1 span{color:var(--accent)}
-.badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:3px 8px;
-  border-radius:99px;background:var(--surface2);border:1px solid var(--border);color:var(--muted)}
-.badge .dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 5px var(--green)}
-.badge .dot.err{background:var(--red);box-shadow:0 0 5px var(--red)}
-.header-right{display:flex;align-items:center;gap:10px}
-#last-update{font-size:11px;color:var(--muted)}
-.btn{cursor:pointer;font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);
-  background:var(--surface2);color:var(--text);transition:.15s}
-.btn:hover{border-color:var(--accent);color:var(--accent)}
-
-/* ── app shell / sidebar ── */
-.app-shell{display:flex;align-items:stretch;min-height:100vh}
-.sidebar{width:200px;flex:0 0 auto;background:var(--surface);border-right:1px solid var(--border);
-  display:flex;flex-direction:column;padding:16px 0;position:sticky;top:0;align-self:flex-start;
-  height:100vh}
-.sidebar-brand{padding:0 16px 14px;font-size:15px;font-weight:600;letter-spacing:.3px;
-  border-bottom:1px solid var(--border);margin-bottom:12px}
-.sidebar-brand span{color:var(--accent)}
-.sidebar-nav{display:flex;flex-direction:column;gap:2px;padding:0 8px}
-.nav-item{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;
-  text-align:left;padding:9px 10px;border-radius:7px;border:none;background:transparent;
-  color:var(--muted);font-size:12.5px;font-family:inherit;cursor:pointer;transition:.15s}
-.nav-item:hover{background:var(--surface2);color:var(--text)}
-.nav-item.active{background:var(--surface2);color:var(--accent);font-weight:600}
-.nav-item .nav-dot{width:6px;height:6px;border-radius:50%;background:var(--border);flex:0 0 auto}
-.nav-item .nav-dot.warn{background:var(--yellow);box-shadow:0 0 4px var(--yellow)}
-.nav-item .nav-dot.bad{background:var(--red);box-shadow:0 0 4px var(--red)}
-.app-main{flex:1;min-width:0;display:flex;flex-direction:column}
-@media(max-width:760px){
-  .app-shell{flex-direction:column}
-  .sidebar{width:100%;height:auto;position:static;flex-direction:row;overflow-x:auto;padding:10px 8px}
-  .sidebar-brand{display:none}
-  .sidebar-nav{flex-direction:row}
-  .nav-item{white-space:nowrap}
-}
-
-main{padding:18px 20px;display:grid;gap:16px;max-width:1180px;margin:0 auto;width:100%}
-.page{display:none}
-.page.active{display:grid;gap:16px}
-.page-intro{color:var(--muted);line-height:1.45}
-
-/* ── key input overlay ── */
-#key-gate{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;
-  align-items:center;justify-content:center;z-index:100}
-#key-gate.hidden{display:none}
-.gate-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;
-  padding:28px 32px;min-width:320px;text-align:center}
-.gate-box h2{margin-bottom:6px;font-size:15px}
-.gate-box p{color:var(--muted);font-size:12px;margin-bottom:18px}
-.gate-box input{width:100%;padding:8px 12px;border-radius:7px;border:1px solid var(--border);
-  background:var(--bg);color:var(--text);font-size:13px;outline:none;margin-bottom:10px}
-.gate-box input:focus{border-color:var(--accent)}
-.gate-box .btn{width:100%;padding:7px}
-
-/* ── stat cards ── */
-.stat-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
-.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;
-  padding:14px 16px}
-.stat-card .label{font-size:11px;color:var(--muted);margin-bottom:5px;text-transform:uppercase;
-  letter-spacing:.5px}
-.stat-card .value{font-size:22px;font-weight:700;color:var(--text)}
-.stat-card .sub{font-size:11px;color:var(--muted);margin-top:3px}
-
-/* ── simple overview ── */
-.overview-grid{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(280px,.75fr);gap:14px}
-@media(max-width:900px){.overview-grid{grid-template-columns:1fr}}
-.hero{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px}
-.hero-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
-.hero h2{font-size:20px;line-height:1.2;margin-bottom:6px}
-.hero-copy{color:var(--muted);line-height:1.45;max-width:760px}
-.hero-state{font-size:12px;padding:5px 10px;border-radius:999px;white-space:nowrap}
-.hero-state.good{background:rgba(74,222,128,.12);color:var(--green)}
-.hero-state.warn{background:rgba(250,204,21,.12);color:var(--yellow)}
-.hero-state.bad{background:rgba(248,113,113,.12);color:var(--red)}
-.quick-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-top:16px}
-.quick-card{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px}
-.quick-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px}
-.quick-value{font-size:15px;font-weight:700}
-.quick-sub{font-size:11px;color:var(--muted);margin-top:3px;line-height:1.4}
-.setup-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px}
-.setup-card h3{font-size:14px;margin-bottom:10px}
-.setup-list{display:grid;gap:8px}
-.setup-step{display:flex;align-items:center;gap:8px;color:var(--muted)}
-.setup-step strong{color:var(--text);font-weight:600}
-.step-dot{width:9px;height:9px;border-radius:50%;background:var(--border);flex:0 0 auto}
-.setup-step.done .step-dot{background:var(--green);box-shadow:0 0 6px var(--green)}
-.setup-step.warn .step-dot{background:var(--yellow);box-shadow:0 0 6px var(--yellow)}
-.setup-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
-.provider-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px;padding:12px}
-.provider-card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px}
-.provider-card.bad{border-color:rgba(248,113,113,.45)}
-.provider-card.warn{border-color:rgba(250,204,21,.45)}
-.provider-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:5px}
-.provider-name{font-weight:700}
-.provider-model{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.provider-meta{display:flex;justify-content:space-between;gap:8px;margin-top:10px;font-size:11px;color:var(--muted)}
-.advanced-panel summary{cursor:pointer;list-style:none}
-.advanced-panel summary::-webkit-details-marker{display:none}
-.advanced-panel .panel-header:after{content:"show";font-size:11px;color:var(--muted)}
-.advanced-panel[open] .panel-header:after{content:"hide"}
-.advanced-panel:not([open]) .panel-body{display:none}
-
-/* ── panels ── */
-.panel{background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden}
-.panel-header{display:flex;align-items:center;justify-content:space-between;
-  padding:10px 14px;border-bottom:1px solid var(--border);background:var(--surface2)}
-.panel-title{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;
-  color:var(--muted)}
-.panel-body{overflow-x:auto}
-.panel-body.pad{padding:12px}
-
-/* ── tables ── */
-table{width:100%;border-collapse:collapse;font-size:12px}
-th{padding:7px 12px;text-align:left;color:var(--muted);font-weight:500;
-  font-size:11px;border-bottom:1px solid var(--border);white-space:nowrap}
-td{padding:7px 12px;border-bottom:1px solid var(--border);vertical-align:middle;white-space:nowrap}
-tr:last-child td{border-bottom:none}
-tr:hover td{background:rgba(108,140,255,.04)}
-
-/* ── status dots ── */
-.dot-ok{display:inline-block;width:8px;height:8px;border-radius:50%;
-  background:var(--green);box-shadow:0 0 5px var(--green);margin-right:5px}
-.dot-warn{display:inline-block;width:8px;height:8px;border-radius:50%;
-  background:var(--yellow);box-shadow:0 0 5px var(--yellow);margin-right:5px}
-.dot-err{display:inline-block;width:8px;height:8px;border-radius:50%;
-  background:var(--red);box-shadow:0 0 5px var(--red);margin-right:5px}
-
-/* ── pill badges ── */
-.pill{display:inline-block;padding:2px 7px;border-radius:99px;font-size:10px;font-weight:600}
-.pill-ok{background:rgba(74,222,128,.12);color:var(--green)}
-.pill-err{background:rgba(248,113,113,.12);color:var(--red)}
-.pill-cache{background:rgba(192,132,252,.12);color:var(--purple)}
-.pill-warn{background:rgba(250,204,21,.12);color:var(--yellow)}
-.pill-grey{background:rgba(136,146,164,.12);color:var(--muted)}
-
-/* ── rating bar ── */
-.rating-bar{display:flex;gap:3px;align-items:center}
-.rating-pip{width:9px;height:9px;border-radius:2px;background:var(--border)}
-.r1 .rating-pip.active{background:var(--green)}
-.r2 .rating-pip.active{background:#22d3ee}
-.r3 .rating-pip.active{background:var(--accent)}
-.r4 .rating-pip.active{background:var(--yellow)}
-.r5 .rating-pip.active{background:var(--red)}
-
-/* ── progress bar ── */
-.prog-track{background:var(--surface2);border-radius:99px;height:5px;min-width:80px;overflow:hidden}
-.prog-fill{height:100%;border-radius:99px;background:var(--accent);transition:width .4s}
-.prog-fill.green{background:var(--green)}
-.prog-fill.red{background:var(--red)}
-.prog-fill.yellow{background:var(--yellow)}
-
-/* ── add-on toggles ── */
-.addon-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px;padding:12px}
-.addon-card{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px}
-.addon-card.flag{cursor:pointer;transition:border-color .15s}
-.addon-card.flag:hover{border-color:var(--accent)}
-.addon-card.busy{opacity:.5;pointer-events:none}
-.addon-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
-.addon-name{font-size:12px;font-weight:600}
-.addon-desc{font-size:11px;color:var(--muted);line-height:1.4}
-
-/* ── provider scope picker ── */
-.scope-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;
-  margin:6px 0}
-.scope-item{display:flex;align-items:center;gap:6px;font-size:12px;padding:5px 8px;
-  border:1px solid var(--border);border-radius:6px;background:var(--surface2);cursor:pointer}
-.scope-item input{margin:0}
-.scope-item .cnt{color:var(--muted);font-size:10px;margin-left:auto}
-
-/* ── restart banner ── */
-#restart-banner{display:none;align-items:center;justify-content:space-between;gap:12px;
-  padding:10px 20px;background:rgba(250,204,21,.1);border-bottom:1px solid var(--yellow)}
-#restart-banner.show{display:flex}
-#restart-banner span{font-size:12px;color:var(--yellow)}
-#restart-banner .actions{display:flex;gap:8px}
-
-/* ── config forms ── */
-.config-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:14px}
-@media(max-width:820px){.config-grid{grid-template-columns:1fr}}
-.config-grid.narrow{grid-template-columns:1fr;max-width:440px}
-.config-intro{padding:12px 14px 0;color:var(--muted);line-height:1.45}
-.config-form{display:flex;flex-direction:column;gap:8px}
-.config-form label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
-.config-form select, .config-form input{
-  background:var(--surface2);border:1px solid var(--border);border-radius:6px;
-  color:var(--text);padding:7px 10px;font-size:12px;font-family:inherit;outline:none}
-.config-form select:focus, .config-form input:focus{border-color:var(--accent)}
-.config-form .row{display:flex;gap:8px}
-.config-form .row > *{flex:1}
-.config-msg{font-size:11px;min-height:16px}
-.config-msg.ok{color:var(--green)}
-.config-msg.err{color:var(--red)}
-.config-msg.warn{color:var(--yellow)}
-.default-hint{font-size:10px;color:var(--muted)}
-.config-form textarea{
-  background:var(--surface2);border:1px solid var(--border);border-radius:6px;
-  color:var(--text);padding:7px 10px;font-size:12px;font-family:monospace;outline:none;
-  min-height:86px;resize:vertical}
-.config-form textarea:focus{border-color:var(--accent)}
-.instance-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;padding:12px}
-.instance-card{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px}
-.instance-card.warn{border-color:rgba(250,204,21,.45)}
-.instance-card.bad{border-color:rgba(248,113,113,.45)}
-.instance-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
-.btn.primary{background:rgba(108,140,255,.16);border-color:var(--accent);color:var(--text);font-weight:600}
-.btn.danger:hover{border-color:var(--red);color:var(--red)}
-.mode-switch{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.mode-option{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;
-  text-align:left;padding:10px;border-radius:8px;border:1px solid var(--border);
-  background:var(--surface2);color:var(--text);font-family:inherit;cursor:pointer}
-.mode-option.active{border-color:var(--accent);background:rgba(108,140,255,.12)}
-.mode-option strong{display:block;font-size:12px;margin-bottom:3px}
-.mode-option span{display:block;font-size:11px;color:var(--muted);line-height:1.35}
-.mode-dot{width:9px;height:9px;border-radius:50%;margin-top:3px;background:var(--border);flex:0 0 auto}
-.mode-option.active .mode-dot{background:var(--accent);box-shadow:0 0 6px var(--accent)}
-.instance-form{padding:14px;display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,.85fr);gap:14px}
-@media(max-width:900px){.instance-form{grid-template-columns:1fr}.mode-switch{grid-template-columns:1fr}}
-.instance-form-col{display:flex;flex-direction:column;gap:10px}
-.field-hint{font-size:10.5px;color:var(--muted);line-height:1.35;margin-top:-3px}
-.field-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.field-line label{margin:0}
-.port-map{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:end}
-.port-arrow{color:var(--muted);font-size:15px;padding-bottom:9px}
-.instance-advanced{border:1px solid var(--border);border-radius:8px;background:rgba(15,17,23,.2)}
-.instance-advanced summary{cursor:pointer;padding:9px 10px;color:var(--muted);font-size:11px;
-  text-transform:uppercase;letter-spacing:.4px;list-style:none}
-.instance-advanced summary::-webkit-details-marker{display:none}
-.instance-advanced .advanced-body{padding:0 10px 10px;display:flex;flex-direction:column;gap:8px}
-.instance-empty{display:flex;align-items:center;justify-content:center;min-height:90px;color:var(--muted)}
-.instance-empty strong{color:var(--text);font-weight:600}
-.hidden-field{display:none!important}
-
-/* ── log table ── */
-#log-wrap{max-height:340px;overflow-y:auto}
-.log-row-success td:first-child{border-left:2px solid var(--green)}
-.log-row-error td:first-child{border-left:2px solid var(--red)}
-.log-row-cache_hit td:first-child{border-left:2px solid var(--purple)}
-
-/* ── two-col layout for lower panels ── */
-.two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-@media(max-width:820px){.two-col{grid-template-columns:1fr}}
-
-/* ── misc ── */
-.mono{font-family:monospace;font-size:11px}
-.right{text-align:right}
-.muted{color:var(--muted)}
-</style>
-</head>
-<body>
-
-<!-- API key gate -->
-<div id="key-gate">
-  <div class="gate-box">
-    <h2>Hermes Router</h2>
-    <p>Enter your proxy API key to view the dashboard.</p>
-    <input id="key-input" type="password" placeholder="sk-router-..." autocomplete="off">
-    <p id="gate-error" style="color:var(--red);font-size:12px;min-height:16px;margin:8px 0 0"></p>
-    <button class="btn" onclick="submitKey()">Open Dashboard</button>
-  </div>
-</div>
-
-<div class="app-shell">
-  <aside class="sidebar">
-    <div class="sidebar-brand"><span>Hermes</span> Router</div>
-    <nav class="sidebar-nav" id="sidebar-nav">
-      <button class="nav-item active" data-page="overview" onclick="showPage('overview')">Overview</button>
-      <button class="nav-item" data-page="providers" onclick="showPage('providers')"><span>Providers</span><span class="nav-dot" id="nav-dot-providers"></span></button>
-      <button class="nav-item" data-page="instances" onclick="showPage('instances')"><span>Instances</span><span class="nav-dot" id="nav-dot-instances"></span></button>
-      <button class="nav-item" data-page="keys" onclick="showPage('keys')">Provider Keys</button>
-      <button class="nav-item" data-page="access" onclick="showPage('access')">Access Keys</button>
-      <button class="nav-item" data-page="models" onclick="showPage('models')">Models</button>
-      <button class="nav-item" data-page="addons" onclick="showPage('addons')">Add-ons</button>
-      <button class="nav-item" data-page="logs" onclick="showPage('logs')">Request Log</button>
-    </nav>
-  </aside>
-
-  <div class="app-main">
-    <header>
-      <h1><span>Hermes</span> Router &mdash; Dashboard</h1>
-      <div class="header-right">
-        <div class="badge"><div class="dot" id="hdr-dot"></div><span id="hdr-status">connecting</span></div>
-        <span id="last-update"></span>
-        <button class="btn" onclick="refresh()">↺ Refresh</button>
-      </div>
-    </header>
-
-    <div id="restart-banner">
-      <span>⚠ Config changed — restart the router to apply it.</span>
-      <div class="actions">
-        <button class="btn" onclick="dismissBanner()">Later</button>
-        <button class="btn" onclick="doRestart()" style="border-color:var(--yellow);color:var(--yellow)">↻ Restart Now</button>
-      </div>
-    </div>
-
-    <main>
-
-      <!-- ── Overview ─────────────────────────────────────────────────────── -->
-      <section class="page active" id="page-overview">
-        <section class="overview-grid">
-          <div class="hero">
-            <div class="hero-top">
-              <div>
-                <h2 id="plain-title">Checking router...</h2>
-                <div class="hero-copy" id="plain-message">Loading status from Hermes Router.</div>
-              </div>
-              <div class="hero-state warn" id="plain-state">checking</div>
-            </div>
-            <div class="quick-grid">
-              <div class="quick-card">
-                <div class="quick-label">API endpoint</div>
-                <div class="quick-value mono" id="quick-endpoint">/v1</div>
-                <div class="quick-sub">Use this as the OpenAI base URL.</div>
-              </div>
-              <div class="quick-card">
-                <div class="quick-label">Model name</div>
-                <div class="quick-value mono" id="quick-model">hermes-router</div>
-                <div class="quick-sub">Send this model from your app.</div>
-              </div>
-              <div class="quick-card">
-                <div class="quick-label">Spend</div>
-                <div class="quick-value" id="quick-spend">-</div>
-                <div class="quick-sub">Estimated since last restart.</div>
-              </div>
-            </div>
-          </div>
-          <div class="setup-card">
-            <h3>Setup checklist</h3>
-            <div class="setup-list">
-              <div class="setup-step" id="step-key"><span class="step-dot"></span><strong>Provider key</strong><span id="step-key-text">checking</span></div>
-              <div class="setup-step" id="step-health"><span class="step-dot"></span><strong>Provider health</strong><span id="step-health-text">checking</span></div>
-              <div class="setup-step" id="step-restart"><span class="step-dot"></span><strong>Restart</strong><span id="step-restart-text">not needed</span></div>
-            </div>
-            <div class="setup-actions">
-              <button class="btn" onclick="showPage('keys')">Add key</button>
-              <button class="btn" onclick="doRestart()">Restart</button>
-              <button class="btn" onclick="refresh()">Refresh</button>
-            </div>
-          </div>
-        </section>
-
-        <div class="panel">
-          <div class="panel-header"><span class="panel-title">Usage Summary</span></div>
-          <div class="panel-body pad">
-            <div class="stat-row" id="stat-row">
-              <div class="stat-card"><div class="label">Providers</div><div class="value" id="s-providers">—</div><div class="sub" id="s-providers-sub"></div></div>
-              <div class="stat-card"><div class="label">Uptime</div><div class="value" id="s-uptime">—</div><div class="sub">since last restart</div></div>
-              <div class="stat-card"><div class="label">Total Requests</div><div class="value" id="s-requests">—</div><div class="sub" id="s-requests-sub"></div></div>
-              <div class="stat-card"><div class="label">Total Tokens</div><div class="value" id="s-tokens">—</div><div class="sub" id="s-cost"></div></div>
-              <div class="stat-card"><div class="label">Cache Hit Rate</div><div class="value" id="s-hitrate">—</div><div class="sub" id="s-cache-sub"></div></div>
-              <div class="stat-card"><div class="label">Error Rate</div><div class="value" id="s-errrate">—</div><div class="sub" id="s-errrate-sub"></div></div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- ── Providers ────────────────────────────────────────────────────── -->
-      <section class="page" id="page-providers">
-        <div class="panel">
-          <div class="panel-header"><span class="panel-title">Provider Health</span><span class="muted">attention first</span></div>
-          <div class="provider-grid" id="provider-card-grid"></div>
-        </div>
-
-        <details class="panel advanced-panel">
-          <summary class="panel-header"><span class="panel-title">Advanced Provider Details</span></summary>
-          <div class="panel-body">
-            <table>
-              <thead><tr>
-                <th>Provider</th><th>Model</th><th>Rating</th>
-                <th class="right">Requests</th><th class="right">Errors</th>
-                <th class="right">Err %</th><th class="right">Avg Latency</th>
-                <th class="right">Tokens</th><th class="right">Cost (USD)</th>
-                <th>Keys</th><th>Breaker</th><th>Status</th>
-              </tr></thead>
-              <tbody id="provider-tbody"></tbody>
-            </table>
-          </div>
-        </details>
-      </section>
-
-      <!-- ── Instances ────────────────────────────────────────────────────── -->
-      <section class="page" id="page-instances">
-        <div class="panel">
-          <div class="panel-header"><span class="panel-title">Instance Manager</span><span class="muted">external or Docker-managed routers</span></div>
-          <div class="instance-grid" id="instance-summary-grid"></div>
-        </div>
-
-        <div class="panel">
-          <div class="panel-header"><span class="panel-title">Add Instance</span></div>
-          <div class="instance-form">
-            <div class="instance-form-col config-form">
-              <label>Mode</label>
-              <div class="mode-switch">
-                <button type="button" class="mode-option active" id="mode-external" onclick="setInstanceMode('external')">
-                  <span><strong>Connect existing</strong><span>Track a router that is already running.</span></span><i class="mode-dot"></i>
-                </button>
-                <button type="button" class="mode-option" id="mode-docker" onclick="setInstanceMode('docker')">
-                  <span><strong>Launch Docker</strong><span>Create a managed router on a host port.</span></span><i class="mode-dot"></i>
-                </button>
-              </div>
-              <select id="inst-mode" class="hidden-field" onchange="onInstanceModeChange()">
-                <option value="external">external</option>
-                <option value="docker">docker</option>
-              </select>
-
-              <label>Name</label>
-              <input id="inst-name" type="text" placeholder="agent-a">
-
-              <label>OpenAI base URL</label>
-              <input id="inst-base-url" type="text" placeholder="http://localhost:8320/v1">
-              <div class="field-hint" id="inst-base-hint">Agents use this as their base URL.</div>
-
-              <div id="inst-port-fields">
-                <label>Port mapping</label>
-                <div class="port-map">
-                  <div>
-                    <div class="field-hint">Host</div>
-                    <input id="inst-host-port" type="number" min="1" max="65535" placeholder="8320">
-                  </div>
-                  <div class="port-arrow">to</div>
-                  <div>
-                    <div class="field-hint">Container</div>
-                    <input id="inst-container-port" type="number" min="1" max="65535" value="8319">
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div class="instance-form-col config-form">
-              <label id="inst-key-label">Router access key</label>
-              <input id="inst-api-key" type="password" placeholder="sk-router-..." autocomplete="off">
-              <div class="field-hint" id="inst-key-hint">Used only to verify authenticated endpoints.</div>
-
-              <details class="instance-advanced" id="inst-docker-options">
-                <summary>Docker settings</summary>
-                <div class="advanced-body">
-                  <label>Image</label>
-                  <input id="inst-image" type="text" value="hermes-router:latest">
-                  <label>Use existing router keys</label>
-                  <div class="field-hint">Selected provider keys are copied into this instance at creation time.</div>
-                  <div class="scope-grid" id="inst-copy-provider-keys"></div>
-                  <label>Provider env vars</label>
-                  <textarea id="inst-env" spellcheck="false" placeholder="GEMINI_API_KEYS=...\nOPENAI_API_KEYS=..."></textarea>
-                </div>
-              </details>
-
-              <div class="row">
-                <button class="btn primary" id="inst-save-btn" onclick="createInstance(false)">Register instance</button>
-                <button class="btn" id="inst-start-btn" onclick="createInstance(true)">Create & Start</button>
-              </div>
-              <div class="config-msg" id="inst-msg"></div>
-            </div>
-          </div>
-        </div>
-
-        <div class="panel" id="new-instance-key-panel" style="display:none">
-          <div class="panel-header"><span class="panel-title">Generated Instance Key</span></div>
-          <div class="panel-body pad">
-            <p class="muted" style="margin-bottom:8px">This Docker instance was assigned a proxy API key. Use it with agents that call this instance.</p>
-            <div class="config-form">
-              <div class="row">
-                <input id="new-instance-key-value" type="text" readonly class="mono" style="flex:1">
-                <button class="btn" onclick="copyInstanceKey()" style="flex:0 0 auto">Copy</button>
-                <button class="btn" onclick="dismissInstanceKey()" style="flex:0 0 auto">Done</button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="panel">
-          <div class="panel-header"><span class="panel-title">Instances</span></div>
-          <div class="panel-body">
-            <table>
-              <thead><tr>
-                <th>Name</th><th>Mode</th><th>Base URL</th><th>Health</th>
-                <th>Docker</th><th>Key</th><th>Env</th><th>Actions</th>
-              </tr></thead>
-              <tbody id="instances-tbody"></tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <!-- ── Provider Keys ────────────────────────────────────────────────── -->
-      <section class="page" id="page-keys">
-        <div class="panel">
-          <div class="panel-header"><span class="panel-title">Provider Key Setup</span></div>
-          <div class="page-intro" style="padding:12px 14px 0">Keys the router uses to call upstream providers (Gemini, OpenAI, …) — not the keys your own apps use to call the router (see Access Keys for that).</div>
-          <div class="config-grid">
-            <div class="config-form">
-              <label>Add API key</label>
-              <div class="row">
-                <select id="cfg-key-provider"></select>
-              </div>
-              <input id="cfg-key-value" type="password" placeholder="paste provider API key" autocomplete="off">
-              <div class="row">
-                <button class="btn" onclick="addKey()">Add key</button>
-              </div>
-              <div class="config-msg" id="cfg-key-msg"></div>
-            </div>
-
-            <div class="config-form">
-              <label>Key rotation</label>
-              <select id="cfg-rotation-value">
-                <option value="round-robin">Spread requests across keys</option>
-                <option value="sequential">Use one key before the next</option>
-              </select>
-              <div class="row">
-                <button class="btn" onclick="setRotation()">Save rotation mode</button>
-              </div>
-              <div class="default-hint">Round-robin is best for most users because it spreads load across keys.</div>
-              <div class="config-msg" id="cfg-rotation-msg"></div>
-            </div>
-          </div>
-        </div>
-
-        <div class="panel">
-          <div class="panel-header"><span class="panel-title">Key & Budget Usage</span></div>
-          <div class="panel-body">
-            <table>
-              <thead><tr>
-                <th>Key</th><th class="right">Requests</th>
-                <th class="right">Tokens (day)</th><th class="right">Cost (day)</th>
-                <th>RPM used</th>
-              </tr></thead>
-              <tbody id="keys-tbody"></tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <!-- ── Access Keys ──────────────────────────────────────────────────── -->
-      <section class="page" id="page-access">
-        <div class="panel">
-          <div class="panel-header"><span class="panel-title">Create Access Key</span></div>
-          <div class="page-intro" style="padding:12px 14px 0">Generate a key for a teammate or another app to call this router with — separate from your own key, with its own optional usage caps.</div>
-          <div class="config-grid narrow">
-            <div class="config-form">
-              <label>Name (optional)</label>
-              <input id="ak-name" type="text" placeholder="e.g. Bob, CI pipeline">
-              <label style="margin-top:4px">Limits (optional — blank means unlimited)</label>
-              <div class="row">
-                <input id="ak-rpm" type="number" min="0" placeholder="requests / min">
-                <input id="ak-reqday" type="number" min="0" placeholder="requests / day">
-              </div>
-              <div class="row">
-                <input id="ak-tokday" type="number" min="0" placeholder="tokens / day">
-                <input id="ak-costday" type="number" min="0" step="0.01" placeholder="cost / day ($)">
-              </div>
-              <label style="margin-top:4px">Providers this key may use (none checked = all)</label>
-              <div class="scope-grid" id="ak-provider-scope"></div>
-              <div class="row">
-                <button class="btn" onclick="createAccessKey()">Create key</button>
-              </div>
-              <div class="config-msg" id="ak-create-msg"></div>
-            </div>
-          </div>
-        </div>
-
-        <div class="panel" id="new-key-panel" style="display:none">
-          <div class="panel-header"><span class="panel-title">New Key — copy it now</span></div>
-          <div class="panel-body pad">
-            <p class="muted" style="margin-bottom:8px">This is the only time the full key is shown. It needs a router restart before it can be used.</p>
-            <div class="config-form">
-              <div class="row">
-                <input id="new-key-value" type="text" readonly class="mono" style="flex:1">
-                <button class="btn" onclick="copyNewKey()" style="flex:0 0 auto">Copy</button>
-                <button class="btn" onclick="dismissNewKey()" style="flex:0 0 auto">Done</button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="panel">
-          <div class="panel-header"><span class="panel-title">Access Keys</span></div>
-          <div class="panel-body">
-            <table>
-              <thead><tr>
-                <th>Name</th><th>Key</th><th class="right">RPM</th><th class="right">Req/day</th>
-                <th class="right">Tokens/day</th><th class="right">Cost/day</th>
-                <th class="right">Used today</th><th>Providers</th><th>Status</th><th></th>
-              </tr></thead>
-              <tbody id="access-keys-tbody"></tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <!-- ── Models ───────────────────────────────────────────────────────── -->
-      <section class="page" id="page-models">
-        <div class="panel">
-          <div class="panel-header"><span class="panel-title">Provider Model</span></div>
-          <div class="page-intro" style="padding:12px 14px 0">Override which model a provider uses — comma-separate several models for per-model failover.</div>
-          <div class="config-grid narrow">
-            <div class="config-form">
-              <div class="row">
-                <select id="cfg-model-provider" onchange="onModelProviderChange()"></select>
-              </div>
-              <input id="cfg-model-value" type="text" placeholder="model or model1,model2,...">
-              <div class="default-hint" id="cfg-model-default"></div>
-              <div class="row">
-                <button class="btn" onclick="setModel()">Save model</button>
-                <button class="btn" onclick="resetModel()">Reset</button>
-              </div>
-              <div class="config-msg" id="cfg-model-msg"></div>
-            </div>
-          </div>
-        </div>
-
-        <div class="panel">
-          <div class="panel-header"><span class="panel-title">Model Capabilities</span></div>
-          <div class="panel-body">
-            <table>
-              <thead><tr>
-                <th>Provider</th><th>Model</th><th>Rating</th><th>Tools</th><th>Reasoning</th>
-              </tr></thead>
-              <tbody id="model-caps-tbody"></tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <!-- ── Add-ons ──────────────────────────────────────────────────────── -->
-      <section class="page" id="page-addons">
-        <div class="panel">
-          <div class="panel-header"><span class="panel-title">Feature Add-ons</span></div>
-          <div class="addon-grid" id="addon-grid"></div>
-        </div>
-
-        <div class="panel">
-          <div class="panel-header"><span class="panel-title">Cache</span></div>
-          <div class="panel-body">
-            <table>
-              <tbody id="cache-tbody"></tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <!-- ── Request Log ──────────────────────────────────────────────────── -->
-      <section class="page" id="page-logs">
-        <div class="panel">
-          <div class="panel-header">
-            <span class="panel-title">Live Request Log</span>
-            <div style="display:flex;gap:8px;align-items:center">
-              <select id="log-filter-status" style="background:var(--surface);color:var(--muted);border:1px solid var(--border);border-radius:5px;padding:2px 6px;font-size:11px">
-                <option value="">All statuses</option>
-                <option value="success">success</option>
-                <option value="error">error</option>
-                <option value="cache_hit">cache_hit</option>
-              </select>
-              <select id="log-filter-endpoint" style="background:var(--surface);color:var(--muted);border:1px solid var(--border);border-radius:5px;padding:2px 6px;font-size:11px">
-                <option value="">All endpoints</option>
-                <option value="chat">chat</option>
-                <option value="messages">messages</option>
-                <option value="embeddings">embeddings</option>
-              </select>
-            </div>
-          </div>
-          <div class="panel-body" id="log-wrap">
-            <table>
-              <thead><tr>
-                <th>Time</th><th>Endpoint</th><th>Provider</th><th>Model</th>
-                <th class="right">Latency</th><th class="right">Complexity</th>
-                <th class="right">Cascades</th><th class="right">Prompt tok</th>
-                <th class="right">Compl tok</th><th>Status</th>
-              </tr></thead>
-              <tbody id="log-tbody"></tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-    </main>
-  </div>
-</div>
-
-<script>
-// ── state ──────────────────────────────────────────────────────────────────────
-let apiKey = localStorage.getItem('hermes_dash_key') || '';
-let statusData = null, usageData = null, logsData = [], accessKeysData = [], instancesData = [];
-let editingKeyTail = null;
-let autoInstanceBaseUrl = false;
-let INTERVAL = 5000;
-let timer = null;
-
-// ── sidebar navigation ───────────────────────────────────────────────────────
-const PAGES = ['overview', 'providers', 'instances', 'keys', 'access', 'models', 'addons', 'logs'];
-
-function showPage(name) {
-  if (!PAGES.includes(name)) name = 'overview';
-  document.querySelectorAll('.page').forEach(el => el.classList.toggle('active', el.id === 'page-' + name));
-  document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.page === name));
-  location.hash = name;
-  window.scrollTo({top: 0});
-}
-
-// ── key gate ──────────────────────────────────────────────────────────────────
-(function init() {
-  const initial = (location.hash || '').replace('#', '');
-  if (PAGES.includes(initial)) showPage(initial);
-  window.addEventListener('hashchange', () => {
-    const h = (location.hash || '').replace('#', '');
-    if (PAGES.includes(h)) showPage(h);
-  });
-  onInstanceModeChange();
-  document.getElementById('inst-host-port').addEventListener('input', () => updateDockerBaseUrl());
-  document.getElementById('inst-base-url').addEventListener('input', () => { autoInstanceBaseUrl = false; });
-  if (apiKey) { document.getElementById('key-gate').classList.add('hidden'); start(); }
-  document.getElementById('key-input').addEventListener('keydown', e => { if (e.key==='Enter') submitKey(); });
-})();
-
-function submitKey() {
-  const v = document.getElementById('key-input').value.trim();
-  if (!v) return;
-  apiKey = v;
-  localStorage.setItem('hermes_dash_key', v);
-  const errEl = document.getElementById('gate-error');
-  if (errEl) errEl.textContent = '';
-  document.getElementById('key-gate').classList.add('hidden');
-  start();
-}
-
-// ── polling ───────────────────────────────────────────────────────────────────
-function start() { stop(); refresh(); loadConfigProviders(); timer = setInterval(refresh, INTERVAL); }
-
-async function refresh() {
-  try {
-    const h = { 'Authorization': 'Bearer ' + apiKey };
-    const logStatus  = document.getElementById('log-filter-status').value;
-    const logEp      = document.getElementById('log-filter-endpoint').value;
-    let logUrl = '/v1/logs?limit=100';
-    if (logStatus) logUrl += '&status=' + logStatus;
-    if (logEp)     logUrl += '&endpoint=' + logEp;
-
-    const resps = await Promise.all([
-      fetch('/v1/status', {headers:h}),
-      fetch('/v1/usage',  {headers:h}),
-      fetch(logUrl,       {headers:h}),
-      fetch('/v1/config/proxy-keys', {headers:h}),
-      fetch('/v1/instances', {headers:h}),
-    ]);
-    // fetch() only rejects on network errors, not on HTTP 4xx/5xx — so a bad key
-    // (401) would otherwise parse to an error body and render as all-zeros. Detect
-    // it explicitly and send the user back to the key gate instead of faking data.
-    if (resps.some(r => r.status === 401)) {
-      stop();
-      apiKey = '';
-      localStorage.removeItem('hermes_dash_key');
-      showGate('That key was rejected (401). It must match one of PROXY_API_KEYS.');
-      return;
-    }
-    if (resps.some(r => !r.ok)) { setHeader(false, 'HTTP ' + (resps.find(r=>!r.ok)||{}).status); return; }
-
-    const [s, u, l, ak, inst] = await Promise.all(resps.map(r => r.json()));
-    statusData = s; usageData = u; logsData = l.entries || [];
-    accessKeysData = ak.keys || [];
-    instancesData = inst.instances || [];
-    renderAll();
-    setHeader(true);
-  } catch(e) {
-    setHeader(false, 'unreachable');
-  }
-  document.getElementById('log-filter-status').onchange  = refresh;
-  document.getElementById('log-filter-endpoint').onchange = refresh;
-}
-
-function stop() { if (timer) { clearInterval(timer); timer = null; } }
-
-function showGate(errMsg) {
-  stop();
-  const gate = document.getElementById('key-gate');
-  gate.classList.remove('hidden');
-  const errEl = document.getElementById('gate-error');
-  if (errEl) errEl.textContent = errMsg || '';
-  const input = document.getElementById('key-input');
-  input.value = '';
-  input.focus();
-}
-
-function setHeader(ok, detail) {
-  const dot = document.getElementById('hdr-dot');
-  const lbl = document.getElementById('hdr-status');
-  dot.className = ok ? 'dot' : 'dot err';
-  lbl.textContent = ok ? 'live' : ('error' + (detail ? ' · ' + detail : ''));
-  document.getElementById('last-update').textContent =
-    'Updated ' + new Date().toLocaleTimeString();
-}
-
-// ── helpers ───────────────────────────────────────────────────────────────────
-function esc(s){ return String(s==null?'':s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
-function attr(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-const fmt = {
-  num:  n => n == null ? '—' : Number(n).toLocaleString(),
-  tok:  n => { if (n==null||n===0) return '0'; if (n>=1e9) return (n/1e9).toFixed(1)+'B'; if (n>=1e6) return (n/1e6).toFixed(1)+'M'; if (n>=1e3) return (n/1e3).toFixed(1)+'K'; return String(n); },
-  pct:  n => n == null ? '—' : n.toFixed(1) + '%',
-  ms:   n => n == null ? '—' : (n >= 1000 ? (n/1000).toFixed(1)+'s' : Math.round(n)+'ms'),
-  usd:  n => n == null ? '—' : (n < 0.0001 ? '<$0.0001' : '$' + n.toFixed(4)),
-  uptime: s => { if (!s) return '—'; const h=Math.floor(s/3600),m=Math.floor((s%3600)/60); return (h?h+'h ':'') + m+'m'; },
-  time: ts => { if (!ts) return '—'; try { return new Date(ts).toLocaleTimeString(); } catch { return ts; } },
-};
-
-function el(tag, cls, html) {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  if (html != null) e.innerHTML = html;
-  return e;
-}
-
-function ratingPips(r) {
-  if (!r) return '<span class="muted">—</span>';
-  const cls = ['','r1','r2','r3','r4','r5'][r] || 'r5';
-  const labels = ['','Outstanding','Best','Good','Fair','Basic'];
-  let h = `<div class="rating-bar ${cls}" title="${labels[r]||''}">`;
-  for (let i=1;i<=5;i++) h += `<div class="rating-pip ${i<=r?'active':''}"></div>`;
-  return h + '</div>';
-}
-
-function statusPill(s, breaker) {
-  if (breaker) return '<span class="pill pill-err">⨂ tripped</span>';
-  if (s && s.total_requests === 0) return '<span class="pill pill-grey">idle</span>';
-  const erp = s ? (s.errors / (s.total_requests||1) * 100) : 0;
-  if (erp > 20) return '<span class="pill pill-err">degraded</span>';
-  if (erp > 5)  return '<span class="pill pill-warn">unstable</span>';
-  return '<span class="pill pill-ok">healthy</span>';
-}
-
-function keyDots(keys) {
-  if (!keys || !keys.length) return '<span class="muted">—</span>';
-  return keys.map(k => {
-    const cls = k.status === 'cooling' ? 'dot-warn' : 'dot-ok';
-    const req = k.requests != null ? `${k.requests} req` : '';
-    const title = (k.status === 'cooling' ? `cooling (${k.ready_in}s)` : 'ready') + (req ? ` · ${req}` : '');
-    return `<span class="${cls}" title="${title}" style="display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:2px"></span>`;
-  }).join('');
-}
-
-// ── render all ────────────────────────────────────────────────────────────────
-function renderAll() {
-  renderPlainOverview();
-  renderNavHealth();
-  renderInstanceNavHealth();
-  renderRotationForm();
-  renderStats();
-  renderProviderCards();
-  renderInstances();
-  renderProviders();
-  renderLogs();
-  renderCache();
-  renderAddons();
-  renderKeys();
-  renderAccessKeys();
-  renderModelCaps();
-}
-
-function renderNavHealth() {
-  const dot = document.getElementById('nav-dot-providers');
-  if (!dot || !statusData) return;
-  const vals = Object.values(statusData.providers || {});
-  const openBreakers = vals.filter(p => p.breaker?.open).length;
-  const totalReq = vals.reduce((a,p) => a + (p.stats?.total_requests || 0), 0);
-  const totalErr = vals.reduce((a,p) => a + (p.stats?.errors || 0), 0);
-  const errRate = totalReq ? totalErr / totalReq * 100 : 0;
-  dot.className = 'nav-dot' + (openBreakers ? ' bad' : errRate > 5 ? ' warn' : '');
-}
-
-function instanceHealthCounts() {
-  const total = instancesData.length;
-  const healthy = instancesData.filter(i => i.live?.status === 'healthy').length;
-  const unreachable = instancesData.filter(i => i.live?.status === 'unreachable').length;
-  const authErrors = instancesData.filter(i => i.live?.status === 'auth_error').length;
-  const unknown = instancesData.filter(i => !i.live?.status || i.live.status === 'unknown').length;
-  const unhealthy = Math.max(0, total - healthy);
-  return {total, healthy, unhealthy, unreachable, authErrors, unknown};
-}
-
-function renderInstanceNavHealth() {
-  const dot = document.getElementById('nav-dot-instances');
-  if (!dot) return;
-  const c = instanceHealthCounts();
-  dot.className = 'nav-dot' + (c.unreachable || c.authErrors ? ' bad' : c.unhealthy ? ' warn' : '');
-}
-
-function renderRotationForm() {
-  const sel = document.getElementById('cfg-rotation-value');
-  if (sel && statusData?.rotation?.mode) sel.value = statusData.rotation.mode;
-}
-
-function renderPlainOverview() {
-  if (!statusData || !usageData) return;
-  const prov = statusData.providers || {};
-  const vals = Object.values(prov);
-  const keyCount = vals.reduce((a,p) => a + ((p.keys || []).length), 0);
-  const readyKeys = vals.reduce((a,p) => a + ((p.keys || []).filter(k => k.status === 'ready').length), 0);
-  const openBreakers = vals.filter(p => p.breaker?.open).length;
-  const active = vals.filter(p => (p.stats?.total_requests || 0) > 0).length;
-  const totalReq = vals.reduce((a,p) => a + (p.stats?.total_requests || 0), 0);
-  const totalErr = vals.reduce((a,p) => a + (p.stats?.errors || 0), 0);
-  const errRate = totalReq ? totalErr / totalReq * 100 : 0;
-
-  const state = document.getElementById('plain-state');
-  const title = document.getElementById('plain-title');
-  const msg = document.getElementById('plain-message');
-  state.className = 'hero-state';
-  if (!keyCount) {
-    state.classList.add('bad');
-    state.textContent = 'needs a key';
-    title.textContent = 'Add one provider key to start routing';
-    msg.textContent = 'Choose a provider below, paste its API key, then restart Hermes Router.';
-  } else if (openBreakers || errRate > 25) {
-    state.classList.add('warn');
-    state.textContent = 'needs attention';
-    title.textContent = 'Hermes is running, but some providers are failing';
-    msg.textContent = 'Requests can still fall back to healthy providers. Add more keys or check providers with high errors.';
-  } else {
-    state.classList.add('good');
-    state.textContent = 'ready';
-    title.textContent = 'Hermes Router is ready';
-    msg.textContent = active ? 'Traffic is flowing through your provider pool.' : 'No requests yet. Point your app at the endpoint below.';
-  }
-
-  document.getElementById('quick-endpoint').textContent = location.origin + '/v1';
-  document.getElementById('quick-model').textContent = 'hermes-router';
-  document.getElementById('quick-spend').textContent = fmt.usd(usageData.totals?.cost?.usd);
-  setStep('step-key', keyCount > 0, `${readyKeys}/${keyCount} keys ready`);
-  setStep('step-health', !openBreakers && errRate <= 25, openBreakers ? `${openBreakers} breaker open` : (errRate ? `${fmt.pct(errRate)} errors` : 'ok'));
-}
-
-function setStep(id, done, text) {
-  const el = document.getElementById(id);
-  el.className = 'setup-step ' + (done ? 'done' : 'warn');
-  const label = document.getElementById(id + '-text');
-  if (label) label.textContent = text;
-}
-
-function renderProviderCards() {
-  if (!statusData) return;
-  const prov = statusData.providers || {};
-  const grid = document.getElementById('provider-card-grid');
-  const entries = Object.entries(prov).sort(([an,a],[bn,b]) => {
-    const badA = (a.breaker?.open ? 2 : 0) + ((a.stats?.errors || 0) > 0 ? 1 : 0);
-    const badB = (b.breaker?.open ? 2 : 0) + ((b.stats?.errors || 0) > 0 ? 1 : 0);
-    return badB - badA || an.localeCompare(bn);
-  }).slice(0, 8);
-  if (!entries.length) {
-    grid.innerHTML = '<div class="provider-card bad"><div class="provider-name">No providers configured</div><div class="provider-model">Add an API key below.</div></div>';
-    return;
-  }
-  grid.innerHTML = entries.map(([name,p]) => {
-    const req = p.stats?.total_requests || 0;
-    const err = p.stats?.errors || 0;
-    const erp = req ? err / req * 100 : 0;
-    const ready = (p.keys || []).filter(k => k.status === 'ready').length;
-    const brk = p.breaker?.open;
-    const cls = brk || erp > 25 ? 'bad' : erp > 5 ? 'warn' : '';
-    const pill = brk ? '<span class="pill pill-err">paused</span>' :
-      erp > 25 ? '<span class="pill pill-err">check</span>' :
-      erp > 5 ? '<span class="pill pill-warn">watch</span>' :
-      '<span class="pill pill-ok">ready</span>';
-    return `<div class="provider-card ${cls}">
-      <div class="provider-head"><span class="provider-name">${name}</span>${pill}</div>
-      <div class="provider-model" title="${p.model || ''}">${p.model || 'no model'}</div>
-      <div class="provider-meta"><span>${ready} ready key${ready===1?'':'s'}</span><span>${fmt.ms(p.stats?.avg_latency_ms)}</span></div>
-    </div>`;
-  }).join('');
-}
-
-// ── instances ────────────────────────────────────────────────────────────────
-function renderInstances() {
-  const summary = document.getElementById('instance-summary-grid');
-  const tbody = document.getElementById('instances-tbody');
-  if (!summary || !tbody) return;
-  const health = instanceHealthCounts();
-  const managed = instancesData.filter(i => i.mode === 'docker').length;
-  const running = instancesData.filter(i => i.docker?.running).length;
-  const attentionText = health.unreachable
-    ? `${health.unreachable} unreachable`
-    : health.authErrors
-      ? `${health.authErrors} auth issue${health.authErrors===1?'':'s'}`
-      : health.unhealthy
-        ? `${health.unhealthy} need attention`
-        : 'none';
-  const attentionSub = health.unreachable
-    ? 'health endpoint not reachable'
-    : health.authErrors
-      ? 'health ok, key rejected'
-      : health.unknown
-        ? 'waiting for first probe'
-        : 'all registered instances reachable';
-  const attentionClass = health.unreachable || health.authErrors ? 'bad' : health.unhealthy ? 'warn' : '';
-  summary.innerHTML = [
-    ['Registered', fmt.num(health.total), 'routers tracked by this dashboard', ''],
-    ['Healthy', `${health.healthy}/${health.total || 0}`, 'health endpoint reachable', health.unhealthy ? 'warn' : ''],
-    ['Needs attention', attentionText, attentionSub, attentionClass],
-    ['Docker managed', fmt.num(managed), `${running} running container${running===1?'':'s'}`, ''],
-  ].map(([label,value,sub,cls]) => `<div class="instance-card ${cls}">
-    <div class="quick-label">${label}</div><div class="quick-value">${value}</div><div class="quick-sub">${sub}</div>
-  </div>`).join('');
-
-  if (!instancesData.length) {
-    tbody.innerHTML = '<tr><td colspan="8"><div class="instance-empty"><div><strong>No instances yet</strong><br><span>Connect an existing router or launch a Docker router above.</span></div></div></td></tr>';
-    return;
-  }
-  tbody.innerHTML = instancesData.map(i => {
-    const live = i.live || {};
-    const docker = i.docker || {};
-    const healthCls = live.status === 'healthy' ? 'pill-ok' : live.status === 'auth_error' ? 'pill-warn' : 'pill-err';
-    const dockerPill = i.mode !== 'docker'
-      ? '<span class="pill pill-grey">external</span>'
-      : docker.running
-        ? '<span class="pill pill-ok">running</span>'
-        : docker.exists
-          ? `<span class="pill pill-warn">${esc(docker.status || 'stopped')}</span>`
-          : `<span class="pill pill-grey">${esc(docker.status || 'not created')}</span>`;
-    const env = i.env || {};
-    const actions = i.mode === 'docker'
-      ? `<button class="btn" onclick="instanceAction('${i.id}','start')">Start</button>
-         <button class="btn" onclick="instanceAction('${i.id}','restart')">Restart</button>
-         <button class="btn" onclick="instanceAction('${i.id}','stop')">Stop</button>
-         <button class="btn danger" onclick="deleteInstance('${i.id}', true)">Delete</button>`
-      : `<button class="btn danger" onclick="deleteInstance('${i.id}', false)">Delete</button>`;
-    return `<tr>
-      <td><strong>${esc(i.name)}</strong><br><span class="mono muted">${esc(i.id)}</span></td>
-      <td>${esc(i.mode)}</td>
-      <td class="mono"><a style="color:var(--accent)" href="${attr(i.base_url)}" target="_blank" rel="noreferrer">${esc(i.base_url)}</a></td>
-      <td><span class="pill ${healthCls}" title="${attr(live.message || '')}">${esc(live.status || 'unknown')}</span></td>
-      <td>${dockerPill}</td>
-      <td class="mono muted">${i.api_key?.configured ? '...' + esc(i.api_key.tail) : 'none'}</td>
-      <td class="muted" title="${attr((env.keys||[]).join(', '))}">${fmt.num(env.count || 0)} var${(env.count||0)===1?'':'s'}</td>
-      <td><div class="instance-actions">${actions}</div></td>
-    </tr>`;
-  }).join('');
-}
-
-function setInstanceMode(mode) {
-  document.getElementById('inst-mode').value = mode;
-  onInstanceModeChange();
-}
-
-function onInstanceModeChange() {
-  const mode = document.getElementById('inst-mode').value;
-  const base = document.getElementById('inst-base-url');
-  const image = document.getElementById('inst-image');
-  const env = document.getElementById('inst-env');
-  const external = mode === 'external';
-  document.getElementById('mode-external').classList.toggle('active', external);
-  document.getElementById('mode-docker').classList.toggle('active', !external);
-  document.getElementById('inst-port-fields').classList.toggle('hidden-field', external);
-  document.getElementById('inst-docker-options').classList.toggle('hidden-field', external);
-  document.getElementById('inst-start-btn').classList.toggle('hidden-field', external);
-  document.getElementById('inst-save-btn').textContent = external ? 'Register instance' : 'Create instance';
-  if (mode === 'docker') {
-    image.disabled = false;
-    env.disabled = false;
-    base.placeholder = 'auto from host port';
-    document.getElementById('inst-base-hint').textContent = 'Filled from the host port unless you override it.';
-    document.getElementById('inst-key-label').textContent = 'Instance access key';
-    document.getElementById('inst-key-hint').textContent = 'Leave blank to generate one for this container.';
-    document.getElementById('inst-api-key').placeholder = 'generated if blank';
-    updateDockerBaseUrl();
-  } else {
-    image.disabled = true;
-    env.disabled = true;
-    base.placeholder = 'http://localhost:8320/v1';
-    document.getElementById('inst-base-hint').textContent = 'Agents use this as their base URL.';
-    document.getElementById('inst-key-label').textContent = 'Router access key';
-    document.getElementById('inst-key-hint').textContent = 'Used to verify authenticated endpoints.';
-    document.getElementById('inst-api-key').placeholder = 'sk-router-...';
-  }
-}
-
-function updateDockerBaseUrl() {
-  if (document.getElementById('inst-mode').value !== 'docker') return;
-  const port = document.getElementById('inst-host-port').value.trim();
-  const base = document.getElementById('inst-base-url');
-  if (!port) return;
-  if (!base.value.trim() || autoInstanceBaseUrl) {
-    base.value = `http://localhost:${port}/v1`;
-    autoInstanceBaseUrl = true;
-  }
-}
-
-function parseInstanceEnv() {
-  const raw = document.getElementById('inst-env').value;
-  const env = {};
-  for (const line of raw.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const idx = trimmed.indexOf('=');
-    if (idx < 1) throw new Error('Env lines must be KEY=value.');
-    const key = trimmed.slice(0, idx).trim();
-    const value = trimmed.slice(idx + 1).trim();
-    env[key] = value;
-  }
-  return env;
-}
-
-async function createInstance(start) {
-  let env = {};
-  try { env = parseInstanceEnv(); }
-  catch(e) { setMsg('inst-msg', e.message, false); return; }
-  const mode = document.getElementById('inst-mode').value;
-  if (mode === 'external') env = {};
-  const name = document.getElementById('inst-name').value.trim();
-  const baseUrl = document.getElementById('inst-base-url').value.trim();
-  const hostPort = document.getElementById('inst-host-port').value.trim();
-  if (!name) { setMsg('inst-msg', 'Name this instance first.', false); return; }
-  if (mode === 'external' && !baseUrl) { setMsg('inst-msg', 'Enter the router base URL.', false); return; }
-  if (mode === 'docker' && !hostPort) { setMsg('inst-msg', 'Choose a host port for the Docker router.', false); return; }
-  const body = {
-    name,
-    mode,
-    base_url: baseUrl,
-    host_port: hostPort,
-    container_port: document.getElementById('inst-container-port').value,
-    image: document.getElementById('inst-image').value,
-    api_key: document.getElementById('inst-api-key').value,
-    env,
-    copy_provider_keys: mode === 'docker'
-      ? [...document.querySelectorAll('#inst-copy-provider-keys input:checked')].map(el => el.value)
-      : [],
-    start,
-  };
-  try {
-    const r = await fetch('/v1/instances', {
-      method: 'POST',
-      headers: {'Authorization':'Bearer '+apiKey, 'Content-Type':'application/json'},
-      body: JSON.stringify(body),
-    });
-    const d = await r.json();
-    if (!r.ok) { setMsg('inst-msg', d.error?.message || 'Failed to save instance.', false); return; }
-    ['inst-name','inst-base-url','inst-host-port','inst-api-key','inst-env'].forEach(id => document.getElementById(id).value = '');
-    document.querySelectorAll('#inst-copy-provider-keys input:checked').forEach(el => el.checked = false);
-    autoInstanceBaseUrl = false;
-    if (d.generated_api_key) {
-      document.getElementById('new-instance-key-value').value = d.generated_api_key;
-      document.getElementById('new-instance-key-panel').style.display = 'block';
-    }
-    await refresh();
-    const saved = instancesData.find(i => i.id === d.instance?.id);
-    const savedStatus = saved?.live?.status;
-    if (d.action && !d.action.ok) {
-      setWarnMsg('inst-msg', 'Saved, but Docker start failed: ' + d.action.message);
-    } else if (savedStatus && savedStatus !== 'healthy') {
-      setWarnMsg('inst-msg', `Instance saved, but it is ${savedStatus}.`);
-    } else {
-      setMsg('inst-msg', 'Instance saved.', true);
-    }
-  } catch(e) { setMsg('inst-msg', 'Network error: ' + e.message, false); }
-}
-
-async function instanceAction(id, action) {
-  try {
-    const r = await fetch(`/v1/instances/${id}/${action}`, {
-      method: 'POST',
-      headers: {'Authorization':'Bearer '+apiKey},
-    });
-    const d = await r.json();
-    if (!r.ok || !d.ok) { alert(d.message || d.error?.message || 'Instance action failed.'); return; }
-    await refresh();
-  } catch(e) { alert('Network error: ' + e.message); }
-}
-
-async function deleteInstance(id, managed) {
-  const msg = managed
-    ? 'Delete this instance from the registry and remove its Docker container?'
-    : 'Delete this instance from the registry?';
-  if (!confirm(msg)) return;
-  const qs = managed ? '?remove_container=1' : '';
-  try {
-    const r = await fetch('/v1/instances/' + id + qs, {
-      method: 'DELETE',
-      headers: {'Authorization':'Bearer '+apiKey},
-    });
-    const d = await r.json();
-    if (!r.ok) { alert(d.error?.message || 'Failed to delete instance.'); return; }
-    await refresh();
-  } catch(e) { alert('Network error: ' + e.message); }
-}
-
-function copyInstanceKey() {
-  const el = document.getElementById('new-instance-key-value');
-  el.select();
-  navigator.clipboard?.writeText(el.value).catch(() => document.execCommand('copy'));
-}
-
-function dismissInstanceKey() {
-  document.getElementById('new-instance-key-panel').style.display = 'none';
-  document.getElementById('new-instance-key-value').value = '';
-}
-
-// ── stat cards ────────────────────────────────────────────────────────────────
-function renderStats() {
-  if (!statusData || !usageData) return;
-  const prov   = statusData.providers || {};
-  const nProv  = Object.keys(prov).length;
-  const broken = Object.values(prov).filter(p => p.breaker && p.breaker.open).length;
-  document.getElementById('s-providers').textContent = nProv;
-  document.getElementById('s-providers-sub').textContent =
-    broken ? `${broken} breaker(s) tripped` : 'all healthy';
-
-  document.getElementById('s-uptime').textContent = fmt.uptime(usageData.uptime_s);
-
-  const totReq = Object.values(prov).reduce((a,p) => a + (p.stats?.total_requests||0), 0);
-  const totErr = Object.values(prov).reduce((a,p) => a + (p.stats?.errors||0), 0);
-  document.getElementById('s-requests').textContent = fmt.num(totReq);
-  document.getElementById('s-requests-sub').textContent =
-    totReq ? fmt.pct(totErr/totReq*100) + ' error rate' : '';
-
-  const tot = usageData.totals || {};
-  document.getElementById('s-tokens').textContent = fmt.tok(tot.tokens);
-  document.getElementById('s-cost').textContent   = 'est. ' + fmt.usd(tot.cost?.usd);
-
-  const cache = statusData.cache || {};
-  document.getElementById('s-hitrate').textContent = fmt.pct((cache.hit_rate||0)*100);
-  document.getElementById('s-cache-sub').textContent =
-    `${fmt.num(cache.hits)} hits / ${fmt.num(cache.misses)} misses`;
-
-  const errRate = totReq ? (totErr / totReq * 100) : 0;
-  const errEl = document.getElementById('s-errrate');
-  errEl.textContent = fmt.pct(errRate);
-  errEl.style.color = errRate > 10 ? 'var(--red)' : errRate > 3 ? 'var(--yellow)' : 'var(--green)';
-  document.getElementById('s-errrate-sub').textContent = fmt.num(totErr) + ' total errors';
-}
-
-// ── provider table ────────────────────────────────────────────────────────────
-function renderProviders() {
-  if (!statusData) return;
-  const prov = statusData.providers || {};
-  const tbody = document.getElementById('provider-tbody');
-  tbody.innerHTML = '';
-  Object.entries(prov).forEach(([name, p]) => {
-    const s   = p.stats || {};
-    const req = s.total_requests || 0;
-    const err = s.errors || 0;
-    const erp = req ? err / req * 100 : 0;
-    const lat = s.avg_latency_ms;
-    const brk = p.breaker?.open || false;
-    const tr  = document.createElement('tr');
-    tr.innerHTML = `
-      <td><strong>${name}</strong></td>
-      <td class="muted mono" style="max-width:160px;overflow:hidden;text-overflow:ellipsis" title="${p.model||''}">${p.model||'—'}</td>
-      <td>${ratingPips(p.rating)}</td>
-      <td class="right">${fmt.num(req)}</td>
-      <td class="right ${err>0?'':'muted'}">${fmt.num(err)}</td>
-      <td class="right" style="color:${erp>10?'var(--red)':erp>3?'var(--yellow)':'var(--muted)'}">${req?fmt.pct(erp):'—'}</td>
-      <td class="right">${fmt.ms(lat)}</td>
-      <td class="right muted">${fmt.tok(p.tokens)}</td>
-      <td class="right muted">${fmt.usd(p.cost_usd)}</td>
-      <td>${keyDots(p.keys)}</td>
-      <td>${brk?'<span class="pill pill-err">open</span>':'<span class="pill pill-ok">closed</span>'}</td>
-      <td>${statusPill(s, brk)}</td>
-    `;
-    tbody.appendChild(tr);
-  });
-}
-
-// ── live log ──────────────────────────────────────────────────────────────────
-function renderLogs() {
-  const tbody = document.getElementById('log-tbody');
-  if (!logsData.length) {
-    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:24px">No requests logged yet</td></tr>';
-    return;
-  }
-  tbody.innerHTML = '';
-  logsData.forEach(e => {
-    const tr = document.createElement('tr');
-    tr.className = 'log-row-' + (e.status||'');
-    const sp = e.status === 'success' ? 'pill-ok' : e.status === 'error' ? 'pill-err' : 'pill-cache';
-    const cascBadge = e.cascades > 0
-      ? `<span class="pill pill-warn">${e.cascades}</span>`
-      : '<span class="muted">0</span>';
-    const cmpx = e.complexity;
-    const cmpxColor = !cmpx ? 'var(--muted)' : cmpx<=2?'var(--red)':cmpx>=5?'var(--green)':'var(--yellow)';
-    tr.innerHTML = `
-      <td class="mono muted">${fmt.time(e.ts)}</td>
-      <td>${e.endpoint||'—'}</td>
-      <td><strong>${e.provider||'—'}</strong></td>
-      <td class="muted mono" style="max-width:140px;overflow:hidden;text-overflow:ellipsis" title="${e.model||''}">${e.model||'—'}</td>
-      <td class="right">${fmt.ms(e.latency_ms)}</td>
-      <td class="right" style="color:${cmpxColor}">${cmpx||'—'}</td>
-      <td class="right">${cascBadge}</td>
-      <td class="right muted">${e.prompt_tokens!=null?fmt.num(e.prompt_tokens):'—'}</td>
-      <td class="right muted">${e.completion_tokens!=null?fmt.num(e.completion_tokens):'—'}</td>
-      <td><span class="pill ${sp}">${e.status||'—'}</span></td>
-    `;
-    tbody.appendChild(tr);
-  });
-}
-
-// ── cache panel ───────────────────────────────────────────────────────────────
-function renderCache() {
-  if (!statusData) return;
-  const c = statusData.cache || {};
-  const sem = c.semantic || {};
-  const rows = [
-    ['Enabled',       c.enabled ? '<span class="pill pill-ok">yes</span>' : '<span class="pill pill-grey">no</span>'],
-    ['TTL',           c.ttl_s != null ? c.ttl_s + 's' : '—'],
-    ['Size',          `${fmt.num(c.size)} / ${fmt.num(c.max_size)}`],
-    ['Persistent',    c.persistent ? '<span class="pill pill-ok">yes</span>' : '<span class="pill pill-grey">no</span>'],
-    ['Hits',          fmt.num(c.hits)],
-    ['Misses',        fmt.num(c.misses)],
-    ['Hit rate',      fmt.pct((c.hit_rate||0)*100)],
-    ['Semantic cache',sem.enabled ? '<span class="pill pill-ok">yes</span>' : '<span class="pill pill-grey">no</span>'],
-    ['Semantic hits', fmt.num(sem.hits)],
-    ['Sem. threshold',sem.threshold != null ? sem.threshold : '—'],
-  ];
-  const tbody = document.getElementById('cache-tbody');
-  tbody.innerHTML = rows.map(([k,v]) =>
-    `<tr><td class="muted" style="width:50%">${k}</td><td>${v}</td></tr>`
-  ).join('');
-}
-
-// ── add-ons panel ─────────────────────────────────────────────────────────────
-function renderAddons() {
-  if (!statusData?.features) return;
-  const addons = statusData.features.addons || [];
-  const grid = document.getElementById('addon-grid');
-  grid.innerHTML = addons.map(a => {
-    const clickable = a.kind === 'flag';
-    const attrs = clickable ? `onclick="toggleAddon('${a.name}', ${!a.enabled})" title="Click to ${a.enabled?'disable':'enable'}"` : '';
-    return `
-    <div class="addon-card ${clickable?'flag':''}" id="addon-${a.name}" ${attrs}>
-      <div class="addon-top">
-        <span class="addon-name">${a.title || a.name}</span>
-        <span class="pill ${a.enabled ? 'pill-ok' : 'pill-grey'}">${a.enabled ? 'on' : 'off'}</span>
-      </div>
-      <div class="addon-desc">${a.desc || ''}</div>
-      ${a.env ? `<div class="mono muted" style="margin-top:5px;font-size:10px">${a.env}</div>` : ''}
-    </div>
-  `;
-  }).join('');
-}
-
-// ── config: add-ons toggle ───────────────────────────────────────────────────
-async function toggleAddon(name, enable) {
-  const card = document.getElementById('addon-' + name);
-  if (card) card.classList.add('busy');
-  try {
-    const r = await fetch('/v1/config/features/' + name, {
-      method: 'POST',
-      headers: {'Authorization':'Bearer '+apiKey, 'Content-Type':'application/json'},
-      body: JSON.stringify({enabled: enable}),
-    });
-    const d = await r.json();
-    if (!r.ok) { alert(d.error?.message || 'Failed to toggle ' + name); return; }
-    showRestartBanner();
-    await refresh();
-  } catch(e) {
-    alert('Network error: ' + e.message);
-  } finally {
-    if (card) card.classList.remove('busy');
-  }
-}
-
-// ── config: providers / add key / model ──────────────────────────────────────
-let configProviders = null;
-
-async function loadConfigProviders() {
-  try {
-    const r = await fetch('/v1/config/providers', {headers:{'Authorization':'Bearer '+apiKey}});
-    if (!r.ok) return;
-    configProviders = await r.json();
-    const keySel = document.getElementById('cfg-key-provider');
-    keySel.innerHTML = configProviders.key_settable.map(p => `<option value="${p}">${p}</option>`).join('');
-    const modelSel = document.getElementById('cfg-model-provider');
-    modelSel.innerHTML = configProviders.model_settable.map(p => `<option value="${p}">${p}</option>`).join('');
-    onModelProviderChange();
-    renderProviderScopePicker();
-    renderInstanceCopyKeyPicker();
-    renderAccessKeys();   // re-render now that provider names/counts are known
-  } catch(e) { /* dashboard still usable without this */ }
-}
-
-// Providers a caller might sensibly scope an access key to — anything with a
-// live key count, or already model-settable (covers keyless "local"). Sorted
-// with the most-provisioned providers first, since those are the likely picks.
-function scopeableProviders() {
-  if (!configProviders) return [];
-  const counts = configProviders.key_counts || {};
-  const names = new Set([...Object.keys(counts), ...configProviders.model_settable]);
-  return [...names].sort((a,b) => (counts[b]||0) - (counts[a]||0) || a.localeCompare(b));
-}
-
-function renderProviderScopePicker() {
-  const grid = document.getElementById('ak-provider-scope');
-  if (!grid) return;
-  grid.innerHTML = renderScopeCheckboxes([]);
-}
-
-function renderInstanceCopyKeyPicker() {
-  const grid = document.getElementById('inst-copy-provider-keys');
-  if (!grid) return;
-  const counts = configProviders?.copyable_provider_keys || {};
-  const names = Object.keys(counts).filter(name => counts[name] > 0)
-    .sort((a,b) => counts[b] - counts[a] || a.localeCompare(b));
-  if (!names.length) {
-    grid.innerHTML = '<div class="field-hint">No configured provider keys are available to copy yet.</div>';
-    return;
-  }
-  grid.innerHTML = names.map(name => {
-    const n = counts[name] || 0;
-    return `<label class="scope-item"><input type="checkbox" value="${attr(name)}"> ${esc(name)}<span class="cnt">${n} key${n===1?'':'s'}</span></label>`;
-  }).join('');
-}
-
-function onModelProviderChange() {
-  if (!configProviders) return;
-  const p = document.getElementById('cfg-model-provider').value;
-  const def = configProviders.defaults[p] || '';
-  document.getElementById('cfg-model-default').textContent = 'default: ' + def;
-  const current = statusData?.providers?.[p]?.model || '';
-  document.getElementById('cfg-model-value').value = (current && current !== def) ? current : '';
-  document.getElementById('cfg-model-value').placeholder = def;
-}
-
-function setMsg(id, text, ok) {
-  const el = document.getElementById(id);
-  el.textContent = text;
-  el.className = 'config-msg ' + (ok ? 'ok' : 'err');
-}
-
-function setWarnMsg(id, text) {
-  const el = document.getElementById(id);
-  el.textContent = text;
-  el.className = 'config-msg warn';
-}
-
-async function addKey() {
-  const provider = document.getElementById('cfg-key-provider').value;
-  const key = document.getElementById('cfg-key-value').value.trim();
-  if (!key) { setMsg('cfg-key-msg', 'Enter a key first.', false); return; }
-  try {
-    const r = await fetch('/v1/config/keys/' + provider, {
-      method: 'POST',
-      headers: {'Authorization':'Bearer '+apiKey, 'Content-Type':'application/json'},
-      body: JSON.stringify({key}),
-    });
-    const d = await r.json();
-    if (!r.ok) { setMsg('cfg-key-msg', d.error?.message || 'Failed.', false); return; }
-    if (d.duplicate) { setMsg('cfg-key-msg', 'Already stored — no change.', false); return; }
-    document.getElementById('cfg-key-value').value = '';
-    setMsg('cfg-key-msg', `Saved — ${provider} now has ${d.total_keys} key(s).`, true);
-    showRestartBanner();
-  } catch(e) { setMsg('cfg-key-msg', 'Network error: ' + e.message, false); }
-}
-
-async function setModel() {
-  const provider = document.getElementById('cfg-model-provider').value;
-  const model = document.getElementById('cfg-model-value').value.trim();
-  if (!model) { setMsg('cfg-model-msg', 'Enter a model first.', false); return; }
-  try {
-    const r = await fetch('/v1/config/model/' + provider, {
-      method: 'POST',
-      headers: {'Authorization':'Bearer '+apiKey, 'Content-Type':'application/json'},
-      body: JSON.stringify({model}),
-    });
-    const d = await r.json();
-    if (!r.ok) { setMsg('cfg-model-msg', d.error?.message || 'Failed.', false); return; }
-    setMsg('cfg-model-msg', `Set ${provider} → ${model}`, true);
-    showRestartBanner();
-  } catch(e) { setMsg('cfg-model-msg', 'Network error: ' + e.message, false); }
-}
-
-async function resetModel() {
-  const provider = document.getElementById('cfg-model-provider').value;
-  try {
-    const r = await fetch('/v1/config/model/' + provider, {
-      method: 'DELETE',
-      headers: {'Authorization':'Bearer '+apiKey},
-    });
-    const d = await r.json();
-    if (!r.ok) { setMsg('cfg-model-msg', d.error?.message || 'Failed.', false); return; }
-    document.getElementById('cfg-model-value').value = '';
-    setMsg('cfg-model-msg', `Reset ${provider} to default.`, true);
-    showRestartBanner();
-  } catch(e) { setMsg('cfg-model-msg', 'Network error: ' + e.message, false); }
-}
-
-async function setRotation() {
-  const mode = document.getElementById('cfg-rotation-value').value;
-  try {
-    const r = await fetch('/v1/config/rotation', {
-      method: 'POST',
-      headers: {'Authorization':'Bearer '+apiKey, 'Content-Type':'application/json'},
-      body: JSON.stringify({mode}),
-    });
-    const d = await r.json();
-    if (!r.ok) { setMsg('cfg-rotation-msg', d.error?.message || 'Failed.', false); return; }
-    setMsg('cfg-rotation-msg', 'Saved rotation mode.', true);
-    showRestartBanner();
-  } catch(e) { setMsg('cfg-rotation-msg', 'Network error: ' + e.message, false); }
-}
-
-// ── restart ───────────────────────────────────────────────────────────────────
-function showRestartBanner() {
-  document.getElementById('restart-banner').classList.add('show');
-  setStep('step-restart', false, 'needed');
-}
-function dismissBanner() { document.getElementById('restart-banner').classList.remove('show'); }
-
-async function doRestart() {
-  if (!confirm('Restart the router now? It will be unreachable for a few seconds.')) return;
-  try {
-    await fetch('/v1/config/restart', {method:'POST', headers:{'Authorization':'Bearer '+apiKey}});
-  } catch(e) { /* the process may already be going down mid-response — expected */ }
-  dismissBanner();
-  setStep('step-restart', true, 'restarting');
-  setHeader(false, 'restarting…');
-  stop();
-  // Poll /health until it responds again, then resume normal operation.
-  const waitForRestart = setInterval(async () => {
-    try {
-      const r = await fetch('/health');
-      if (r.ok) { clearInterval(waitForRestart); start(); }
-    } catch(e) { /* still down — keep polling */ }
-  }, 1500);
-}
-
-// ── key usage ─────────────────────────────────────────────────────────────────
-function renderKeys() {
-  if (!usageData) return;
-  const keys = usageData.keys || [];
-  const limData = statusData?.limits || {};
-  const tbody = document.getElementById('keys-tbody');
-  if (!keys.length) {
-    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:18px">No key data</td></tr>';
-    return;
-  }
-  tbody.innerHTML = keys.map(k => {
-    const limEntry = (limData.keys || []).find(l => l.key_tail === k.key_tail);
-    const lim = limEntry?.limits || {};
-    const rpmUsed = k.rpm_current || 0;
-    const rpmMax  = lim.rpm || 0;
-    const rpmPct  = rpmMax ? Math.min(rpmUsed / rpmMax * 100, 100) : 0;
-    const rpmColor = rpmPct > 80 ? 'red' : rpmPct > 50 ? 'yellow' : 'green';
-    return `<tr>
-      <td class="mono">...${k.key_tail}</td>
-      <td class="right">${fmt.num(k.req_total)}</td>
-      <td class="right">
-        ${fmt.tok(k.tokens_today)}
-        ${lim.tokens_day ? `<br><span class="muted" style="font-size:10px">/ ${fmt.tok(lim.tokens_day)}</span>` : ''}
-      </td>
-      <td class="right">
-        ${fmt.usd(k.cost_today)}
-        ${lim.cost_day ? `<br><span class="muted" style="font-size:10px">/ ${fmt.usd(lim.cost_day)}</span>` : ''}
-      </td>
-      <td style="min-width:100px">
-        ${rpmMax
-          ? `<div class="prog-track"><div class="prog-fill ${rpmColor}" style="width:${rpmPct}%"></div></div>
-             <span class="muted" style="font-size:10px">${rpmUsed}/${rpmMax} rpm</span>`
-          : '<span class="muted">unlimited</span>'}
-      </td>
-    </tr>`;
-  }).join('');
-}
-
-// ── access keys (proxy keys others use to call the router) ───────────────────
-function renderAccessKeys() {
-  const tbody = document.getElementById('access-keys-tbody');
-  if (!tbody) return;
-  if (!accessKeysData.length) {
-    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:18px">No access keys yet</td></tr>';
-    return;
-  }
-  tbody.innerHTML = accessKeysData.map(k => {
-    const tail = k.key_tail;
-    const lim = k.limits || {};
-    const used = k.usage || {};
-    const allowed = k.allowed_providers || [];
-    const statusPill = k.pending_restart
-      ? '<span class="pill pill-warn">pending restart</span>'
-      : '<span class="pill pill-ok">active</span>';
-
-    if (editingKeyTail === tail) {
-      return `<tr>
-        <td><input id="edit-name-${tail}" type="text" value="${attr(k.name||'')}" style="width:110px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:4px 6px;font-size:11px"></td>
-        <td class="mono muted">...${esc(tail)}</td>
-        <td class="right"><input id="edit-rpm-${tail}" type="number" min="0" value="${lim.rpm||''}" placeholder="∞" style="width:55px;text-align:right;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:4px 6px;font-size:11px"></td>
-        <td class="right"><input id="edit-reqday-${tail}" type="number" min="0" value="${lim.req_per_day||''}" placeholder="∞" style="width:65px;text-align:right;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:4px 6px;font-size:11px"></td>
-        <td class="right"><input id="edit-tokday-${tail}" type="number" min="0" value="${lim.tokens_per_day||''}" placeholder="∞" style="width:75px;text-align:right;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:4px 6px;font-size:11px"></td>
-        <td class="right"><input id="edit-costday-${tail}" type="number" min="0" step="0.01" value="${lim.cost_per_day||''}" placeholder="∞" style="width:65px;text-align:right;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:4px 6px;font-size:11px"></td>
-        <td class="right muted">${fmt.num(used.req_today)}</td>
-        <td><div class="scope-grid" id="edit-scope-${tail}" style="min-width:180px">${renderScopeCheckboxes(allowed)}</div></td>
-        <td>${statusPill}</td>
-        <td style="white-space:nowrap"><button class="btn" onclick="saveEditAccessKey('${tail}')">Save</button> <button class="btn" onclick="cancelEditAccessKey()">Cancel</button></td>
-      </tr>`;
-    }
-    return `<tr>
-      <td>${esc(k.name || '—')}</td>
-      <td class="mono muted">...${esc(tail)}</td>
-      <td class="right">${lim.rpm || '∞'}</td>
-      <td class="right">${lim.req_per_day || '∞'}</td>
-      <td class="right">${lim.tokens_per_day ? fmt.tok(lim.tokens_per_day) : '∞'}</td>
-      <td class="right">${lim.cost_per_day ? fmt.usd(lim.cost_per_day) : '∞'}</td>
-      <td class="right muted">${fmt.num(used.req_today)}</td>
-      <td class="muted">${allowed.length ? esc(allowed.join(', ')) : 'all'}</td>
-      <td>${statusPill}</td>
-      <td style="white-space:nowrap"><button class="btn" onclick="startEditAccessKey('${tail}')">Edit</button> <button class="btn" onclick="revokeAccessKey('${tail}')">Revoke</button></td>
-    </tr>`;
-  }).join('');
-}
-
-function renderScopeCheckboxes(selected) {
-  const sel = new Set(selected || []);
-  return scopeableProviders().map(name => {
-    const n = (configProviders && configProviders.key_counts || {})[name];
-    const cnt = n != null ? `<span class="cnt">${n} key${n===1?'':'s'}</span>` : '';
-    const checked = sel.has(name) ? ' checked' : '';
-    return `<label class="scope-item"><input type="checkbox" value="${attr(name)}"${checked}> ${esc(name)}${cnt}</label>`;
-  }).join('');
-}
-
-function startEditAccessKey(tail) { editingKeyTail = tail; renderAccessKeys(); }
-function cancelEditAccessKey() { editingKeyTail = null; renderAccessKeys(); }
-
-async function saveEditAccessKey(tail) {
-  const scopeEl = document.getElementById(`edit-scope-${tail}`);
-  const allowedProviders = scopeEl ? [...scopeEl.querySelectorAll('input:checked')].map(el => el.value) : [];
-  const body = {
-    name: document.getElementById(`edit-name-${tail}`).value,
-    rpm: document.getElementById(`edit-rpm-${tail}`).value,
-    req_per_day: document.getElementById(`edit-reqday-${tail}`).value,
-    tokens_per_day: document.getElementById(`edit-tokday-${tail}`).value,
-    cost_per_day: document.getElementById(`edit-costday-${tail}`).value,
-    allowed_providers: allowedProviders,
-  };
-  try {
-    const r = await fetch('/v1/config/proxy-keys/' + tail, {
-      method: 'POST',
-      headers: {'Authorization':'Bearer '+apiKey, 'Content-Type':'application/json'},
-      body: JSON.stringify(body),
-    });
-    const d = await r.json();
-    if (!r.ok) { alert(d.error?.message || 'Failed to save.'); return; }
-    editingKeyTail = null;
-    showRestartBanner();
-    await refresh();
-  } catch(e) { alert('Network error: ' + e.message); }
-}
-
-async function revokeAccessKey(tail) {
-  if (!confirm('Revoke access key ...' + tail + '? Anyone using it will lose access after the next restart.')) return;
-  try {
-    const r = await fetch('/v1/config/proxy-keys/' + tail, {
-      method: 'DELETE',
-      headers: {'Authorization':'Bearer '+apiKey},
-    });
-    const d = await r.json();
-    if (!r.ok) { alert(d.error?.message || 'Failed to revoke.'); return; }
-    showRestartBanner();
-    await refresh();
-  } catch(e) { alert('Network error: ' + e.message); }
-}
-
-async function createAccessKey() {
-  const checked = [...document.querySelectorAll('#ak-provider-scope input:checked')].map(el => el.value);
-  const body = {
-    name: document.getElementById('ak-name').value,
-    rpm: document.getElementById('ak-rpm').value,
-    req_per_day: document.getElementById('ak-reqday').value,
-    tokens_per_day: document.getElementById('ak-tokday').value,
-    cost_per_day: document.getElementById('ak-costday').value,
-    allowed_providers: checked,
-  };
-  try {
-    const r = await fetch('/v1/config/proxy-keys', {
-      method: 'POST',
-      headers: {'Authorization':'Bearer '+apiKey, 'Content-Type':'application/json'},
-      body: JSON.stringify(body),
-    });
-    const d = await r.json();
-    if (!r.ok) { setMsg('ak-create-msg', d.error?.message || 'Failed to create key.', false); return; }
-    ['ak-name','ak-rpm','ak-reqday','ak-tokday','ak-costday'].forEach(id => document.getElementById(id).value = '');
-    document.querySelectorAll('#ak-provider-scope input:checked').forEach(el => el.checked = false);
-    setMsg('ak-create-msg', 'Key created.', true);
-    document.getElementById('new-key-value').value = d.key;
-    document.getElementById('new-key-panel').style.display = 'block';
-    document.getElementById('new-key-panel').scrollIntoView({behavior:'smooth', block:'nearest'});
-    showRestartBanner();
-    await refresh();
-  } catch(e) { setMsg('ak-create-msg', 'Network error: ' + e.message, false); }
-}
-
-function copyNewKey() {
-  const el = document.getElementById('new-key-value');
-  el.select();
-  navigator.clipboard?.writeText(el.value).catch(() => document.execCommand('copy'));
-}
-
-function dismissNewKey() {
-  document.getElementById('new-key-panel').style.display = 'none';
-  document.getElementById('new-key-value').value = '';
-}
-
-// ── model capabilities (per-provider, per-model rating/tools/reasoning) ──────
-function renderModelCaps() {
-  const tbody = document.getElementById('model-caps-tbody');
-  if (!tbody || !statusData) return;
-  const prov = statusData.providers || {};
-  const rows = [];
-  Object.entries(prov).forEach(([name, p]) => {
-    const caps = p.model_caps;
-    if (caps && caps.length) {
-      caps.forEach(mc => rows.push({provider: name, model: mc.model, rating: mc.rating,
-        tools: mc.supports_tools, reasoning: mc.reasoning}));
-    } else if (p.model) {
-      rows.push({provider: name, model: p.model, rating: p.rating,
-        tools: p.supports_tools, reasoning: p.reasoning});
-    }
-  });
-  if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:18px">No providers configured</td></tr>';
-    return;
-  }
-  rows.sort((a,b) => a.provider.localeCompare(b.provider) || (a.rating||9) - (b.rating||9));
-  tbody.innerHTML = rows.map(r => `<tr>
-    <td>${esc(r.provider)}</td>
-    <td class="mono muted">${esc(r.model||'—')}</td>
-    <td>${ratingPips(r.rating)}</td>
-    <td>${r.tools ? '<span class="pill pill-ok">yes</span>' : '<span class="pill pill-grey">no</span>'}</td>
-    <td>${r.reasoning ? '<span class="pill pill-ok">yes</span>' : '<span class="pill pill-grey">no</span>'}</td>
-  </tr>`).join('');
-}
-</script>
-</body>
-</html>
-"""
+    if result and result[0] == "stream":
+        return  # the stream finalizer owns this reservation
+    failed = not result or result[0] == "error"
+    data = result[1] if result and result[0] == "json" else {}
+    _settle_request_usage(getattr(g, "usage_reservation", None), data.get("usage"),
+                          data.get("model") or getattr(_req_ctx, "model", "") or "",
+                          cached=getattr(_req_ctx, "cache_hit", False), failed=failed)
+
+
+_DASHBOARD_HTML = Path(__file__).with_name("dashboard.html").read_text(encoding="utf-8")
 
 
 @app.route("/")
@@ -5511,7 +4148,10 @@ def favicon():
 @app.route("/health")
 def health():
     """Unauthenticated health check for uptime monitoring."""
-    return jsonify({"status": "ok", "providers": [p["name"] for p in PROVIDERS]})
+    readiness = _readiness()
+    return jsonify({"status": "ok", "providers": [p["name"] for p in PROVIDERS],
+                    "initializing": readiness["state"] == "initializing",
+                    "ready": readiness["state"] == "ready", "readiness": readiness})
 
 
 @app.route("/v1/models")
@@ -5542,6 +4182,8 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
     _req_ctx.model     = None
     _req_ctx.cache_hit = False
     _req_ctx.attempts  = 0   # total forward() calls made (cascades = attempts-1)
+    _req_ctx.started = time.monotonic()
+    _req_ctx.deadline = _req_ctx.started + REQUEST_TIMEOUT
 
     # Generic routing hints on the existing completion endpoint. `:fast`
     # prefers a local model; a tool loop can request strict tool transport,
@@ -5572,10 +4214,14 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
             log.info("↩ cache hit")
             _req_ctx.cache_hit = True
             return ("json", cached)
-        if SEMANTIC_CACHE and _embed_ordered():
+        try:
+            limits = _caller_limits()
+        except RuntimeError:
+            limits = {}
+        if SEMANTIC_CACHE and not (limits.get("cost_per_day") or limits.get("tokens_per_day")) and _embed_ordered():
             query_emb = _embed_text(_prompt_text(messages))
             if query_emb:
-                hit = cache.semantic_lookup(query_emb, ns)
+                hit = cache.semantic_lookup(query_emb, ns, payload)
                 if hit is not None:
                     log.info("↩ semantic cache hit")
                     _req_ctx.cache_hit = True
@@ -5626,7 +4272,7 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
     # silently route through a provider it was scoped away from.
     caller_providers = None
     try:
-        caller_providers = KEY_PROVIDER_SCOPE.get(_caller_token())
+        caller_providers = _caller_scope()
     except RuntimeError:
         pass  # called outside a request context (e.g. tests)
 
@@ -5678,8 +4324,12 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
             log.info(f"🖼 skipping {name}/{model} (no vision support)")
             continue
 
+        if not _budget_candidate_allowed(provider, model, payload):
+            continue
         attempts = pool.key_count(name, model) or 1
         for _ in range(attempts):
+            if time.monotonic() >= _req_ctx.deadline:
+                return ("error", {"error": {"message": "Router request deadline exceeded", "type": "router_timeout"}}, 504)
             key = pool.get_key(name, model)
             if not key:
                 break   # all keys for this (provider, model) are cooling → next candidate
@@ -5696,153 +4346,171 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
                 pool.mark_key_down(name, key, retry_after=30)
                 continue
 
-            if resp.status_code == 429:
-                stats.record_error(name)
-                # 429 is NOT a health failure — per-(key,model) cooldown handles it.
-                retry_after = _parse_retry_after(resp.headers.get("Retry-After"))
-                pool.mark_rate_limited(name, key, model, retry_after=retry_after)
-                log.warning(f"  {name}/{model} 429 — cooldown {retry_after}s, trying next")
-                continue
+            handed_off = False
+            try:
+                if time.monotonic() >= _req_ctx.deadline:
+                    return ("error", {"error": {"message": "Router request deadline exceeded", "type": "router_timeout"}}, 504)
+                if resp.status_code == 429:
+                    stats.record_error(name)
+                    # 429 is NOT a health failure — per-(key,model) cooldown handles it.
+                    retry_after = _parse_retry_after(resp.headers.get("Retry-After"))
+                    pool.mark_rate_limited(name, key, model, retry_after=retry_after)
+                    log.warning(f"  {name}/{model} 429 — cooldown {retry_after}s, trying next")
+                    continue
 
-            if resp.status_code in (401, 403):
-                stats.record_error(name)
-                btxt = (resp.text or "")[:300]
-                # Some gateways (e.g. OpenCode) return a MODEL-level rejection as a
-                # 401 — an ended free promo, an unsupported/paywalled model. That's
-                # not a credential problem, so skip just this model and try the
-                # provider's next one instead of disabling the whole provider.
-                if re.search(r"modelerror|not supported|promotion has ended|subscrib|no payment|credits", btxt, re.I):
-                    log.warning(f"  {name}/{model} {resp.status_code} model-level — skipping this model: {btxt[:160]}")
+                if resp.status_code in (401, 403):
+                    stats.record_error(name)
+                    btxt = (resp.text or "")[:300]
+                    # Some gateways (e.g. OpenCode) return a MODEL-level rejection as a
+                    # 401 — an ended free promo, an unsupported/paywalled model. That's
+                    # not a credential problem, so skip just this model and try the
+                    # provider's next one instead of disabling the whole provider.
+                    if re.search(r"modelerror|not supported|promotion has ended|subscrib|no payment|credits", btxt, re.I):
+                        log.warning(f"  {name}/{model} {resp.status_code} model-level — skipping this model: {btxt[:160]}")
+                        break
+                    # Genuine auth/permission failure — won't work for any model here.
+                    # Also count it against the circuit breaker: record_error() alone only
+                    # feeds /v1/usage stats, not the breaker (that's record_health-only). A
+                    # provider with a permanently bad/unsubscribed key would otherwise be
+                    # retried and rejected on every single future request forever, instead
+                    # of tripping the breaker and cooling down like any other unhealthy
+                    # provider (e.g. a key configured for a paid tier the account never
+                    # actually enabled, like OpenCode Go without Go billing turned on).
+                    log.error(f"  {name} {resp.status_code} — auth, skipping provider: {btxt[:200]}")
+                    stats.record_health(name, False)
+                    skip_providers.add(name)
                     break
-                # Genuine auth/permission failure — won't work for any model here.
-                # Also count it against the circuit breaker: record_error() alone only
-                # feeds /v1/usage stats, not the breaker (that's record_health-only). A
-                # provider with a permanently bad/unsubscribed key would otherwise be
-                # retried and rejected on every single future request forever, instead
-                # of tripping the breaker and cooling down like any other unhealthy
-                # provider (e.g. a key configured for a paid tier the account never
-                # actually enabled, like OpenCode Go without Go billing turned on).
-                log.error(f"  {name} {resp.status_code} — auth, skipping provider: {btxt[:200]}")
-                stats.record_health(name, False)
-                skip_providers.add(name)
-                break
 
-            if resp.status_code in (400, 404):
-                stats.record_error(name)
-                # model-specific (e.g. bad model name) — just skip this candidate.
-                log.warning(f"  {name}/{model} {resp.status_code} — skipping this model: {resp.text[:150]}")
-                break
+                if resp.status_code in (400, 404):
+                    stats.record_error(name)
+                    # model-specific (e.g. bad model name) — just skip this candidate.
+                    log.warning(f"  {name}/{model} {resp.status_code} — skipping this model: {resp.text[:150]}")
+                    break
 
-            if resp.status_code == 413:
-                stats.record_error(name)
-                # payload-specific — bigger model won't help; cascade providers.
-                log.warning(f"  {name} 413 — payload too large, cascading")
-                skip_providers.add(name)
-                break
+                if resp.status_code == 413:
+                    stats.record_error(name)
+                    # payload-specific — bigger model won't help; cascade providers.
+                    log.warning(f"  {name} 413 — payload too large, cascading")
+                    skip_providers.add(name)
+                    break
 
-            if resp.status_code >= 500:
-                stats.record_error(name)
-                stats.record_health(name, False)   # 5xx = provider health failure
-                pool.mark_key_down(name, key, retry_after=15)
-                continue
+                if resp.status_code >= 500:
+                    stats.record_error(name)
+                    stats.record_health(name, False)   # 5xx = provider health failure
+                    pool.mark_key_down(name, key, retry_after=15)
+                    continue
 
-            if not (200 <= resp.status_code < 300):
-                stats.record_error(name)
-                stats.record_health(name, False)   # unexpected non-2xx = health failure
-                log.warning(f"  {name} unexpected {resp.status_code} — skipping provider")
-                skip_providers.add(name)
-                break
+                if not (200 <= resp.status_code < 300):
+                    stats.record_error(name)
+                    stats.record_health(name, False)   # unexpected non-2xx = health failure
+                    log.warning(f"  {name} unexpected {resp.status_code} — skipping provider")
+                    skip_providers.add(name)
+                    break
 
-            # Success
-            stats.record_success(name, elapsed)
-            stats.record_health(name, True)        # 2xx = healthy (half-open recovery)
-            log.info(f"  ✓ {name}/{model} {resp.status_code} ({elapsed*1000:.0f}ms)")
-            _req_ctx.provider = name
-            _req_ctx.model    = model
-            is_anthropic = provider.get("protocol") == "anthropic"
-            is_codex     = provider.get("protocol") == "codex"
-            if is_codex:
-                # Codex backend always streams SSE. Stream it through, or
-                # aggregate it into one response for non-streaming clients.
+                # Success
+                log.info(f"  ✓ {name}/{model} {resp.status_code} ({elapsed*1000:.0f}ms)")
+                _req_ctx.provider = name
+                _req_ctx.model    = model
+                is_anthropic = provider.get("protocol") == "anthropic"
+                is_codex     = provider.get("protocol") == "codex"
+                if is_codex:
+                    # Codex backend always streams SSE. Stream it through, or
+                    # aggregate it into one response for non-streaming clients.
+                    if streaming:
+                        if session_affinity_id is not None:
+                            _session_affinity_set(session_affinity_id, name, model)
+                        handed_off = True
+                        return ("stream", _streaming_with_usage(_with_cleanup(resp, _codex_streaming_generator(resp)), name, model), name)
+                    events = []
+                    for raw in resp.iter_lines():
+                        if not raw:
+                            continue
+                        raw = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+                        if raw.startswith("data:"):
+                            ds = raw[5:].strip()
+                            if ds and ds != "[DONE]":
+                                try: events.append(json.loads(ds))
+                                except Exception: pass
+                    data = _from_codex_response(events)
+                    if not _completion_has_output(data):
+                        stats.record_error(name)
+                        stats.record_health(name, False)
+                        log.warning(f"  {name}/{model} empty completion — cascading")
+                        pool.mark_rate_limited(name, key, model, retry_after=30)
+                        break
+                    _add_provider_tokens(name, data, model)
+                    if not tool_loop:
+                        cache.set(payload, data, ns, query_emb)
+                    _session_affinity_set(session_affinity_id, name, model)
+                    stats.record_success(name, elapsed)
+                    stats.record_health(name, True)
+                    return ("json", data)
                 if streaming:
                     if session_affinity_id is not None:
                         _session_affinity_set(session_affinity_id, name, model)
-                    return ("stream", _with_cleanup(resp, _codex_streaming_generator(resp)), name)
-                events = []
-                for raw in resp.iter_lines():
-                    if not raw:
-                        continue
-                    raw = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
-                    if raw.startswith("data:"):
-                        ds = raw[5:].strip()
-                        if ds and ds != "[DONE]":
-                            try: events.append(json.loads(ds))
-                            except Exception: pass
-                data = _from_codex_response(events)
-                if not _completion_has_output(data):
-                    stats.record_error(name)
-                    stats.record_health(name, False)
-                    log.warning(f"  {name}/{model} empty completion — cascading")
-                    pool.mark_rate_limited(name, key, model, retry_after=30)
-                    break
-                _add_provider_tokens(name, data, model)
-                if not tool_loop:
-                    cache.set(payload, data, ns, query_emb)
-                _session_affinity_set(session_affinity_id, name, model)
-                return ("json", data)
-            if streaming:
-                if session_affinity_id is not None:
+                    gen = (_anthropic_streaming_generator(resp) if is_anthropic
+                           else _streaming_generator(resp))
+                    wrapped = _streaming_with_usage(_with_cleanup(resp, gen), name, model)
+                    handed_off = True
+                    return ("stream", wrapped, name)
+                else:
+                    try:
+                        raw = resp.json()
+                    except Exception:
+                        raw = None
+                    data = (_from_anthropic_response(raw) if (is_anthropic and isinstance(raw, dict))
+                            else raw)
+                    # Guard: a 2xx that carries no usable completion (no `choices`) — e.g.
+                    # a gateway that wraps an error in an HTTP-200 body (NVIDIA NIM's gRPC
+                    # "ResourceExhausted: Worker local total request limit reached"), or a
+                    # non-JSON body. Don't surface that to the caller as the answer —
+                    # treat it as a provider failure, cool this (key,model), and cascade.
+                    if not isinstance(data, dict) or not data.get("choices"):
+                        stats.record_error(name)
+                        stats.record_health(name, False)
+                        err = data.get("error") if isinstance(data, dict) else None
+                        emsg = (err.get("message", "") if isinstance(err, dict)
+                                else err if isinstance(err, str)
+                                else (data.get("message", "") if isinstance(data, dict) else ""))
+                        # NVIDIA NIM (and similar gateways) wrap a transient rate-limit /
+                        # resource-exhaustion error in an HTTP-200 body. That's expected under
+                        # load and is fully handled here (cascade + per-key cooldown), so log it
+                        # at debug to keep it out of the logs; only a genuinely unexpected empty
+                        # 2xx body warns.
+                        _emsg_l = str(emsg).lower()
+                        _transient = any(s in _emsg_l for s in (
+                            "resourceexhausted", "resource exhausted", "request limit reached",
+                            "rate limit", "too many requests", "quota", "overloaded"))
+                        (log.debug if _transient else log.warning)(
+                            f"  {name}/{model} 2xx without choices — cascading: {str(emsg)[:140]}")
+                        pool.mark_rate_limited(name, key, model, retry_after=30)
+                        break
+                    if not _completion_has_output(data):
+                        stats.record_error(name)
+                        stats.record_health(name, False)
+                        log.warning(f"  {name}/{model} empty completion — cascading")
+                        pool.mark_rate_limited(name, key, model, retry_after=30)
+                        break
+                    if not is_anthropic:
+                        _strip_response(data)
+                    _add_provider_tokens(name, data, model)
+                    if not tool_loop:
+                        cache.set(payload, data, ns, query_emb)
                     _session_affinity_set(session_affinity_id, name, model)
-                gen = (_anthropic_streaming_generator(resp) if is_anthropic
-                       else _streaming_generator(resp))
-                wrapped = _streaming_with_usage(_with_cleanup(resp, gen), name, model)
-                return ("stream", wrapped, name)
-            else:
-                try:
-                    raw = resp.json()
-                except Exception:
-                    raw = None
-                data = (_from_anthropic_response(raw) if (is_anthropic and isinstance(raw, dict))
-                        else raw)
-                # Guard: a 2xx that carries no usable completion (no `choices`) — e.g.
-                # a gateway that wraps an error in an HTTP-200 body (NVIDIA NIM's gRPC
-                # "ResourceExhausted: Worker local total request limit reached"), or a
-                # non-JSON body. Don't surface that to the caller as the answer —
-                # treat it as a provider failure, cool this (key,model), and cascade.
-                if not isinstance(data, dict) or not data.get("choices"):
-                    stats.record_error(name)
-                    stats.record_health(name, False)
-                    err = data.get("error") if isinstance(data, dict) else None
-                    emsg = (err.get("message", "") if isinstance(err, dict)
-                            else err if isinstance(err, str)
-                            else (data.get("message", "") if isinstance(data, dict) else ""))
-                    # NVIDIA NIM (and similar gateways) wrap a transient rate-limit /
-                    # resource-exhaustion error in an HTTP-200 body. That's expected under
-                    # load and is fully handled here (cascade + per-key cooldown), so log it
-                    # at debug to keep it out of the logs; only a genuinely unexpected empty
-                    # 2xx body warns.
-                    _emsg_l = str(emsg).lower()
-                    _transient = any(s in _emsg_l for s in (
-                        "resourceexhausted", "resource exhausted", "request limit reached",
-                        "rate limit", "too many requests", "quota", "overloaded"))
-                    (log.debug if _transient else log.warning)(
-                        f"  {name}/{model} 2xx without choices — cascading: {str(emsg)[:140]}")
-                    pool.mark_rate_limited(name, key, model, retry_after=30)
-                    break
-                if not _completion_has_output(data):
-                    stats.record_error(name)
-                    stats.record_health(name, False)
-                    log.warning(f"  {name}/{model} empty completion — cascading")
-                    pool.mark_rate_limited(name, key, model, retry_after=30)
-                    break
-                if not is_anthropic:
-                    _strip_response(data)
-                _add_provider_tokens(name, data, model)
-                if not tool_loop:
-                    cache.set(payload, data, ns, query_emb)
-                _session_affinity_set(session_affinity_id, name, model)
-                return ("json", data)
+                    stats.record_success(name, elapsed)
+                    stats.record_health(name, True)
+                    return ("json", data)
 
+            except requests.exceptions.RequestException:
+                stats.record_error(name)
+                stats.record_health(name, False)
+                pool.mark_key_down(name, key, retry_after=30)
+            finally:
+                if not handed_off:
+                    resp.close()
+
+    if time.monotonic() >= _req_ctx.deadline:
+        return ("error", {"error": {"message": "Router request deadline exceeded", "type": "router_timeout"}}, 504)
     return ("error", {"error": {"message": "All providers exhausted", "type": "router_error"}}, 503)
 
 
@@ -5910,8 +4578,10 @@ def chat():
         return jsonify(result[1]), 200
     if result[0] == "stream":
         _, gen, name = result
-        return Response(stream_with_context(gen), content_type="text/event-stream",
-                        headers={"X-Provider": name})
+        response = Response(stream_with_context(gen), content_type="text/event-stream",
+                            headers={"X-Provider": name})
+        response.call_on_close(gen.close)
+        return response
     return jsonify(result[1]), result[2]
 
 
@@ -5931,8 +4601,12 @@ def anthropic_messages():
     token  = _caller_token()
     gate   = _admit_request(token)
     if gate:
-        # Translate the 429 to Anthropic's error shape for SDK callers.
-        return jsonify(_anthropic_error("quota exceeded")), 429
+        response, code = gate
+        error = response.get_json().get("error", {})
+        translated = jsonify(_anthropic_error(error.get("message", "request denied") if isinstance(error, dict) else error))
+        if response.headers.get("Retry-After"):
+            translated.headers["Retry-After"] = response.headers["Retry-After"]
+        return translated, code
 
     streaming = bool(body.get("stream", False))
     payload   = _anthropic_request_to_openai(body)
@@ -5946,13 +4620,16 @@ def anthropic_messages():
         return jsonify(_openai_response_to_anthropic(result[1])), 200
     if result[0] == "stream":
         _, gen, name = result
-        return Response(stream_with_context(_openai_stream_to_anthropic(gen)),
-                        content_type="text/event-stream", headers={"X-Provider": name})
+        response = Response(stream_with_context(_openai_stream_to_anthropic(gen)),
+                            content_type="text/event-stream", headers={"X-Provider": name})
+        response.call_on_close(gen.close)
+        return response
     return jsonify(_anthropic_error(result[1].get("error", {}).get("message", "error"))), result[2]
 
 
 @app.route("/v1/embeddings", methods=["POST"])
 def embeddings():
+    _req_ctx.deadline = time.monotonic() + REQUEST_TIMEOUT
     err = _auth_check()
     if err:
         return err
@@ -5963,12 +4640,16 @@ def embeddings():
                                   "type": "invalid_request_error"}}), 400
 
     token  = _caller_token()
-    gate   = _admit_request(token)
+    gate   = _admit_request(token, payload, embedding=True)
     if gate:
         return gate
 
-    ordered = _embed_ordered()
+    scope = _caller_scope()
+    models = _caller_models()
+    ordered = [p for p in _embed_ordered() if (scope is None or p["name"] in scope)
+               and (models is None or p["embed_model"] in models)]
     if not ordered:
+        _settle_request_usage(getattr(g, "usage_reservation", None), None, "", failed=True)
         return jsonify({"error": {"message": "no embedding-capable providers configured "
                                              "(set e.g. GEMINI_API_KEYS or MISTRAL_API_KEYS)",
                                   "type": "router_error"}}), 503
@@ -5994,6 +4675,7 @@ def embeddings():
             "prompt_tokens": None,
             "completion_tokens": None,
         })
+        _settle_request_usage(getattr(g, "usage_reservation", None), cached.get("usage"), cached.get("model", ""), cached=True)
         return jsonify(cached)
 
     any_closed = any(not stats.breaker_open(p["name"]) for p in ordered)
@@ -6012,6 +4694,9 @@ def embeddings():
                 log.warning(f"All {name} keys cooling — skipping provider")
                 break
 
+            if time.monotonic() >= _req_ctx.deadline:
+                _settle_request_usage(getattr(g, "usage_reservation", None), None, "", failed=True)
+                return jsonify({"error": {"message": "Router request deadline exceeded", "type": "router_error"}}), 504
             log.info(f"→ Trying {name} embeddings ({em}) ...{key[-6:]}")
             t0   = time.time()
             resp = forward_embeddings(provider, key, payload)
@@ -6025,24 +4710,31 @@ def embeddings():
                 stats.record_error(name)
                 pool.mark_rate_limited(name, key, em, retry_after=_parse_retry_after(resp.headers.get("Retry-After")))
                 log.warning(f"  {name} 429 — cooldown, trying next key")
+                resp.close()
                 continue
             if resp.status_code in (400, 401, 403, 404):
                 stats.record_error(name)   # request/auth/model-specific, not a health failure
                 log.error(f"  {name} embeddings {resp.status_code} — skipping provider: {resp.text[:200]}")
+                resp.close()
                 break
             if resp.status_code >= 500:
                 stats.record_error(name); stats.record_health(name, False)
                 pool.mark_key_down(name, key, retry_after=15)
+                resp.close()
                 continue
             if not (200 <= resp.status_code < 300):
                 stats.record_error(name); stats.record_health(name, False)
                 log.warning(f"  {name} embeddings unexpected {resp.status_code} — skipping provider")
+                resp.close()
                 break
 
             stats.record_success(name, elapsed); stats.record_health(name, True)
             log.info(f"  ✓ {name} embeddings ({elapsed*1000:.0f}ms)")
-            data = resp.json()
-            key_usage.add_tokens(token, (data.get("usage") or {}).get("total_tokens") or 0)
+            try:
+                data = resp.json()
+            finally:
+                resp.close()
+            _settle_request_usage(getattr(g, "usage_reservation", None), data.get("usage"), em)
             _add_provider_tokens(name, data)
             cache.set(payload, data, ns)
             request_log.append({
@@ -6079,6 +4771,7 @@ def embeddings():
         "prompt_tokens": None,
         "completion_tokens": None,
     })
+    _settle_request_usage(getattr(g, "usage_reservation", None), None, "", failed=True)
     return jsonify({"error": {"message": "All embedding providers exhausted", "type": "router_error"}}), 503
 
 
@@ -6117,9 +4810,8 @@ def _features_snapshot() -> dict:
         {"name": "model_discovery", "title": "Model discovery", "kind": "flag",
          "enabled": AUTO_DISCOVER_MODELS, "env": "AUTO_DISCOVER_MODELS", "on": "1", "off": "0",
          "desc": "Refresh configured provider model lists from /models at startup, bounded by AUTO_DISCOVER_MODEL_LIMIT."},
-        {"name": "metrics_auth", "title": "Metrics auth", "kind": "flag",
-         "enabled": bool(_int_env("METRICS_REQUIRE_AUTH", 0)), "env": "METRICS_REQUIRE_AUTH",
-         "on": "1", "off": "0", "desc": "Require the proxy key on /metrics."},
+        {"name": "metrics_auth", "title": "Metrics auth", "kind": "builtin",
+         "enabled": True, "desc": "Administrator authentication is always required on /metrics."},
         {"name": "cost_currency", "title": "Cost currency conversion", "kind": "flag",
          "enabled": COST_FX_RATE > 0, "env": "COST_FX_RATE", "on": "83", "off": "0",
          "desc": "Show a second currency (e.g. INR) alongside USD spend."},
@@ -6141,8 +4833,7 @@ def _features_snapshot() -> dict:
 
 # ── Config-write endpoints (web dashboard) ──────────────────────────────────────
 # These back the dashboard's "Add key" / "Model" / add-on toggle forms. Same
-# proxy-key auth as every other endpoint — whoever can view /v1/status can also
-# change config, matching the existing CLI's trust model (one operator key).
+# administrator access as /v1/status; application inference keys cannot change config.
 # Every write is a plain, auditable file edit (.env or auth.json), identical to
 # what `hr auth add` / `hr model set` / `hr features enable` already produce —
 # nothing here is a new mechanism, just an HTTP front-end for the same files.
@@ -6153,7 +4844,7 @@ def _features_snapshot() -> dict:
 def config_providers():
     """List of providers the dashboard can build add-key / set-model forms for,
     plus which ones accept a plain key vs. model-only (codex/local)."""
-    err = _auth_check()
+    err = _admin_check()
     if err:
         return err
     return jsonify({
@@ -6171,7 +4862,7 @@ def config_providers():
 @app.route("/v1/config/keys/<provider>", methods=["POST"])
 def config_add_key(provider):
     """Add one API key for a provider to auth.json. Body: {"key": "..."}"""
-    err = _auth_check()
+    err = _admin_check()
     if err:
         return err
     if provider not in KEY_SETTABLE_PROVIDERS:
@@ -6192,7 +4883,7 @@ def config_add_key(provider):
 def config_model(provider):
     """POST {"model": "m1,m2"} to override a provider's model(s); DELETE to reset
     to the built-in default (just removes the .env override line)."""
-    err = _auth_check()
+    err = _admin_check()
     if err:
         return err
     env_var = PROVIDER_MODEL_ENV.get(provider)
@@ -6222,7 +4913,7 @@ def config_feature(name):
     """Toggle a flag-kind add-on on/off. Body: {"enabled": true|false}. Config-kind
     add-ons (per-key budgets, local model) aren't simple flag writes — use their
     own command (`hr limit`, `hr model set local ...`), matching `hr features`."""
-    err = _auth_check()
+    err = _admin_check()
     if err:
         return err
     addon = next((a for a in _features_snapshot()["addons"] if a["name"] == name), None)
@@ -6241,7 +4932,7 @@ def config_feature(name):
 @app.route("/v1/config/rotation", methods=["POST"])
 def config_rotation():
     """Set key rotation mode from the dashboard. Body: {"mode": "round-robin"|"sequential"}."""
-    err = _auth_check()
+    err = _admin_check()
     if err:
         return err
     body = request.get_json(force=True, silent=True) or {}
@@ -6260,10 +4951,11 @@ def config_rotation():
 def config_restart():
     """Restart the router so config changes take effect. Responds immediately;
     the actual restart happens ~1s later so this response reaches the client."""
-    err = _auth_check()
+    err = _admin_check()
     if err:
         return err
-    _trigger_restart()
+    if not _trigger_restart():
+        return jsonify({"supported": False, "error": {"message": "automatic restart is unavailable; restart using your process manager or start.ps1", "type": "unsupported_operation"}}), 409
     return jsonify({"status": "restarting", "message": "Router restarting — this page will reconnect shortly."})
 
 
@@ -6279,6 +4971,8 @@ def _parse_limit_fields(body: dict) -> tuple[dict, str | None]:
                 v = int(body[f])
             except (TypeError, ValueError):
                 return {}, f"'{f}' must be a whole number"
+            if isinstance(body[f], bool) or str(v) != str(body[f]).strip():
+                return {}, f"'{f}' must be a whole number"
             if v < 0:
                 return {}, f"'{f}' must not be negative"
             out[f] = v
@@ -6287,8 +4981,8 @@ def _parse_limit_fields(body: dict) -> tuple[dict, str | None]:
             v = float(body["cost_per_day"])
         except (TypeError, ValueError):
             return {}, "'cost_per_day' must be a number"
-        if v < 0:
-            return {}, "'cost_per_day' must not be negative"
+        if not __import__("math").isfinite(v) or v < 0:
+            return {}, "'cost_per_day' must be finite and not negative"
         out["cost_per_day"] = v
     return out, None
 
@@ -6300,7 +4994,7 @@ def _parse_allowed_providers(body: dict) -> tuple[dict, str | None]:
     means 'unrestricted', matching KEY_PROVIDER_SCOPE's loader semantics."""
     if "allowed_providers" not in body:
         return {}, None
-    val = body["allowed_providers"] or []
+    val = [] if body["allowed_providers"] is None else body["allowed_providers"]
     if not isinstance(val, list) or not all(isinstance(x, str) for x in val):
         return {}, "'allowed_providers' must be a list of provider names"
     known = set(PROVIDER_MODEL_ENV.keys())
@@ -6310,6 +5004,17 @@ def _parse_allowed_providers(body: dict) -> tuple[dict, str | None]:
     return {"allowed_providers": val}, None
 
 
+def _parse_allowed_models(body):
+    if "allowed_models" not in body:
+        return {}, None
+    value = body["allowed_models"]
+    if value is None:
+        value = []
+    if not isinstance(value, list) or any(not isinstance(m, str) or not m.strip() or len(m) > 200 or any(c in m for c in "\r\n") for m in value):
+        return {}, "'allowed_models' must be a list of model IDs"
+    return {"allowed_models": value}, None
+
+
 @app.route("/v1/config/proxy-keys")
 def config_list_proxy_keys():
     """List every proxy (access) key — the credential CALLERS use to authenticate
@@ -6317,7 +5022,7 @@ def config_list_proxy_keys():
     tail, optional name, limits, and live usage. Reads fresh from .env/auth.json
     (not the process's own stale PROXY_API_KEYS) so a just-created or just-revoked
     key shows immediately, flagged pending until a restart actually applies it."""
-    err = _auth_check()
+    err = _admin_check()
     if err:
         return err
     live_keys = _read_proxy_api_keys_live()
@@ -6336,6 +5041,7 @@ def config_list_proxy_keys():
                 "cost_per_day":   spec.get("cost_per_day", 0) or 0,
             },
             "allowed_providers": spec.get("allowed_providers") or [],
+            "allowed_models": spec.get("allowed_models") or [],
             "usage": key_usage.snapshot(k),
             "pending_restart": k not in active_now,
         })
@@ -6343,6 +5049,7 @@ def config_list_proxy_keys():
 
 
 @app.route("/v1/config/proxy-keys", methods=["POST"])
+@_locked_access
 def config_create_proxy_key():
     """Mint a new proxy key for a teammate/other app to call the router with.
     Body: {"name": "...", "rpm": N, "req_per_day": N, "tokens_per_day": N,
@@ -6351,7 +5058,7 @@ def config_create_proxy_key():
     unlimited); an empty/omitted allowed_providers means unrestricted (can use
     any configured provider). Returns the plaintext key ONCE — like every other
     key in this codebase, only its tail is shown again."""
-    err = _auth_check()
+    err = _admin_check()
     if err:
         return err
     body = request.get_json(force=True, silent=True) or {}
@@ -6365,6 +5072,10 @@ def config_create_proxy_key():
     if serr:
         return jsonify({"error": {"message": serr, "type": "invalid_request_error"}}), 400
 
+    model_scope, model_error = _parse_allowed_models(body)
+    if model_error:
+        return jsonify({"error": {"message": model_error, "type": "invalid_request_error"}}), 400
+    patch = {**limits, **scope, **model_scope}
     live_keys = _read_proxy_api_keys_live()
     new_key = _generate_proxy_key()
     while new_key in live_keys:   # astronomically unlikely; stay correct anyway
@@ -6372,23 +5083,25 @@ def config_create_proxy_key():
     live_keys.append(new_key)
     _env_write_line("PROXY_API_KEYS", ",".join(live_keys))
 
-    patch = {**limits, **scope}
     if name:
         patch["name"] = name
     if patch:
         _write_proxy_key_meta(new_key, patch)
 
+    _persist_access_keys(live_keys)
     return jsonify({"key": new_key, "key_tail": new_key[-6:], "name": name,
                     "limits": limits, "allowed_providers": scope.get("allowed_providers", []),
-                    "restart_required": True})
+                    "allowed_models": model_scope.get("allowed_models", []),
+                    "restart_required": False})
 
 
 @app.route("/v1/config/proxy-keys/<tail>", methods=["POST"])
+@_locked_access
 def config_update_proxy_key(tail):
     """Update the name/limits of an existing proxy key, found by its last-6-char
     tail. Body: same shape as create. Only fields present in the body change —
     others keep their current value."""
-    err = _auth_check()
+    err = _admin_check()
     if err:
         return err
     live_keys = _read_proxy_api_keys_live()
@@ -6405,7 +5118,10 @@ def config_update_proxy_key(tail):
     if serr:
         return jsonify({"error": {"message": serr, "type": "invalid_request_error"}}), 400
 
-    patch = {**limits, **scope}
+    model_scope, model_error = _parse_allowed_models(body)
+    if model_error:
+        return jsonify({"error": {"message": model_error, "type": "invalid_request_error"}}), 400
+    patch = {**limits, **scope, **model_scope}
     if "name" in body:
         name = str(body.get("name") or "").strip()[:80]
         if "\n" in name or "\r" in name:
@@ -6414,15 +5130,15 @@ def config_update_proxy_key(tail):
         patch["name"] = name
     if patch:
         _write_proxy_key_meta(key, patch)
-    return jsonify({"key_tail": tail, "restart_required": True})
+    _reload_access_policy()
+    return jsonify({"key_tail": tail, "restart_required": False})
 
 
 @app.route("/v1/config/proxy-keys/<tail>", methods=["DELETE"])
+@_locked_access
 def config_delete_proxy_key(tail):
-    """Revoke a proxy key so it can no longer authenticate to the router.
-    Refuses to remove the last remaining key — that would lock everyone out,
-    including whoever is using the dashboard right now."""
-    err = _auth_check()
+    """Revoke an application key immediately; owner access is independent."""
+    err = _admin_check()
     if err:
         return err
     live_keys = _read_proxy_api_keys_live()
@@ -6430,20 +5146,18 @@ def config_delete_proxy_key(tail):
     if not key:
         return jsonify({"error": {"message": f"no proxy key ending in '{tail}'",
                                   "type": "invalid_request_error"}}), 404
-    if len(live_keys) <= 1:
-        return jsonify({"error": {"message": "can't delete the last proxy key — you'd lock yourself out",
-                                  "type": "invalid_request_error"}}), 400
     live_keys.remove(key)
     _env_write_line("PROXY_API_KEYS", ",".join(live_keys))
+    _persist_access_keys(live_keys)
     _delete_proxy_key_meta(key)
-    return jsonify({"key_tail": tail, "revoked": True, "restart_required": True})
+    return jsonify({"key_tail": tail, "revoked": True, "restart_required": False})
 
 
 @app.route("/v1/instances")
 def list_instances():
     """List registered Hermes Router instances and live health/Docker state.
     Secrets are never returned; callers only see key tails and env var names."""
-    err = _auth_check()
+    err = _admin_check()
     if err:
         return err
     with _INSTANCE_LOCK:
@@ -6457,7 +5171,7 @@ def create_instance():
     """Register an external instance or define/start a managed Docker instance.
     Body: {name, mode, base_url, host_port, container_port, image, api_key, env,
     start}. Docker mode generates an API key when api_key is omitted."""
-    err = _auth_check()
+    err = _admin_check()
     if err:
         return err
     body = request.get_json(force=True, silent=True) or {}
@@ -6485,7 +5199,7 @@ def create_instance():
 def update_instance(instance_id):
     """Update a registered instance. Fields omitted from the body keep their
     previous values. Existing Docker containers are not recreated automatically."""
-    err = _auth_check()
+    err = _admin_check()
     if err:
         return err
     body = request.get_json(force=True, silent=True) or {}
@@ -6507,7 +5221,7 @@ def update_instance(instance_id):
 def delete_instance(instance_id):
     """Remove an instance from the registry. Pass ?remove_container=1 to also
     remove a managed Docker container."""
-    err = _auth_check()
+    err = _admin_check()
     if err:
         return err
     remove_container = request.args.get("remove_container", "").lower() in ("1", "true", "yes")
@@ -6531,7 +5245,7 @@ def delete_instance(instance_id):
 @app.route("/v1/instances/<instance_id>/<action>", methods=["POST"])
 def instance_action(instance_id, action):
     """Start, stop, or restart a managed Docker instance."""
-    err = _auth_check()
+    err = _admin_check()
     if err:
         return err
     if action not in ("start", "stop", "restart"):
@@ -6552,7 +5266,7 @@ def instance_action(instance_id, action):
 @app.route("/v1/status")
 def status():
     """Show key cooldown state, latency/error stats, and cache metrics."""
-    err = _auth_check()
+    err = _admin_check()
     if err:
         return err
 
@@ -6616,6 +5330,7 @@ def status():
 
     return jsonify({
         "providers": provider_stats,
+        "readiness": _readiness(),
         "cache": {
             "enabled":    CACHE_TTL > 0,
             "ttl_s":      CACHE_TTL,
@@ -6658,9 +5373,16 @@ def status():
 
 @app.route("/v1/usage")
 def usage():
-    """Usage analytics: per-provider request/error/token counts, per-key request
-    and token totals (key tails only — never full keys), and cache stats."""
-    err = _auth_check()
+    """Owner sees global totals; application callers see only their own ledger."""
+    if _caller_token() != ADMIN_API_KEY and not (not _caller_token() and _session_record()):
+        err = _auth_check()
+        if err:
+            return err
+        own = key_usage.snapshot(_caller_token())
+        return jsonify({"keys": [{"key_tail": _caller_token()[-6:], **own}], "providers": {},
+                        "totals": {"tokens": own["tokens_total"], "cost": _cost_obj(own["cost_total"])},
+                        "budget_policy": "estimated-spend admission; not an invoice guarantee"})
+    err = _admin_check()
     if err:
         return err
 
@@ -6702,7 +5424,7 @@ def logs():
       status=s         Filter by status: success | error | cache_hit
       endpoint=e       Filter by endpoint: chat | messages | embeddings
     """
-    err = _auth_check()
+    err = _admin_check()
     if err:
         return err
 
@@ -6737,11 +5459,10 @@ def logs():
 def metrics():
     """Prometheus text-format metrics for scraping (Grafana, etc.). Exposes
     operational labels including provider names and proxy-key tails, but never
-    request content or full keys. Set METRICS_REQUIRE_AUTH=1 to require auth."""
-    if _int_env("METRICS_REQUIRE_AUTH", 0):
-        err = _auth_check()
-        if err:
-            return err
+    request content or full keys. Administrator authentication is required."""
+    err = _admin_check()
+    if err:
+        return err
 
     out: list[str] = []
 

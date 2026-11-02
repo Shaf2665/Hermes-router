@@ -110,6 +110,11 @@ system-wide — `install.sh` only symlinks the `hr` command onto your PATH.
 
 ## Setup
 
+**Foundation preview:** see [Local and server setup](documentation/setup.md) for the new
+Windows starter, persistent Docker Compose installation, administrator/application-key
+migration, first request and SSH/HTTPS server access. These instructions require this preview
+source; the published `main` installer and older images may not contain it yet.
+
 **Requirements:** Python 3.10+ and at least one configured cloud provider key or local model
 (see **[Providers](documentation/providers.md)**).
 

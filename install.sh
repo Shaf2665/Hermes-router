@@ -9,7 +9,7 @@
 # One-liner (from scratch):
 #   git clone https://github.com/Shaf2665/Hermes-router.git && cd Hermes-router && ./install.sh
 #
-set -uo pipefail
+set -euo pipefail
 
 cd "$(dirname "$0")" || { echo "cannot cd to script dir"; exit 1; }
 REPO="$(pwd)"
@@ -64,34 +64,18 @@ fi
 VENV_PYTHON="$REPO/venv/bin/python"
 
 # ── 3. Install dependencies ───────────────────────────────────────────────────
-if "$VENV_PYTHON" -c "import flask, waitress, requests" 2>/dev/null; then
-  ok "Dependencies already installed"
+log "Checking dependencies against requirements.txt..."
+if command -v uv >/dev/null 2>&1; then
+  uv pip install --python "$VENV_PYTHON" -r "$REPO/requirements.txt" --quiet
 else
-  log "Installing dependencies..."
-  # Look for uv in PATH and common install locations
-  UV="$(command -v uv 2>/dev/null || true)"
-  for _p in "$HOME/.local/bin/uv" "$HOME/.cargo/bin/uv" "/usr/local/bin/uv"; do
-    [ -z "$UV" ] && [ -x "$_p" ] && UV="$_p"
-  done
+  "$VENV_PYTHON" -m pip install -r "$REPO/requirements.txt"
+fi
+"$VENV_PYTHON" -c "import flask, waitress, requests, tiktoken"
+ok "Dependencies ready"
 
-  if [ -n "$UV" ]; then
-    "$UV" pip install --python "$VENV_PYTHON" -r "$REPO/requirements.txt" --quiet
-  elif [ -f "$REPO/venv/bin/pip" ]; then
-    "$REPO/venv/bin/pip" install -q -r "$REPO/requirements.txt"
-  else
-    "$VENV_PYTHON" -m pip install -q -r "$REPO/requirements.txt" 2>/dev/null || {
-      err "Cannot install dependencies: no uv or pip found in the venv."
-      err "Install uv: curl -LsSf https://astral.sh/uv/install.sh | sh"
-      exit 1
-    }
-  fi
-
-  if ! "$VENV_PYTHON" -c "import flask, waitress, requests" 2>/dev/null; then
-    err "Dependency installation failed."
-    err "Try manually: uv pip install -r requirements.txt"
-    exit 1
-  fi
-  ok "Dependencies installed (flask, waitress, requests)"
+# Start locally without sample provider credentials; never replace operator settings.
+if [ ! -e "$REPO/.env" ]; then
+  (umask 077; set -C; printf 'HOST=127.0.0.1\nPORT=8319\n' > "$REPO/.env")
 fi
 
 # ── 4. Make scripts executable ────────────────────────────────────────────────

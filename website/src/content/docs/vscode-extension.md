@@ -6,230 +6,77 @@ head:
     content: Hermes Router VS Code Extension for Copilot
 ---
 
-The **hermes-router** VS Code extension turns your editor into a control panel for the router
-*and* lets you use the router's configured provider pool as a model inside Copilot Chat. It
-shows health in-editor and opens the full browser dashboard for configuration.
+The Hermes Router extension connects Copilot Chat to your provider pool and offers optional owner controls: provider status, remote restart and the browser dashboard. Hermes routes model requests and tool calls; Copilot owns terminal commands, file edits and MCP tools.
 
-[![Visual Studio Marketplace](https://img.shields.io/visual-studio-marketplace/v/MohammedShafiq.hermes-router?label=VS%20Marketplace&logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=MohammedShafiq.hermes-router)
+These instructions cover the **foundation source preview**. Previously published Marketplace/VSIX builds may predate the administrator credential command. Use the extension built from the same preview checkout when connecting to the upgraded router; installing an older published extension does not upgrade its authentication behavior.
 
-It does three things:
+## Install the preview
 
-1. **Monitor** — a status-bar badge and a live in-editor panel showing configured provider health.
-2. **Manage the basics** — restart, run the doctor, update, all from the palette. Everything else
-   (API keys, provider models, add-ons, key rotation mode) is configured in the **web
-   dashboard** (`/dashboard`), which the extension opens for you in one click — there's one place
-   to configure the router, not two.
-3. **Use as a model** — pick **hermes-router** in Copilot Chat and your prompts route through
-   the configured pool (text *and* tool calling, so it can work in **agent mode** when a
-   suitable model is available).
+You need VS Code 1.104 or later and the GitHub Copilot Chat extension for the model picker. Start the router first using [Setup](/setup/).
 
----
-
-## Install
-
-**Easiest:** open the **Extensions** view in VS Code (`Ctrl/Cmd+Shift+X`), search
-**hermes-router**, and click **Install**.
-
-Or from a terminal:
+From this checkout:
 
 ```bash
-code --install-extension MohammedShafiq.hermes-router
+cd vscode-extension
+npm ci
+npm run compile
+npm run package
 ```
 
-Or install a `.vsix` by hand: download it from the
-[GitHub releases](https://github.com/Shaf2665/Hermes-router/releases), then in VS Code run
-**Extensions → ⋯ → Install from VSIX…**.
+In VS Code, run **Extensions: Install from VSIX…** and choose the generated file. For a published release, use the [Marketplace listing](https://marketplace.visualstudio.com/items?itemName=MohammedShafiq.hermes-router) or [GitHub releases](https://github.com/Shaf2665/Hermes-router/releases); check that release's migration notes before mixing versions.
 
-> **What you also need:** a hermes-router that's actually running — either locally
-> (`hr setup`) or remotely (e.g. a [Hugging Face Space](/deployment/#path-4--hugging-face-space-host-it-online)).
-> The extension is a *front-end*; it talks to a router, it isn't the router itself.
+## Connect chat with an application key
 
----
+Open the router's browser dashboard, sign in using `ADMIN_API_KEY` from your local configuration, and open **Connect**. Create an application key, copy it, and optionally send the explicit small test request. An upstream charge may apply. Existing `PROXY_API_KEYS` remain valid for inference.
 
-## First-time setup
+In VS Code Settings, search for `hermesRouter`:
 
-After installing, tell the extension where your router is and how to authenticate. Open
-**Settings** (`Ctrl/Cmd+,`), search "hermes-router", and set:
-
-| Setting | Default | What to put |
-|---|---|---|
-| `hermesRouter.baseUrl` | `http://localhost:8319` | Your router's URL. For a remote router, use its full URL (e.g. your Space `https://you-hermes.hf.space`). |
-| `hermesRouter.apiKey` | *(empty)* | Any value from your router's `PROXY_API_KEYS`. Fresh routers generate one in `.env` and log it once. Used to read status and to chat. |
-| `hermesRouter.hrPath` | `hr` | Path to the `hr` CLI, for the local *manage* actions. Usually leave as-is. |
-| `hermesRouter.dockerContainer` | *(empty)* | Set to your container's name to manage a router running in **Docker** (see [below](#using-the-router-in-docker)). |
-| `hermesRouter.refreshSeconds` | `10` | How often the dashboard and status bar refresh. |
-
-For a default local router, leave `baseUrl` unchanged but set `apiKey` to the generated
-`PROXY_API_KEYS` value before status or chat can authenticate.
-
----
-
-## Monitoring
-
-### Status bar
-
-A small badge sits in the bottom status bar:
-
-- `✓ hermes-router 11/12` — the router is up and 11 of 12 providers are available.
-- It turns into a **warning** if the router is unreachable or down.
-
-Click it to open the dashboard.
-
-### Dashboard
-
-Click the **hermes-router** icon in the activity bar (left edge) to open a live in-editor panel.
-It shows, for every provider:
-
-- **Up/down** status and its health rating
-- **Latency** and the **model** it's currently using
-- Any **key cooldowns** (a key that's resting after a rate-limit)
-
-…plus the overall **cache hit-rate** and the active **key-rotation mode**. It refreshes on its
-own every few seconds (the `refreshSeconds` setting), or hit the refresh button in its title bar.
-
-This panel is deliberately compact — an at-a-glance health check, not a config screen. Click
-**⬈ Web dashboard** (in the panel or the palette) for the full picture: the live request log,
-per-key usage, and every configuration action. See [Monitoring → Web dashboard](/monitoring/#web-dashboard).
-
----
-
-## Managing the router
-
-Open the Command Palette (`Ctrl/Cmd+Shift+P`) and type "hermes-router" to see every action (the
-in-editor panel has buttons for Refresh and Restart; the rest are palette-only):
-
-| Command | What it does |
+| Setting | Value |
 |---|---|
-| **Open Dashboard** | Show the live provider table (in-editor panel) |
-| **Open Web Dashboard (browser)** | Open the router's full browser dashboard at `/dashboard` — health, request log, per-key usage, and every config action |
-| **Restart Router** | Apply config changes using the local CLI, Docker, or the remote restart endpoint |
-| **Run Doctor (diagnose)** | Diagnose install/health problems (`hr doctor`) |
-| **Update to Latest** | Upgrade the router (`hr update`) |
-| **Import Codex (ChatGPT) Login** | Bring in a ChatGPT-subscription login (`hr auth import-codex`) — the one config action that stays here, since it reads a local OAuth login file the web dashboard can't reach |
+| `hermesRouter.baseUrl` | Router origin, such as `http://localhost:8319`. A trailing `/v1` is accepted. Use HTTPS or a local SSH tunnel for a remote router. |
+| `hermesRouter.apiKey` | The application key, for chat/inference only. Keep your existing setting when upgrading. |
+| `hermesRouter.hrPath` | `hr`, or the path to the Bash CLI for Linux/macOS/WSL host controls. |
+| `hermesRouter.dockerContainer` | Optional container name for controls through the host's Docker CLI. |
+| `hermesRouter.refreshSeconds` | Status refresh interval; default 10 seconds. |
 
-> **Adding keys, setting models, toggling add-ons, and changing key rotation mode** all live in
-> the **web dashboard** now (open it with the button above) — see
-> [Monitoring → Web dashboard](/monitoring/#web-dashboard). This keeps configuration in one place
-> instead of split between the extension and the browser.
+Open Copilot Chat, open its model picker, and select **hermes-router**. Text streams through your configured providers. Tool calling in agent mode requires a configured model with confirmed tool support; provider prices and limits still apply.
 
-> **Remote routers:** monitoring and the web dashboard work over HTTP. **Restart** uses the
-> authenticated HTTP restart endpoint; it succeeds only when the remote process has a supervisor
-> or container restart policy. Doctor, Update, and Import Codex must run on the host and show a
-> notice instead.
+## Optional administrator controls
 
----
+Application keys no longer authorize `/v1/status`, global activity, configuration or remote restart. A chat connection can work while the owner panel asks for an administrator credential.
 
-## Using the router in Docker
+Run **Hermes Router: Set Administrator Credential** from the Command Palette. Enter the router's `ADMIN_API_KEY`. The extension stores it in **VS Code SecretStorage**, scoped to the router URL, and uses it for owner status and remote restart. It does not write it to settings or replace `hermesRouter.apiKey`. Run the command with an empty value to remove it. Configure the credential again after changing router URLs.
 
-**Configuring** the router (add keys, set models, toggle add-ons) is done entirely through the
-**web dashboard** now, and that works identically whether the router runs bare-metal or in
-Docker — it's just HTTP to the router itself, no `hr` CLI needed inside the container. Point your
-browser (or the extension's **Open Web Dashboard** button) at the container's mapped port, e.g.
-`http://localhost:8319/`.
+The browser dashboard signs in separately using an expiring HttpOnly session. Restarting the router signs browser sessions out. Never paste the administrator credential into an application-key setting, SDK snippet or shared workspace configuration.
 
-**Restarting** to apply a change is where Docker needs a little care, since it's an OS-level
-operation on the container, not just an HTTP call:
+| Command | Behavior |
+|---|---|
+| **Open Dashboard** | Owner provider status in the editor. Requires the SecretStorage administrator credential. |
+| **Open Web Dashboard (browser)** | Opens `/dashboard`; Providers, Connect, Activity and Settings remain there. |
+| **Refresh Status** | Refreshes the owner panel; a public health check helps distinguish an unreachable router from missing owner access. |
+| **Set Administrator Credential** | Stores or removes the optional router-scoped owner credential. |
+| **Restart Router** | Uses local `hr restart`, host `docker restart`, or the authenticated remote restart API, depending on settings. |
+| **Run Doctor (diagnose)** | Runs `hr doctor` on a supported local/Docker host. Remote routers show host instructions. |
+| **Update to Latest** | Runs the local update helper. Docker users pull/rebuild and recreate their container; remote routers require host access. |
+| **Import Codex (ChatGPT) Login** | Runs the local/Docker import helper. Remote routers require host access. |
 
-- **Preferred: set `hermesRouter.dockerContainer`** to your container's name in the extension's
-  settings. Its own **Restart Router** command then correctly runs `docker restart <container>`
-  instead of `hr restart` (which would just kill the container's main process). This also makes
-  **Doctor** and **Update** work via `docker exec` — see the `:cli` image setup below.
-- **Or use the web dashboard's own "Restart Now" button.** This restarts the router process
-  in-place. Inside a container where `router.py` is the main process, that process exiting stops
-  the *container* — it only comes back on its own if the container has a restart policy. The
-  provided `docker-compose.yml` already sets `restart: unless-stopped`, so Compose users are
-  covered automatically. A bare `docker run` with no restart flag would need a manual
-  `docker start <container>` afterward — add `--restart unless-stopped` to avoid that.
+Provider credentials, model overrides, key rotation, optional features, application access and instances are managed in the browser dashboard. See [Monitoring](/monitoring/).
 
-**1. Run the `:cli` image with a volume** — the standard image is just the router; the **`:cli`**
-variant also bundles the `hr` CLI (for the extension's Restart/Doctor/Update/Import-Codex via
-`docker exec`), and the volume keeps your keys/settings across restarts:
+## Docker and Windows controls
 
-```bash
-docker run -d --name hermes-router -p 8319:8319 --restart unless-stopped \
-  -v hermes-data:/app/data -e PROXY_API_KEYS=replace-with-a-long-random-secret \
-  shafiq735/hermes-router:cli
-```
+With a router in Docker, set `hermesRouter.dockerContainer` to its container name. **Restart Router** then runs `docker restart <container>` on the host. Doctor and Codex import require the `:cli` image and the host Docker CLI. Updating an image requires pulling/rebuilding and recreating the container; the extension reports this instead of running an in-container update.
 
-(On Windows PowerShell, put that on one line — see [Deployment](/deployment/#path-1--docker-easiest-any-os).)
+The browser/remote restart endpoint only reports success on an installation with a supported restart helper. Native Windows and a minimal Docker image can return **409** with a remedy; a container restart policy does not make a missing helper supported. Use `docker restart <container>` on the host, or stop the native Windows router and rerun `start.ps1` in PowerShell. See [Setup](/setup/) for the preview's persistent Compose configuration and native Windows installation.
 
-**2. Set `hermesRouter.dockerContainer`** to `hermes-router` in the extension's settings (keep
-`baseUrl` = `http://localhost:8319`, `apiKey` = your `PROXY_API_KEYS`).
-
-Codex import (the one config action that stays in the extension, since it reads a local `~/.codex`
-OAuth login the web dashboard can't reach) needs `-v ~/.codex:/root/.codex` mounted too — see
-[Providers](/providers/#codex-chatgpt-subscription).
-
----
-
-## Use hermes-router as an AI model (Copilot Chat)
-
-This is the headline feature. The extension registers **hermes-router** as a language model in
-VS Code, so you can chat through your configured provider pool right inside Copilot.
-
-1. Make sure the **GitHub Copilot Chat** extension is installed and you're on **VS Code ≥ 1.104**.
-2. Open the Chat view, click the **model picker** (the model name near the input box).
-3. Choose **hermes-router**.
-
-Prompts are sent through whichever configured provider/model the router picks. Provider pricing
-and account limits still apply.
-Replies **stream** in just like any built-in model.
-
-### Agent mode (tool calling)
-
-hermes-router supports **tool-capable inference**, so it can be selected in Copilot **agent
-mode**. Copilot Agent Mode owns terminal commands, file edits, and MCP tools; Hermes routes the
-model requests and tool calls to a confirmed tool-capable provider/model. For reliable agent use,
-configure at least one model known to support function calling.
-
-```text
-VS Code / Copilot Agent Mode
-        ↓ owns tools, terminal, file edits, MCP
-Hermes Router
-        ↓ routes inference and tool calls
-capable provider/model
-```
-
-Hermes does not execute tools itself.
-
-> **It's also available to other extensions.** Anything that uses the VS Code `vscode.lm` API
-> can select the hermes-router model too — not just Copilot Chat.
-
----
+Native Windows supports browser configuration and chat. The extension's local `hr` controls still require Linux/macOS/WSL, or Docker controls through the host Docker CLI. A remote owner credential does not grant SSH or host command access.
 
 ## Troubleshooting
 
-**Status bar says the router is down / "unreachable"**
-: The extension can't reach `baseUrl`. Confirm the router is running (`curl <baseUrl>/health`)
-  and that `hermesRouter.baseUrl` points at it. For a remote router, include the full
-  `https://…` URL.
+- **Chat returns 401:** check `hermesRouter.apiKey` is a live application key for this router. A revoked key fails new requests immediately.
+- **Owner panel returns 401/403 or asks for a credential:** run **Set Administrator Credential** and use `ADMIN_API_KEY`. Changing the application key will not grant owner access.
+- **Router unreachable:** check `baseUrl`, the running process and `/health`. A live process can still have no usable provider; verify a real request from Connect.
+- **Model missing from Copilot's picker:** check VS Code/Copilot Chat requirements and reload the editor after installing the preview VSIX.
+- **`hr` not found:** use the documented native Windows start/stop commands, WSL, or configure Docker controls. Browser configuration and inference do not require `hr` on the editor's host.
+- **Restart rejected:** follow the returned remedy. Success is only reported after a successful API response; a network failure is not treated as a completed restart.
 
-**`401` / dashboard is empty**
-: `hermesRouter.apiKey` must be one of the router's `PROXY_API_KEYS`. Make them match.
-
-**hermes-router doesn't appear in the Copilot model picker**
-: You need **VS Code ≥ 1.104** *and* the **GitHub Copilot Chat** extension. Reload the window
-  after installing both.
-
-**"Restart / Doctor / Update" says `hr` isn't on your PATH (or you saw `spawn hr ENOENT`)**
-: Those commands use the `hr` CLI, which is the **Linux/macOS/WSL** helper — it doesn't exist on
-  a plain **Windows** host, or inside a container that doesn't bundle it:
-  - **Docker:** set `hermesRouter.dockerContainer` to your container's name so these commands run
-    via `docker exec`/`docker restart` instead (see
-    [Using the router in Docker](#using-the-router-in-docker)) — or just use the web dashboard's
-    own Restart button, which needs no `hr` at all (works as long as your container has a restart
-    policy, e.g. `--restart unless-stopped`).
-  - **Windows without Docker:** run the router under **WSL2**, where `hr` works — see
-    [Deployment → Windows](/deployment/#path-3--windows).
-  - Monitoring, the web dashboard, and "use as a model" all work regardless — only these three
-    commands need `hr` (or `docker`) reachable.
-
-**Host-only commands on a remote router**
-: Doctor, Update, and Import Codex show a notice because they must run on the router host.
-  Restart uses the authenticated HTTP endpoint and requires the remote service/container to
-  come back after the process exits.
-
----
-
-See also: [Deployment](/deployment/) (run the router locally, in Docker, or on a Space) and
-[Monitoring](/monitoring/) (the `hr status` / `/v1/status` / Prometheus equivalents).
+See [Setup](/setup/), [Providers](/providers/) and [Monitoring](/monitoring/) for router configuration.

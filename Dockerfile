@@ -14,7 +14,16 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Hermes Router is an inference gateway; Hall-owned coding execution is not
 # bundled into this image.
-COPY router.py ./
+COPY *.py dashboard.html ./
+
+RUN mkdir -p /app/data
+ENV HR_ENV_FILE=/app/data/.env \
+    ROUTER_AUTH_FILE=/app/data/auth.json \
+    ROUTER_STATE_FILE=/app/data/router_state.json \
+    HERMES_INSTANCES_FILE=/app/data/instances.json \
+    HR_USAGE_DB=/app/data/usage.db \
+    CACHE_DB_PATH=/app/data/cache.db
+VOLUME ["/app/data"]
 
 # Port 8319 serves the API (/v1/*), /health, /metrics, and the built-in
 # monitoring dashboard (open http://localhost:8319/ in a browser).

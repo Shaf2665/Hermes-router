@@ -6,7 +6,7 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "hermesRouter.dashboard";
   private view?: vscode.WebviewView;
 
-  constructor(private getClient: () => RouterClient) {}
+  constructor(private getClient: () => Promise<RouterClient>) {}
 
   resolveWebviewView(view: vscode.WebviewView) {
     this.view = view;
@@ -26,7 +26,7 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
   async refresh(): Promise<RouterStatus | null> {
     if (!this.view) return null;
     try {
-      const status = await this.getClient().getStatus();
+      const status = await (await this.getClient()).getStatus();
       this.view.webview.postMessage({ type: "status", status });
       return status;
     } catch (e: any) {
@@ -96,8 +96,8 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
     const el = document.getElementById('content');
     if (m.type === 'error') {
       el.innerHTML = '<div class="err">⚠ ' + esc(m.message) + '</div>' +
-        '<div class="muted">Check the router URL and API key in extension settings.</div>' +
-        '<div class="actions" style="margin-top:10px"><button onclick="send(\\'refresh\\')">Refresh</button><button class="secondary" onclick="cmd(\\'hermesRouter.openWebDashboard\\')">Open web</button></div>';
+        '<div class="muted">Check the router URL and run Set Administrator Credential for owner controls. Chat continues to use your application key setting.</div>' +
+        '<div class="actions" style="margin-top:10px"><button onclick="send(\\'refresh\\')">Refresh</button><button class="secondary" onclick="cmd(\\'hermesRouter.openWebDashboard\\')">Open web</button><button onclick="cmd(\\'hermesRouter.setAdminCredential\\')">Set administrator credential</button></div>';
       return;
     }
     if (m.type !== 'status') return;

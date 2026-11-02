@@ -21,6 +21,9 @@ class _Response:
     headers = {}
     text = ""
 
+    def close(self):
+        pass
+
     @staticmethod
     def json():
         return {"choices": [{"message": {"role": "assistant", "content": "done", "tool_calls": []}}]}
@@ -105,7 +108,7 @@ def test_normal_routing_fails_over_to_the_next_provider(monkeypatch):
     monkeypatch.setattr(router, "_ordered_providers", lambda *_args: candidates)
     monkeypatch.setattr(router, "pool", _Pool())
     attempts = []
-    failure = type("Failure", (), {"status_code": 500, "headers": {}, "text": "upstream unavailable"})()
+    failure = type("Failure", (), {"status_code": 500, "headers": {}, "text": "upstream unavailable", "close": lambda self: None})()
 
     def forward(provider, *_args):
         attempts.append(provider["name"])

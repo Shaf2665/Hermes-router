@@ -17,7 +17,7 @@
 # own command (hr limit / hr model) — `hr features` shows their status and points
 # you there.
 #
-# Reads PORT and the proxy API key from .env (or override with env vars).
+# Reads PORT and the administrator key from .env (or override with env vars).
 #
 set -uo pipefail
 
@@ -42,11 +42,11 @@ from_env() {
 }
 
 PORT="${PORT:-$(from_env PORT || echo 8319)}"
-KEY="${PROXY_API_KEYS:-$(from_env PROXY_API_KEYS || true)}"
-KEY="${KEY%%,*}"
+KEY="${ADMIN_API_KEY:-$(from_env ADMIN_API_KEY || true)}"
 
 # Fetch the live features snapshot from the running router.
 fetch_features() {
+  [ -n "$KEY" ] || { err "ADMIN_API_KEY is missing. Start the upgraded router once, then check $ENV_FILE."; return 1; }
   command -v curl >/dev/null 2>&1 || { err "curl is not installed."; return 1; }
   curl -fsS -H "Authorization: Bearer ${KEY}" "http://localhost:${PORT}/v1/status" 2>/dev/null
 }
@@ -74,7 +74,7 @@ shift 2>/dev/null || true
 case "$cmd" in
   list)
     raw="$(fetch_features)" || { err "couldn't reach the router on http://localhost:${PORT}"; \
-      err "start it with:  hr start   (or set PORT / PROXY_API_KEYS)"; exit 1; }
+      err "start it with:  hr start   (or set PORT / ADMIN_API_KEY)"; exit 1; }
     HR_JSON="$raw" "$PYTHON" - <<'PY'
 import json, os
 d = json.loads(os.environ["HR_JSON"])
@@ -112,7 +112,7 @@ a = addons.get(name)
 if not a:
     print("ERR unknown add-on: " + name)
     print("NAMES " + " ".join(addons))
-elif a.get("kind") == "config":
+elif a.get("kind") != "flag":
     print("CONFIG " + (a.get("manage") or ""))
 else:
     print(f"SET {a['env']} {a['on'] if want=='enable' else a['off']}")

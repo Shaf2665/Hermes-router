@@ -50,7 +50,8 @@
       { "command": "hermesRouter.restart", "title": "hermes-router: Restart Router" },
       { "command": "hermesRouter.doctor", "title": "hermes-router: Run Doctor (diagnose)" },
       { "command": "hermesRouter.update", "title": "hermes-router: Update to Latest" },
-      { "command": "hermesRouter.importCodex", "title": "hermes-router: Import Codex (ChatGPT) Login" }
+      { "command": "hermesRouter.importCodex", "title": "hermes-router: Import Codex (ChatGPT) Login" },
+      { "command": "hermesRouter.setAdminCredential", "title": "Hermes Router: Set Administrator Credential" }
     ],
     "menus": {
       "view/title": [
@@ -69,7 +70,7 @@
         "hermesRouter.apiKey": {
           "type": "string",
           "default": "",
-          "description": "A value from the router's PROXY_API_KEYS. Fresh routers generate one on first boot; copy it from .env or the startup log."
+          "description": "Application key for chat/inference (PROXY_API_KEYS or a key created in Connect). Existing settings remain compatible. Owner status and remote restart use the optional Set Administrator Credential command, stored in VS Code SecretStorage."
         },
         "hermesRouter.hrPath": {
           "type": "string",
@@ -92,6 +93,7 @@
   },
   "scripts": {
     "compile": "node esbuild.js",
+    "test": "node --test tests/*.test.cjs",
     "watch": "node esbuild.js --watch",
     "package": "npx --yes @vscode/vsce package --no-dependencies"
   },

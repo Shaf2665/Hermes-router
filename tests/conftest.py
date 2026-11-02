@@ -39,6 +39,9 @@ for name in [
 
 os.environ.update({
     "PROXY_API_KEYS": "sk-test",
+    "ADMIN_API_KEY": "sk-test-admin",
+    "HR_ENV_FILE": str(_TMP / "router.env"),
+    "HR_USAGE_DB": str(_TMP / "usage.db"),
     "ROUTER_AUTH_FILE": str(_TMP / "auth.json"),
     "ROUTER_STATE_FILE": str(_TMP / "router_state.json"),
     "CACHE_DB_PATH": str(_TMP / "cache.db"),

@@ -5,6 +5,8 @@ experience needed. Pick the path that matches your computer and follow it top to
 
 ---
 
+> Foundation preview: use [Local and server setup](setup.md) for the new installation, persistent Compose configuration and credential migration. Published older images may still use legacy behavior.
+
 ## First, the big picture
 
 hermes-router has two pieces. Knowing this makes everything below make sense:
@@ -220,10 +222,10 @@ your Docker container. In the extension settings:
 - **`hermesRouter.baseUrl`** → `http://localhost:8319`
 - **`hermesRouter.apiKey`** → the **same value as the container's `PROXY_API_KEYS`**.
 
-> A red **`401 unauthorized — check hermesRouter.apiKey`** in the dashboard means those two
-> values don't match — fix `apiKey` to equal `PROXY_API_KEYS` and click **Refresh**.
+> For global status or remote restart, use the extension's administrator connection command
+> with the separate ADMIN_API_KEY. Chat continues to use hermesRouter.apiKey.
 
-**Want the Add key / Restart / Model buttons to work too?** The plain image has no `hr` inside it,
+**Want local Docker restart/diagnostic controls?** The plain image has no `hr` inside it,
 so use the **`:cli`** image variant with a volume, and tell the extension the container name:
 
 ```powershell
@@ -460,7 +462,7 @@ Expected: a JSON reply with the model's answer inside `choices[0].message.conten
 
 **4. Open the dashboard.** Browse to **`http://localhost:8319/`** for the live monitoring
 dashboard — provider health, request log, cache stats, per-key usage, and the **Instances** tab.
-It asks for your proxy key once and remembers it in the browser. With Docker the mapped port
+Sign in with the separate ADMIN_API_KEY; the browser keeps an expiring HttpOnly session. With Docker the mapped port
 (`-p 8319:8319`) already exposes it to your host. Running on a remote box bound to
 `HOST=127.0.0.1`? Tunnel it: `ssh -L 8319:127.0.0.1:8319 user@server`, then open
 `http://localhost:8319/` locally. See [monitoring.md](monitoring.md) for the full dashboard tour.

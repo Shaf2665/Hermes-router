@@ -3,6 +3,7 @@ import router
 
 
 AUTH = {"Authorization": "Bearer sk-test"}
+ADMIN = {"Authorization": "Bearer sk-test-admin"}
 
 
 def test_health_is_public_and_reports_ok():
@@ -11,7 +12,10 @@ def test_health_is_public_and_reports_ok():
     resp = client.get("/health")
 
     assert resp.status_code == 200
-    assert resp.get_json() == {"status": "ok", "providers": []}
+    body = resp.get_json()
+    assert body["status"] == "ok" and body["providers"] == []
+    assert body["ready"] is False
+    assert body["readiness"]["state"] == "unavailable"
 
 
 def test_models_requires_auth_and_returns_router_model():
@@ -34,9 +38,9 @@ def test_status_usage_and_logs_are_authenticated():
     assert client.get("/v1/usage").status_code == 401
     assert client.get("/v1/logs").status_code == 401
 
-    status = client.get("/v1/status", headers=AUTH)
+    status = client.get("/v1/status", headers=ADMIN)
     usage = client.get("/v1/usage", headers=AUTH)
-    logs = client.get("/v1/logs", headers=AUTH)
+    logs = client.get("/v1/logs", headers=ADMIN)
 
     assert status.status_code == 200
     assert status.get_json()["providers"] == {}
@@ -64,7 +68,7 @@ def test_chat_without_providers_fails_cleanly_and_is_logged():
     assert body["error"]["type"] == "router_error"
     assert "All providers exhausted" in body["error"]["message"]
 
-    logs = client.get("/v1/logs?limit=1", headers=AUTH).get_json()["entries"]
+    logs = client.get("/v1/logs?limit=1", headers=ADMIN).get_json()["entries"]
     assert len(logs) == 1
     assert logs[0]["endpoint"] == "chat"
     assert logs[0]["status"] == "error"
