@@ -2,7 +2,7 @@
   "name": "hermes-router",
   "displayName": "hermes-router",
   "description": "Control panel for hermes-router — monitor provider health and manage your multi-provider AI router from VS Code.",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "publisher": "MohammedShafiq",
   "license": "MIT",
   "icon": "icon.png",
@@ -14,10 +14,21 @@
   "engines": {
     "vscode": "^1.104.0"
   },
-  "categories": ["Other"],
-  "keywords": ["hermes-router", "llm", "openai", "proxy", "load balancer", "ai"],
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "hermes-router",
+    "llm",
+    "openai",
+    "proxy",
+    "load balancer",
+    "ai"
+  ],
   "main": "./dist/extension.js",
-  "activationEvents": ["onStartupFinished"],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
     "languageModelChatProviders": [
       {
@@ -44,19 +55,53 @@
       ]
     },
     "commands": [
-      { "command": "hermesRouter.openDashboard", "title": "hermes-router: Open Dashboard" },
-      { "command": "hermesRouter.openWebDashboard", "title": "hermes-router: Open Web Dashboard (browser)", "icon": "$(globe)" },
-      { "command": "hermesRouter.refresh", "title": "hermes-router: Refresh Status", "icon": "$(refresh)" },
-      { "command": "hermesRouter.restart", "title": "hermes-router: Restart Router" },
-      { "command": "hermesRouter.doctor", "title": "hermes-router: Run Doctor (diagnose)" },
-      { "command": "hermesRouter.update", "title": "hermes-router: Update to Latest" },
-      { "command": "hermesRouter.importCodex", "title": "hermes-router: Import Codex (ChatGPT) Login" },
-      { "command": "hermesRouter.setAdminCredential", "title": "Hermes Router: Set Administrator Credential" }
+      {
+        "command": "hermesRouter.openDashboard",
+        "title": "hermes-router: Open Dashboard"
+      },
+      {
+        "command": "hermesRouter.openWebDashboard",
+        "title": "hermes-router: Open Web Dashboard (browser)",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "hermesRouter.refresh",
+        "title": "hermes-router: Refresh Status",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "hermesRouter.restart",
+        "title": "hermes-router: Restart Router"
+      },
+      {
+        "command": "hermesRouter.doctor",
+        "title": "hermes-router: Run Doctor (diagnose)"
+      },
+      {
+        "command": "hermesRouter.update",
+        "title": "hermes-router: Update to Latest"
+      },
+      {
+        "command": "hermesRouter.importCodex",
+        "title": "hermes-router: Import Codex (ChatGPT) Login"
+      },
+      {
+        "command": "hermesRouter.setAdminCredential",
+        "title": "Hermes Router: Set Administrator Credential"
+      }
     ],
     "menus": {
       "view/title": [
-        { "command": "hermesRouter.openWebDashboard", "when": "view == hermesRouter.dashboard", "group": "navigation@1" },
-        { "command": "hermesRouter.refresh", "when": "view == hermesRouter.dashboard", "group": "navigation@2" }
+        {
+          "command": "hermesRouter.openWebDashboard",
+          "when": "view == hermesRouter.dashboard",
+          "group": "navigation@1"
+        },
+        {
+          "command": "hermesRouter.refresh",
+          "when": "view == hermesRouter.dashboard",
+          "group": "navigation@2"
+        }
       ]
     },
     "configuration": {
