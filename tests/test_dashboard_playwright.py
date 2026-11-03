@@ -333,3 +333,36 @@ def test_process_alive_does_not_claim_provider_ready(router_server, page):
     expect(page.locator("#plain-state")).to_contain_text("not ready")
     expect(page.locator("#plain-title")).to_contain_text("No provider is ready")
     expect(page.locator("#plain-message")).to_contain_text("Check provider credentials")
+
+
+def test_workspace_layout_theme_and_navigation(router_server, page):
+    login(page, router_server)
+    page.get_by_role('button', name='Settings', exact=True).click()
+    page.locator('#theme').select_option('dark')
+    page.reload()
+    expect(page.locator('#key-gate')).to_be_hidden()
+    expect(page.locator('html')).to_have_attribute('data-theme', 'dark')
+    expect(page.locator('#theme')).to_have_value('dark')
+    assert page.evaluate('JSON.parse(JSON.stringify(localStorage)).hermes_theme') == 'dark'
+    for theme in ['light', 'dark']:
+        page.get_by_role('button', name='Settings', exact=True).click()
+        page.locator('#theme').select_option(theme)
+        for width in [360, 768, 1440]:
+            page.set_viewport_size({'width': width, 'height': 900})
+            for name, label in [('overview','Home'),('providers','Providers'),('connect','Connect'),('logs','Activity'),('settings','Settings')]:
+                nav = page.locator('[data-page="'+name+'"]')
+                nav.click()
+                expect(nav).to_have_attribute('aria-current', 'page')
+                expect(page.locator('#current-page-title')).to_have_text(label)
+                assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), (theme,width,name)
+    assert page.evaluate('new Set([...document.querySelectorAll("[id]")].map(e=>e.id)).size === document.querySelectorAll("[id]").length')
+
+
+def test_rotation_control_still_saves_in_advanced_section(router_server, page):
+    login(page, router_server)
+    page.get_by_role('button', name='Providers', exact=True).click()
+    page.locator('.rotation-settings > summary').click()
+    page.locator('#cfg-rotation-value').select_option('sequential')
+    page.get_by_role('button', name='Save rotation mode', exact=True).click()
+    expect(page.locator('#cfg-rotation-msg')).to_contain_text('Saved rotation mode')
+    expect(page.locator('#restart-banner')).to_be_visible()

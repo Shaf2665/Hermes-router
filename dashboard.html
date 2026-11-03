@@ -27,7 +27,7 @@ header h1 span{color:var(--accent)}
 .header-right{display:flex;align-items:center;gap:10px}
 #last-update{font-size:11px;color:var(--muted)}
 .btn{cursor:pointer;font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);
-  background:var(--surface2);color:var(--text);transition:.15s}
+  background:var(--surface2);color:var(--text);transition:background-color .15s,color .15s,border-color .15s}
 .btn:hover{border-color:var(--accent);color:var(--accent)}
 
 /* ── app shell / sidebar ── */
@@ -41,7 +41,7 @@ header h1 span{color:var(--accent)}
 .sidebar-nav{display:flex;flex-direction:column;gap:2px;padding:0 8px}
 .nav-item{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;
   text-align:left;padding:9px 10px;border-radius:7px;border:none;background:transparent;
-  color:var(--muted);font-size:12.5px;font-family:inherit;cursor:pointer;transition:.15s}
+  color:var(--muted);font-size:12.5px;font-family:inherit;cursor:pointer;transition:background-color .15s,color .15s,border-color .15s}
 .nav-item:hover{background:var(--surface2);color:var(--text)}
 .nav-item.active{background:var(--surface2);color:var(--accent);font-weight:600}
 .nav-item .nav-dot{width:6px;height:6px;border-radius:50%;background:var(--border);flex:0 0 auto}
@@ -267,42 +267,76 @@ tr:hover td{background:rgba(108,140,255,.04)}
 .right{text-align:right}
 .muted{color:var(--muted)}
 
-/* Hermes uses its request path as the visual anchor; data and controls stay quiet. */
-:root{color-scheme:light dark;--bg:#F5F7F7;--surface:#FFFFFF;--surface2:#EDF2F2;--border:#CDD9D9;--text:#172021;--muted:#536565;--accent:#2B7074;--green:#276848;--yellow:#8C590D;--red:#AA3434;--orange:#995212;--purple:#70458C;--font:'Segoe UI Variable','Segoe UI',system-ui,sans-serif}
-:root[data-theme="dark"]{color-scheme:dark;--bg:#101415;--surface:#1B2325;--surface2:#253134;--border:#405154;--text:#E6EFEF;--muted:#AFBFBF;--accent:#58B9BD;--green:#7BC79C;--yellow:#E6BC74;--red:#F29D9D;--purple:#C9A5E0}
-@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#101415;--surface:#1B2325;--surface2:#253134;--border:#405154;--text:#E6EFEF;--muted:#AFBFBF;--accent:#58B9BD;--green:#7BC79C;--yellow:#E6BC74;--red:#F29D9D;--purple:#C9A5E0}}
-body{font-size:16px;line-height:1.5}button,input,select,textarea{font-family:inherit}button:disabled{opacity:.55;cursor:wait}:focus-visible{outline:3px solid var(--accent)!important;outline-offset:3px}main{padding:32px;max-width:1280px}.sidebar{width:192px}.sidebar-brand{font-size:19px}.nav-item{font-size:16px;padding:12px}.btn{font-size:14px;padding:8px 12px;min-height:40px}.primary{background:var(--accent)!important;color:var(--surface)!important}.panel-title,.setup-card h3{font-size:16px;letter-spacing:0;text-transform:none}.hero{padding:24px;border-top:4px solid var(--accent)}.hero h2{font-size:28px}.hero-copy{font-size:16px}.quick-label,.stat-card .label{font-size:13px;text-transform:none;letter-spacing:0}.quick-sub,.stat-card .sub,.field-hint,.page-intro,.provider-model{font-size:14px}.config-form input,.config-form select,.config-form textarea{font-size:16px;padding:10px;max-width:100%}.config-form label{font-size:14px;text-transform:none;letter-spacing:0}.config-msg{font-size:14px;min-height:24px}.config-msg:empty,#panel-errors:empty{display:none}.panel-body{overflow-x:auto}.page-heading h2{font-size:28px}.page-heading p{color:var(--muted)}.request-path{display:flex;align-items:center;flex-wrap:wrap;gap:14px;margin:24px 0;color:var(--muted)}.request-path strong{color:var(--accent);padding:8px 16px;border:1px solid var(--accent);border-radius:6px}.connect-steps{display:grid;gap:28px;padding:24px 24px 24px 48px;background:var(--surface);border:1px solid var(--border);border-radius:10px}.connect-steps li{padding-left:8px}.connect-steps p{max-width:72ch;margin:8px 0 12px}.connect-steps .config-form{display:list-item}.connect-steps .btn{margin-top:8px}.connect-steps select{font:inherit;padding:8px;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px}pre{padding:16px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;white-space:pre-wrap;overflow-wrap:anywhere;font-family:'Cascadia Code',Consolas,monospace;font-size:14px;margin-top:12px}code,.mono{font-family:'Cascadia Code',Consolas,monospace}.advanced-panel>summary{padding:16px;cursor:pointer;font-size:16px;font-weight:600}.advanced-panel[open]>summary{border-bottom:1px solid var(--border);margin-bottom:16px}.gate-box{max-width:460px;width:calc(100% - 32px);min-width:0;text-align:left}.gate-box h2{font-size:26px}.gate-box p{font-size:15px}.gate-box label{display:block;margin-bottom:8px}.gate-box input{font-size:16px}#panel-errors{color:var(--red);border-left:3px solid var(--red);padding:12px;background:var(--surface)}.header-right{flex-wrap:wrap}header{gap:12px}#last-update{font-size:12px}.setup-step{flex-wrap:wrap}.hero-top{flex-wrap:wrap}a{color:var(--accent)}
-@media(max-width:760px){.sidebar{width:100%}main{padding:16px}.sidebar-nav{width:100%;padding:0;gap:0;justify-content:space-between}.nav-item{font-size:14px;padding:10px 7px;width:auto}.sidebar{padding:8px}.overview-grid,.config-grid,.instance-grid,.instance-form{grid-template-columns:1fr!important}.hero{padding:18px}.hero h2{font-size:24px}header{position:static;flex-wrap:wrap;padding:16px}.header-right{gap:8px}.quick-grid{grid-template-columns:1fr}.connect-steps{padding:20px 16px 20px 36px}.panel-header{flex-wrap:wrap;gap:10px}.config-form .row{flex-wrap:wrap}.row>*{min-width:0}.provider-grid{grid-template-columns:1fr}.gate-box{padding:24px}.setup-step strong{font-size:14px}}
+/* Shared workspace design: quiet surfaces, strong navigation, purposeful hierarchy. */
+:root{color-scheme:light;--bg:#f7f8fc;--surface:#fff;--surface2:#f1f3f9;--border:#e1e5ef;--text:#202738;--muted:#616b80;--accent:#4f46e5;--green:#19764e;--yellow:#95600b;--red:#ba3545;--orange:#a65419;--purple:#7043ae;--font:'Segoe UI Variable','Segoe UI',system-ui,sans-serif;--shadow:0 3px 14px #20273805}
+:root[data-theme="dark"]{color-scheme:dark;--bg:#101522;--surface:#191f30;--surface2:#232c40;--border:#354058;--text:#edf0f9;--muted:#abb5cd;--accent:#a6a1ff;--green:#80d3a7;--yellow:#f2c879;--red:#ffa3ae;--orange:#f8b47f;--purple:#c7a6ed;--shadow:none}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;--bg:#101522;--surface:#191f30;--surface2:#232c40;--border:#354058;--text:#edf0f9;--muted:#abb5cd;--accent:#a6a1ff;--green:#80d3a7;--yellow:#f2c879;--red:#ffa3ae;--orange:#f8b47f;--purple:#c7a6ed;--shadow:none}}
+body{font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
+button,input,select,textarea{font:inherit}button:disabled{opacity:.5;cursor:not-allowed}
+:focus-visible{outline:3px solid var(--accent)!important;outline-offset:3px}
+a{color:var(--accent);text-underline-offset:3px}h2,h3{letter-spacing:-.035em}
+.sidebar{width:228px;background:#121a2d;color:#dbe2f2;border:0;padding:30px 16px 20px;height:100vh}
+.sidebar-brand{display:flex;align-items:center;gap:12px;padding:0 10px 28px;border:0;margin:0;font-size:22px;font-weight:650;letter-spacing:-.7px;line-height:1.2}
+.sidebar-brand .brand-caption{display:block;color:#a7b2ca;font-size:11px;letter-spacing:1.2px;margin-top:5px}
+.brand-mark{display:inline-grid;place-items:center;background:#6960ee;border:1px solid #8a83ff;color:#fff!important;border-radius:12px;width:42px;height:42px;flex-shrink:0;box-shadow:0 4px 14px #0002}
+.brand-mark svg{width:30px;height:30px}.workspace-label{display:flex;align-items:center;gap:10px;padding:16px 10px;margin:0 0 22px;border-top:1px solid #2a3346;border-bottom:1px solid #2a3346;font-size:12px;font-weight:600}
+.workspace-label small,.sidebar-footer small{display:block;font-size:11px;font-weight:400;color:#a7b2ca;margin-top:2px}
+.workspace-avatar{display:grid;place-items:center;width:30px;height:30px;border-radius:8px;background:#29344c;color:#d4dcf0}
+.sidebar-nav{padding:0;gap:7px}.nav-item{font-size:14px;padding:12px 14px;gap:12px;justify-content:flex-start;color:#adb8d0;border-radius:9px;min-height:46px}
+.nav-item:hover{background:#202c43;color:#fff}.nav-item.active{background:#33315a;color:#e3e0ff;box-shadow:inset 3px 0 #a8a2ff;font-weight:600}
+.nav-icon{width:19px;height:19px;flex-shrink:0}.nav-item .nav-dot{margin-left:auto;background:#536079}.nav-item .nav-dot.warn{background:#e5b663;box-shadow:none}.nav-item .nav-dot.bad{background:#f3899c;box-shadow:none}
+.sidebar-footer{display:flex;gap:9px;align-items:center;margin-top:auto;padding:22px 4px 0;font-size:11px;color:#c0cae0;border-top:1px solid #2a3346}.sidebar-footer-icon{border:1px solid #536079;border-radius:50%;width:24px;height:24px;text-align:center;flex-shrink:0}
+header{padding:18px 36px;min-height:76px;background:var(--surface);gap:16px;border-bottom:1px solid var(--border)}
+header h1.breadcrumb{display:flex;align-items:center;gap:14px;font-size:13px;letter-spacing:0;font-weight:400}.breadcrumb span{color:var(--muted)}.breadcrumb strong{font-weight:600}
+.header-right{gap:12px;flex-wrap:wrap}.badge{padding:5px 9px;background:var(--surface);border-color:var(--border);font-size:11px}.badge .dot,.badge .dot.err{box-shadow:none;width:6px;height:6px}#last-update{font-size:11px}
+main{padding:34px 36px 56px;max-width:1480px;gap:22px}.page.active{gap:24px}.page,.page>*{min-width:0}.page-heading{margin-bottom:2px}.page-heading h2{font-size:30px;line-height:1.25;font-weight:650}.page-heading p{color:var(--muted);font-size:14px;margin-top:8px;max-width:70ch}
+.btn{min-height:40px;padding:9px 15px;font-size:13px;font-weight:600;background:var(--surface);border:1px solid var(--border);border-radius:8px;box-shadow:0 1px 2px #00000005;line-height:1.4}.btn:hover{background:var(--surface2);color:var(--accent);border-color:var(--accent)}.btn.primary{background:var(--accent);color:var(--bg);border-color:var(--accent);box-shadow:0 3px 8px #4f46e51a}.btn.primary:hover{filter:brightness(.94)}
+.panel{border-radius:12px;box-shadow:var(--shadow);overflow:hidden}.panel-header{background:var(--surface);padding:19px 22px;gap:12px;flex-wrap:wrap}.panel-title{font-size:15px;font-weight:650;text-transform:none;letter-spacing:0}.panel-description{font-size:13px;color:var(--muted);margin-top:4px}.panel-body{overflow-x:auto}.panel-body.pad{padding:22px}
+.subtle-label{color:var(--muted);font-size:11px;border:1px solid var(--border);padding:3px 8px;border-radius:6px;white-space:nowrap}
+.provider-workspace{display:grid;grid-template-columns:minmax(0,1fr) 278px;gap:24px;align-items:start}.provider-setup-form{padding:0!important;gap:0!important}.setup-field-group{display:flex;flex-direction:column;gap:10px;padding:22px 26px;border-bottom:1px solid var(--border)}
+.setup-field-title{display:flex;align-items:center;gap:10px;margin-bottom:4px}.setup-field-title>span{display:grid;place-items:center;width:24px;height:24px;border:1px solid var(--border);background:var(--surface2);color:var(--accent);border-radius:7px;font-size:12px;font-weight:700;flex-shrink:0}.setup-field-title label,.setup-field-title strong{font-size:14px!important;font-weight:650!important;margin:0!important;color:var(--text)!important}
+.config-form label{font-size:13px;font-weight:500;letter-spacing:0;text-transform:none;line-height:1.5;color:var(--text)}.config-form input,.config-form select,.config-form textarea{font-size:14px;padding:11px 12px;max-width:100%;border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--text);min-height:42px}.config-form input[readonly]{background:var(--surface2);color:var(--muted);font-size:12px}.config-form input::placeholder{color:var(--muted)}.config-form .row{gap:10px;flex-wrap:wrap}.row>*{min-width:0}.config-grid{gap:24px;padding:22px}.field-hint,.default-hint,.page-intro{font-size:12px;line-height:1.6;color:var(--muted)}
+#cfg-provider-access{display:inline-block;color:var(--green);font-size:12px;margin:0}#cfg-provider-key-link{font-weight:600;font-size:12px;align-self:flex-start}#cfg-provider-note{margin:0}#cfg-provider-models{border:1px solid var(--border);border-radius:8px;overflow:auto;max-height:240px!important}.model-choice{display:flex;gap:10px;align-items:center;padding:11px 12px;margin:0!important;border-bottom:1px solid var(--border);overflow-wrap:anywhere;font-weight:400!important;cursor:pointer}.model-choice:last-child{border-bottom:0}.model-choice:has(input:checked){background:var(--surface2);color:var(--accent)}.config-form .model-choice input{width:16px;height:16px;min-height:0;flex-shrink:0;accent-color:var(--accent)}.model-choice span{min-width:0}.setup-field-group>.btn{align-self:flex-start}.setup-submit{padding:18px 26px;justify-content:flex-end;background:var(--surface2)}.setup-submit .btn{flex:none;min-width:145px}.config-msg{font-size:13px;min-height:24px;padding:0 10px;overflow-wrap:anywhere}.config-msg:empty,#panel-errors:empty{display:none}
+.provider-guide{padding:22px 0;min-width:0}.guide-route{display:flex;align-items:center;gap:9px;font-size:10px;color:var(--muted);margin-bottom:24px}.guide-route span{padding:7px;border:1px solid var(--border);border-radius:6px;background:var(--surface)}.guide-route b{display:grid;place-items:center;width:32px;height:32px;border-radius:8px;background:var(--accent);color:var(--bg);font-size:17px}.provider-guide h3{font-size:22px;line-height:1.35;margin-bottom:12px;font-weight:650}.provider-guide p{font-size:13px;color:var(--muted);line-height:1.7}.guide-note{margin-top:24px}.guide-note strong,.guide-next strong{font-size:13px;font-weight:650}.guide-note p,.guide-next p{margin-top:5px}.guide-next{border-top:1px solid var(--border);margin-top:24px;padding-top:24px}.guide-next .btn{margin-top:14px}.rotation-settings{border-top:1px solid var(--border);margin-top:24px;padding-top:18px}.rotation-settings summary{font-size:12px;color:var(--muted);cursor:pointer}.rotation-settings .config-form{padding-top:14px}
+.provider-grid{gap:14px;padding:20px}.provider-card{border-radius:10px;padding:18px}.provider-name{font-size:14px}.provider-model{font-size:12px}.provider-empty{grid-column:1/-1;text-align:center;padding:25px 16px;color:var(--muted)}.provider-empty .provider-name{color:var(--text);margin:10px 0 4px;font-weight:600}.provider-empty p{font-size:13px}.empty-symbol{display:inline-grid;place-items:center;width:40px;height:40px;border-radius:12px;background:var(--surface2);font-size:24px;color:var(--accent)}
+.overview-grid{gap:22px}.hero{padding:26px;border-radius:12px;border:1px solid var(--border);box-shadow:var(--shadow)}.hero h2{font-size:25px}.hero-copy{font-size:14px;line-height:1.6}.hero-top{flex-wrap:wrap}.request-path{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin:24px 0;font-size:13px;color:var(--muted)}.request-path strong{color:var(--accent);padding:9px 17px;background:var(--surface2);border:1px solid var(--border);border-radius:9px}.quick-grid{gap:12px;margin-top:22px}.quick-card{padding:14px;border-radius:8px}.quick-label,.stat-card .label{font-size:12px;text-transform:none;letter-spacing:0}.quick-value{font-size:14px;overflow-wrap:anywhere}.quick-sub,.stat-card .sub{font-size:11px}.setup-card{padding:24px;border-radius:12px}.setup-card h3{font-size:16px;margin-bottom:22px}.setup-list{gap:16px}.setup-step{flex-wrap:wrap;font-size:12px}.setup-step strong{font-size:12px}.setup-actions{margin-top:24px}.stat-row{gap:14px}.stat-card{padding:16px;border:0;border-left:2px solid var(--border);border-radius:0;box-shadow:none}.stat-card .value{font-size:28px;font-weight:600;letter-spacing:-1px}
+.connect-steps{list-style:none;counter-reset:connect;display:grid;gap:0;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--surface);padding:0}.connect-steps>li{counter-increment:connect;position:relative;padding:25px 28px 25px 72px;border-bottom:1px solid var(--border)}.connect-steps>li:last-child{border:0}.connect-steps>li:before{content:counter(connect);position:absolute;left:25px;top:25px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--accent);width:28px;height:28px;text-align:center;line-height:28px;font-size:12px;font-weight:700}.connect-steps>li>strong{font-size:16px}.connect-steps p{max-width:72ch;color:var(--muted);font-size:13px;margin:8px 0 14px}.connect-steps .config-form{display:block}.connect-steps label{display:block;margin-top:10px}.connect-steps input{max-width:380px}.connect-steps .btn{margin-top:10px}.connect-steps select{padding:8px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:7px}
+pre{padding:18px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;margin-top:12px}code,pre,.mono{font-family:'Cascadia Code',Consolas,monospace}table{font-size:12px}th{font-size:11px;background:var(--surface2);padding:11px 16px}td{padding:13px 16px}.advanced-panel{border:1px solid var(--border);border-radius:10px;background:var(--surface);overflow:hidden}.advanced-panel>summary{padding:18px 22px;cursor:pointer;font-size:13px;font-weight:600;color:var(--muted)}.advanced-panel[open]>summary{border-bottom:1px solid var(--border);margin-bottom:14px}.addon-grid{padding:20px;gap:14px}.addon-card{border-radius:10px;padding:18px}.instance-grid{gap:16px}.instance-form{padding:20px}.instance-card{border-radius:10px}.scope-item{font-size:12px!important}
+#panel-errors{border:1px solid var(--red);border-left:3px solid var(--red);background:var(--surface);color:var(--red);padding:14px 18px;border-radius:8px;font-size:13px;overflow-wrap:anywhere}#restart-banner{font-size:13px;padding:14px 36px;gap:14px}#restart-banner .actions{flex-wrap:wrap}
+#key-gate{background:var(--bg);background-image:radial-gradient(ellipse at 20% 10%,#7770ff12,transparent 55%)}.gate-box{width:calc(100% - 32px);max-width:440px;min-width:0;padding:36px;border-radius:18px;text-align:left;box-shadow:0 18px 60px #1720390b}.gate-brand{display:flex;align-items:center;gap:12px;font-size:21px;font-weight:650;letter-spacing:-.5px}.gate-divider{height:1px;background:var(--border);margin:28px 0}.gate-box h2{font-size:26px;margin-bottom:8px;font-weight:650}.gate-box p{font-size:13px;line-height:1.6;margin-bottom:24px}.gate-box label{font-size:12px;font-weight:600;display:block;margin-bottom:8px}.gate-box input{font-size:15px;padding:12px;background:var(--surface);border-radius:8px;margin:0}.gate-box .btn{padding:12px}.gate-box p.gate-footnote{font-size:11px;text-align:center;margin:22px 0 0;color:var(--muted)}
+@media(max-width:1100px){.provider-workspace{grid-template-columns:minmax(0,1fr) 235px;gap:20px}.sidebar{width:204px}main{padding:28px 24px}.setup-field-group{padding:20px}.overview-grid{grid-template-columns:1fr}.workspace-label{padding-left:0}.sidebar-brand{padding-left:0}}
+@media(max-width:900px){.provider-workspace{grid-template-columns:1fr}.provider-guide{display:grid;grid-template-columns:1fr 1fr;gap:18px;padding:6px}.guide-route{display:none}.provider-guide h3{font-size:20px}.guide-note,.guide-next,.rotation-settings{margin:0}.guide-next,.rotation-settings{padding-top:16px;grid-column:1/-1}.provider-guide h3 br{display:none}.guide-next .btn{margin-top:10px}}
+@media(max-width:760px){.app-shell{flex-direction:column}.sidebar{width:100%;height:auto;position:sticky;top:0;z-index:20;padding:6px 8px;border:0;overflow:visible}.sidebar-brand,.workspace-label,.sidebar-footer{display:none}.sidebar-nav{flex-direction:row;width:100%;gap:2px;padding:0;justify-content:space-between}.nav-item{flex-direction:column;gap:4px;width:auto;min-width:0;flex:1;font-size:10px;min-height:54px;padding:7px 3px}.nav-item.active{box-shadow:inset 0 -2px #a8a2ff}.nav-icon{width:18px;height:18px}.nav-dot{display:none}header{position:static;padding:14px 16px;min-height:0;flex-wrap:wrap}.header-right{gap:8px;margin-left:auto}.breadcrumb{display:none!important}#last-update{display:none}main{padding:24px 16px 40px}.page.active{gap:18px}.page-heading h2{font-size:27px}.page-heading p{font-size:13px}.panel-header{padding:17px}.panel-title{font-size:14px}.subtle-label{display:none}.provider-workspace{gap:20px}.setup-field-group{padding:19px 17px}.setup-submit{padding:17px}.setup-submit .btn{width:100%}.provider-guide{grid-template-columns:1fr}.provider-guide h3{margin:0}.guide-note{padding-top:10px}.guide-next,.rotation-settings{grid-column:auto}.config-grid,.instance-grid,.instance-form{grid-template-columns:1fr!important}.config-grid{padding:17px}.hero{padding:20px}.hero h2{font-size:23px}.quick-grid{grid-template-columns:1fr}.provider-grid{grid-template-columns:1fr;padding:16px}.connect-steps>li{padding:22px 18px 22px 55px}.connect-steps>li:before{left:16px;top:22px;width:24px;height:24px;line-height:24px}.connect-steps .config-form input{width:100%}.connect-steps .row{display:flex;flex-wrap:wrap}.gate-box{padding:28px}.gate-box h2{font-size:24px}#restart-banner{padding:14px 16px;flex-wrap:wrap}.stat-row{grid-template-columns:1fr 1fr}.stat-card .value{font-size:25px}.advanced-panel>summary{padding:16px}.provider-model{overflow-wrap:anywhere}}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
+
 </style>
 </head>
 <body>
 
 <!-- API key gate -->
 <div id="key-gate">
-  <div class="gate-box">
-    <h2>Hermes Router</h2>
+  <div class="gate-box"><div class="gate-brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M8 6v20M24 6v20M8 16h16M12 6l8 20" stroke="currentColor" stroke-width="3.5" stroke-linecap="round"/></svg></span><span>Hermes Router</span></div><div class="gate-divider"></div><h2>Your AI workspace.</h2>
     <p>Enter your administrator credential to manage Hermes.</p>
     <label for="key-input">Administrator credential</label><input id="key-input" type="password" placeholder="Administrator credential" autocomplete="off">
     <p role="alert" id="gate-error" style="color:var(--red);font-size:12px;min-height:16px;margin:8px 0 0"></p>
-    <button class="btn" onclick="submitKey()">Open Dashboard</button>
+    <button class="btn primary" onclick="submitKey()">Open Dashboard</button><p class="gate-footnote">Your providers, models and tools. Together in one place.</p>
   </div>
 </div>
 
 <div class="app-shell" inert hidden>
   <aside class="sidebar">
-    <div class="sidebar-brand"><span>Hermes</span> Router</div>
+    <div class="sidebar-brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M8 6v20M24 6v20M8 16h16M12 6l8 20" stroke="currentColor" stroke-width="3.5" stroke-linecap="round"/></svg></span><div>Hermes<span class="brand-caption">AI Router</span></div></div><div class="workspace-label"><span class="workspace-avatar">P</span><div>Personal workspace<small>Your models, connected</small></div></div>
     <nav class="sidebar-nav" id="sidebar-nav" aria-label="Main navigation">
-<button class="nav-item active" data-page="overview" onclick="showPage('overview')">Home</button>
-<button class="nav-item" data-page="providers" onclick="showPage('providers')">Providers <span class="nav-dot" id="nav-dot-providers"></span></button>
-<button class="nav-item" data-page="connect" onclick="showPage('connect')">Connect</button>
-<button class="nav-item" data-page="logs" onclick="showPage('logs')">Activity</button>
-<button class="nav-item" data-page="settings" onclick="showPage('settings')">Settings</button></nav>
+<button class="nav-item active" data-page="overview" onclick="showPage('overview')"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1Z"/></svg><span>Home</span></button>
+<button class="nav-item" data-page="providers" onclick="showPage('providers')"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg><span>Providers</span> <span class="nav-dot" id="nav-dot-providers"></span></button>
+<button class="nav-item" data-page="connect" onclick="showPage('connect')"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m10 13 4-4m-5 7-2 2a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0m2 1 2-2a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0"/></svg><span>Connect</span></button>
+<button class="nav-item" data-page="logs" onclick="showPage('logs')"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>Activity</span></button>
+<button class="nav-item" data-page="settings" onclick="showPage('settings')"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="10" cy="18" r="2"/></svg><span>Settings</span></button></nav><div class="sidebar-footer"><span class="sidebar-footer-icon">H</span><div>One endpoint. Your choice.<small>Connect the tools you love.</small></div></div>
   </aside>
 
   <div class="app-main">
     <header>
-      <h1><span>Hermes</span> Router &mdash; Dashboard</h1>
+      <h1 class="breadcrumb"><span>Workspace</span><span aria-hidden="true">/</span><strong id="current-page-title">Home</strong></h1>
       <div class="header-right">
         <div class="badge"><div class="dot" id="hdr-dot"></div><span id="hdr-status">connecting</span></div>
         <span id="last-update"></span>
@@ -321,7 +355,7 @@ body{font-size:16px;line-height:1.5}button,input,select,textarea{font-family:inh
     <main><div id="panel-errors" role="status" aria-live="polite"></div>
 
       <!-- ── Overview ─────────────────────────────────────────────────────── -->
-      <section class="page active" id="page-overview">
+      <section class="page active" id="page-overview"><div class="page-heading"><h2>Your AI, connected.</h2><p>A clear view of your router, providers and usage.</p></div>
         <section class="overview-grid">
           <div class="hero">
             <div class="hero-top">
@@ -378,13 +412,12 @@ body{font-size:16px;line-height:1.5}button,input,select,textarea{font-family:inh
           </div>
         </div>
       </section>
-<section class="page" id="page-providers"><div class="page-heading"><h2>Providers</h2><p>Connect a provider, then check inference in Connect.</p></div>
-        <div class="panel">
-          <div class="panel-header"><span class="panel-title">Provider Key Setup</span></div>
-          <div class="page-intro" style="padding:12px 14px 0">Keys the router uses to call upstream providers (Gemini, OpenAI, …) — not the keys your own apps use to call the router (see Settings → Application access for that).</div>
-          <div class="config-grid">
-            <div class="config-form">
-              <label for="cfg-key-provider">1. Choose a provider</label>
+<section class="page" id="page-providers"><div class="page-heading"><h2>Providers</h2><p>One connection for all your AI models.</p></div>
+        <div class="provider-workspace">
+          <div class="panel provider-setup-panel">
+            <div class="panel-header"><div><h3 class="panel-title">Connect a provider</h3><p class="panel-description">Bring your API key. We’ll take care of the address.</p></div><span class="subtle-label">Simple setup</span></div>
+            <div class="config-form provider-setup-form">
+              <div class="setup-field-group"><div class="setup-field-title"><span>1</span><label for="cfg-key-provider">Choose a provider</label></div>
               <div class="row">
                 <select id="cfg-key-provider" onchange="onKeyProviderChange()"></select>
               </div>
@@ -393,22 +426,29 @@ body{font-size:16px;line-height:1.5}button,input,select,textarea{font-family:inh
               <p id="cfg-provider-note" class="field-hint"></p>
               <label for="cfg-provider-url">Preset base URL</label>
               <input id="cfg-provider-url" readonly>
-              <label for="cfg-key-value">2. Paste your API key</label>
+              </div><div class="setup-field-group"><div class="setup-field-title"><span>2</span><label for="cfg-key-value">Add your API key</label></div>
               <input id="cfg-key-value" type="password" placeholder="paste provider API key" autocomplete="off">
-              <label>3. Choose models</label>
+              <p class="field-hint">Stored on your router. Never saved in your browser.</p></div><div class="setup-field-group"><div class="setup-field-title"><span>3</span><strong>Choose your models</strong></div>
               <button class="btn" onclick="runAction(this,()=>loadProviderModels())">Refresh model list</button>
               <p class="field-hint" id="cfg-provider-model-status" role="status"></p>
               <div id="cfg-provider-models" style="max-height:220px;overflow:auto"></div>
               <label for="cfg-provider-custom-models">Other model IDs (optional, comma-separated)</label>
               <input id="cfg-provider-custom-models" placeholder="Paste a model ID if it is not listed">
               <p class="field-hint">Only selected models will be saved. A free tier does not mean every model is free. Check the provider’s prices and limits.</p>
-              <div class="row">
+              </div><div class="row setup-submit">
                 <button class="btn primary" onclick="runAction(this,()=>addKey())">Save provider</button>
               </div>
-              <div class="config-msg" id="cfg-key-msg"></div>
+              <div class="config-msg" id="cfg-key-msg" role="status"></div>
             </div>
-
-            <div class="config-form">
+          </div>
+          <aside class="provider-guide" aria-label="Provider setup guide">
+            <div class="guide-route" aria-hidden="true"><span>Your tool</span><b>H</b><span>AI providers</span></div>
+            <h3>Your models. <br>One familiar endpoint.</h3>
+            <p>Add the providers you use, then connect your coding tools with a single Hermes application key.</p>
+            <div class="guide-note"><strong>A key for each purpose</strong><p>Provider keys connect Hermes to AI services. Application keys connect your tools to Hermes.</p></div>
+            <div class="guide-note"><strong>Stay in control</strong><p>Only the models you select are saved. Free tiers and usage limits depend on the provider.</p></div>
+            <div class="guide-next"><strong>After you save</strong><p>Restart to apply your models, then test a request in Connect.</p><button class="btn" onclick="showPage('connect')">Connect a tool</button></div>
+            <details class="rotation-settings"><summary>Key rotation settings</summary>            <div class="config-form">
               <label>Key rotation</label>
               <select id="cfg-rotation-value">
                 <option value="round-robin">Spread requests across keys</option>
@@ -420,11 +460,12 @@ body{font-size:16px;line-height:1.5}button,input,select,textarea{font-family:inh
               <div class="default-hint">Round-robin is best for most users because it spreads load across keys.</div>
               <div class="config-msg" id="cfg-rotation-msg"></div>
             </div>
-          </div>
+</details>
+          </aside>
         </div>
 
         <div class="panel">
-          <div class="panel-header"><span class="panel-title">Key & Budget Usage</span></div>
+          <div class="panel-header"><span class="panel-title">Application key usage</span></div>
           <div class="panel-body">
             <table>
               <thead><tr>
@@ -438,7 +479,7 @@ body{font-size:16px;line-height:1.5}button,input,select,textarea{font-family:inh
         </div>
 
         <div class="panel">
-          <div class="panel-header"><span class="panel-title">Provider Health</span><span class="muted">attention first</span></div>
+          <div class="panel-header"><span class="panel-title">Connected providers</span><span class="muted">attention first</span></div>
           <div class="provider-grid" id="provider-card-grid"></div>
         </div>
 
@@ -527,7 +568,7 @@ body{font-size:16px;line-height:1.5}button,input,select,textarea{font-family:inh
           </div>
         </div>
       </section>
-<section class="page" id="page-settings"><div class="page-heading"><h2>Settings</h2><p>Optional features, instances and application access.</p></div><div class="config-form"><label for="theme">Appearance</label><select id="theme" onchange="document.documentElement.dataset.theme=this.value"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
+<section class="page" id="page-settings"><div class="page-heading"><h2>Settings</h2><p>Optional features, instances and application access.</p></div><div class="config-form"><label for="theme">Appearance</label><select id="theme" onchange="setTheme(this.value)"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
         <div class="panel">
           <div class="panel-header"><span class="panel-title">Feature Add-ons</span></div>
           <div class="addon-grid" id="addon-grid"></div>
@@ -711,6 +752,12 @@ let timer = null, refreshPromise = null, currentPage = 'overview', pageGeneratio
 const panelErrors = new Map(), panelUpdated = new Map();
 const PAGES = ['overview', 'providers', 'connect', 'logs', 'settings'];
 const aliases = { keys: 'providers', models: 'providers', instances: 'settings', addons: 'settings', access: 'settings' };
+function setTheme(theme) {
+    if (!['system', 'light', 'dark'].includes(theme)) theme = 'system';
+    document.documentElement.dataset.theme = theme;
+    document.getElementById('theme').value = theme;
+    try { localStorage.setItem('hermes_theme', theme); } catch { }
+}
 function showPage(name) {
     const original = name;
     name = aliases[name] || name;
@@ -719,6 +766,7 @@ function showPage(name) {
     if (currentPage !== name)
         pageGeneration++;
     currentPage = name;
+    document.getElementById('current-page-title').textContent = {overview:'Home',providers:'Providers',connect:'Connect',logs:'Activity',settings:'Settings'}[name];
     document.querySelectorAll('.page').forEach(el => el.classList.toggle('active', el.id === 'page-' + name));
     document.querySelectorAll('.nav-item').forEach(el => { el.classList.toggle('active', el.dataset.page === name); if (el.dataset.page === name)
         el.setAttribute('aria-current', 'page');
@@ -955,6 +1003,8 @@ Optional owner controls: run “Hermes Router: Set Administrator Credential”.`
 window.addEventListener('DOMContentLoaded', async () => {
     try {
         localStorage.removeItem('hermes_dash_key');
+        const theme = localStorage.getItem('hermes_theme');
+        if (theme) setTheme(theme);
     }
     catch { }
     showPage((location.hash || '#overview').slice(1));
@@ -1201,7 +1251,7 @@ function renderProviderCards() {
         return badB - badA || an.localeCompare(bn);
     }).slice(0, 8);
     if (!entries.length) {
-        grid.innerHTML = '<div class="provider-card bad"><div class="provider-name">No providers configured</div><div class="provider-model">Add an API key below.</div></div>';
+        grid.innerHTML = '<div class="provider-empty"><span class="empty-symbol" aria-hidden="true">+</span><div class="provider-name">Your first connection starts here</div><p>Add a provider above to see its models and health.</p></div>';
         return;
     }
     grid.innerHTML = entries.map(([name, p]) => {
@@ -1736,7 +1786,7 @@ function selectedProviderModels() {
 }
 function renderProviderModelChoices(models, selected) {
     document.getElementById('cfg-provider-models').innerHTML = [...new Set([...selected, ...models])].map(model =>
-        `<label style="display:flex;gap:8px;align-items:center;overflow-wrap:anywhere"><input type="checkbox" style="width:auto" value="${attr(model)}" ${selected.includes(model) ? 'checked' : ''}>${esc(model)}</label>`).join('');
+        `<label class="model-choice"><input type="checkbox" value="${attr(model)}" ${selected.includes(model) ? 'checked' : ''}><span>${esc(model)}</span></label>`).join('');
 }
 function onKeyProviderChange() {
     providerSelectionGeneration++;
@@ -1899,6 +1949,8 @@ async function doRestart() {
         const d = await r.json();
         if (!r.ok || d.ok === false)
             throw new Error(apiError(d) || d.message || 'Restart is unavailable on this installation.');
+        panelErrors.delete('Restart');
+        renderPanelErrors();
         restartNeeded = false;
         dismissBanner();
         setStep('step-restart', true, 'restart requested');

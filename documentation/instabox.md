@@ -43,7 +43,8 @@ docker compose exec -T hermes python -c "from pathlib import Path; print('\n'.jo
 ```
 
 Use the value of `ADMIN_API_KEY` to sign in. In **Providers**, add a provider key,
-choose its models, and save. Apply provider changes from the VM terminal:
+choose its models, and save. Click **Restart Now** in the dashboard to apply the changes.
+Browser sessions end on restart; sign in again after a few seconds. For a terminal fallback:
 
 ```bash
 cd /data/home/hermes-router
@@ -52,7 +53,10 @@ docker compose restart hermes
 
 For coding tools, use the value of `PROXY_API_KEYS`, the published URL followed by
 `/v1`, and model `hermes-router`. Keep the administrator key for dashboard management.
-The standard container requires the terminal restart above after provider changes.
+The supplied Compose file enables dashboard restarts with `HR_CONTAINER_RESTART=1`
+and `restart: unless-stopped`. Keep both settings together. The router only requests
+its own container restart when it is the container entrypoint (PID 1); it does not
+need access to the Docker socket. In-flight requests can be interrupted by a restart.
 
 ## Ports and HTTPS
 
@@ -92,7 +96,8 @@ docker compose restart gateway
 ```
 
 Restarting the gateway after recreating Hermes refreshes its internal Docker address.
-The supplied Compose file pins both images to the digests tested on 2026-11-03.
+The supplied Compose file pins the router to the UI refresh released on 2026-11-04
+and the tested Nginx image. Your provider settings remain in the same data directory.
 
 ## Free-plan limits
 
@@ -104,7 +109,9 @@ in InstaBox before connecting. See [published-port behavior](https://instabox.sh
 
 ## Verification performed
 
-On 2026-11-03, the deployed configuration passed public HTTPS health/dashboard checks,
-real Chromium sign-in and reload, application-key access, administrator/application
-separation, secure session cookies, cross-origin rejection, and CSRF rejection.
-No upstream AI response was tested because no provider keys were configured.
+The deployment passed public HTTPS health/dashboard checks, Chromium sign-in and
+reload, application-key access, administrator/application separation, secure session
+cookies, cross-origin rejection, and CSRF rejection. On 2026-11-04, the refreshed UI
+and actual dashboard restart also passed browser verification. A live request to the
+configured Anthropic model returned HTTP 200 after restart. Other providers require
+their own credentials and were not tested live.

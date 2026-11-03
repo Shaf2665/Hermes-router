@@ -28,17 +28,17 @@ The images use Linux containers. Docker Desktop is [not supported on Windows Ser
 
 For an InstaBox VM, follow the [InstaBox hosting guide](/instabox/) for a public HTTPS dashboard and persistent storage.
 
-## Published packages (2026-11-03)
+## Published packages (2026-11-04)
 
-Docker Hub provides `shafiq735/hermes-router:providers-20261103` and `:providers-20261103-cli`, for Linux AMD64 and ARM64. The `latest` and `cli` tags track this release. Use a dated tag for reproducible installs.
+Docker Hub provides `shafiq735/hermes-router:ui-20261104` and `:ui-20261104-cli`, for Linux AMD64 and ARM64. The `latest` and `cli` tags track this release. Use a dated tag for reproducible installs.
 
 For a fresh install without building source, run this single command in PowerShell or Bash:
 
 ```bash
-docker run -d --name hermes-router --restart unless-stopped -p 127.0.0.1:8319:8319 -v hermes-data:/app/data shafiq735/hermes-router:providers-20261103
+docker run -d --name hermes-router --restart unless-stopped -e HR_CONTAINER_RESTART=1 -p 127.0.0.1:8319:8319 -v hermes-data:/app/data shafiq735/hermes-router:ui-20261104
 ```
 
-Use `providers-20261103-cli` instead if you need `docker exec hermes-router hr status`. Open `http://localhost:8319` and retrieve the administrator credential with:
+Use `ui-20261104-cli` instead if you need `docker exec hermes-router hr status`. Open `http://localhost:8319` and retrieve the administrator credential with:
 
 ```bash
 docker exec hermes-router python -c "from pathlib import Path; print(next(x.split('=',1)[1] for x in Path('/app/data/.env').read_text().splitlines() if x.startswith('ADMIN_API_KEY=')))"

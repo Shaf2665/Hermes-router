@@ -1,6 +1,6 @@
 services:
   hermes:
-    image: shafiq735/hermes-router@sha256:86943b8c549de490c24136dbd91806e4097f548525536860bf1156b99bc74cec
+    image: shafiq735/hermes-router@sha256:a0e97b74a9aea3252034ef8c8d0239617a46fbfde9d389ae03ce156fcd032596
     container_name: hermes-router
     restart: unless-stopped
     # InstaBox provides HTTPS; Waitress otherwise strips untrusted proxy headers.
@@ -10,6 +10,7 @@ services:
       PORT: "8319"
       HR_TRUST_PROXY: "0"
       HR_ADMIN_COOKIE_SECURE: "1"
+      HR_CONTAINER_RESTART: "1"
     volumes:
       - ./data:/app/data
     logging:

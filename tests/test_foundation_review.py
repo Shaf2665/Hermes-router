@@ -94,6 +94,7 @@ def test_browser_restart_requires_own_tracked_standalone_process(monkeypatch, tm
     timer = Mock()
     monkeypatch.setattr(router.threading, 'Timer', timer)
     assert not router._trigger_restart()
+
     (tmp_path/'router.pid').write_text('9876')
     assert not router._trigger_restart()
     (tmp_path/'router.pid').write_text('1234')
@@ -101,3 +102,30 @@ def test_browser_restart_requires_own_tracked_standalone_process(monkeypatch, tm
     timer.return_value.start.assert_called_once()
     router.os.environ['INVOCATION_ID'] = 'service-id'
     assert not router._trigger_restart()
+
+
+def test_container_restart_requires_opt_in_and_pid_one(monkeypatch, tmp_path):
+    marker = tmp_path/'container-marker'
+    marker.touch()
+    exit_process = Mock()
+    env = {}
+    process = SimpleNamespace(name='nt', environ=env, getpid=lambda: 1, _exit=exit_process)
+    monkeypatch.setattr(router, 'os', process)
+    monkeypatch.setattr(router, 'Path', lambda p: marker if str(p) == '/.dockerenv' else Path(p))
+    timer = Mock()
+    monkeypatch.setattr(router.threading, 'Timer', timer)
+    assert not router._trigger_restart()
+    env['HR_CONTAINER_RESTART'] = '1'
+    process.getpid = lambda: 22
+    assert not router._trigger_restart()
+    process.getpid = lambda: 1
+    marker.unlink()
+    assert not router._trigger_restart()
+    marker.touch()
+    assert router._trigger_restart()
+    timer.return_value.start.assert_called_once()
+    exit_process.assert_not_called()
+    delay, callback = timer.call_args.args
+    assert delay >= 1
+    callback()
+    exit_process.assert_called_once_with(0)

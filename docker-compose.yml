@@ -6,6 +6,7 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: 8319
+      HR_CONTAINER_RESTART: "1"
     volumes:
       - hermes-data:/app/data
     restart: unless-stopped
