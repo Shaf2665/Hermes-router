@@ -28,18 +28,26 @@ if record.exists():
     saved=json.loads(record.read_text())
     assert saved['admin_hash']==hashlib.sha256(admin.encode()).hexdigest()
     app=saved['app']
+    features=requests.get(base+'/v1/status',headers={'Authorization':'Bearer '+admin}).json()['features']['addons']
+    state={a['name']:a['enabled'] for a in features}
+    assert state['fast_routing'] and state['persistent_cache'] and not state['request_log']
 else:
     r=requests.post(base+'/v1/config/proxy-keys',headers={'Authorization':'Bearer '+admin},json={'name':'release-check'})
     assert r.status_code==200,r.status_code
     app=r.json()['key']
     r=requests.post(base+'/v1/chat/completions',headers={'Authorization':'Bearer '+app},json={'messages':[{'role':'user','content':'hi'}],'max_tokens':8})
     assert r.status_code==503,r.status_code
+    started=Path('/proc/1/stat').read_text().split()[21]
+    for feature,enabled in [('fast_routing',True),('persistent_cache',True),('request_log',False)]:
+        changed=requests.post(base+'/v1/config/features/'+feature,headers={'Authorization':'Bearer '+admin},json={'enabled':enabled})
+        assert changed.status_code==200 and changed.json()['restart_required'] is False
+    assert Path('/proc/1/stat').read_text().split()[21]==started
     record.write_text(json.dumps({'admin_hash':hashlib.sha256(admin.encode()).hexdigest(),'app':app}))
 headers={'Authorization':'Bearer '+app}
 assert requests.get(base+'/v1/models',headers=headers).status_code==200
 assert requests.get(base+'/v1/status',headers=headers).status_code==401
 assert requests.get(base+'/v1/usage',headers=headers).json()['keys'][0]['req_total']==1
-print('health/dashboard/auth/live key/durable usage OK')
+print('health/dashboard/auth/live settings/persistent settings/durable usage OK')
 '''
 try:
     docker('volume','create',volume)

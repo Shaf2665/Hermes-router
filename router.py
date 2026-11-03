@@ -876,19 +876,20 @@ def _env_write_line(key: str, value: str | None) -> None:
     """Upsert (or, if value is None, delete) a KEY=VALUE line in .env, preserving
     every other line untouched. Mirrors scripts/model.sh's write_env / scripts/
     features.sh's set_env so the CLI and dashboard produce identical files."""
-    lines = ENV_FILE_PATH.read_text().splitlines() if ENV_FILE_PATH.exists() else []
-    found, out = False, []
-    for line in lines:
-        if line.strip().startswith(f"{key}="):
-            found = True
-            if value is not None:
-                out.append(f"{key}={value}")
-            # value is None → delete this line (skip appending it)
-        else:
-            out.append(line)
-    if not found and value is not None:
-        out.append(f"{key}={value}")
-    _atomic_write_text(ENV_FILE_PATH, "\n".join(out) + "\n")
+    with _ACCESS_LOCK:
+        lines = ENV_FILE_PATH.read_text().splitlines() if ENV_FILE_PATH.exists() else []
+        found, out = False, []
+        for line in lines:
+            if line.strip().startswith(f"{key}="):
+                found = True
+                if value is not None:
+                    out.append(f"{key}={value}")
+                # value is None → delete this line (skip appending it)
+            else:
+                out.append(line)
+        if not found and value is not None:
+            out.append(f"{key}={value}")
+        _atomic_write_text(ENV_FILE_PATH, "\n".join(out) + "\n")
 
 
 def _atomic_write_text(path, text):
@@ -1731,7 +1732,7 @@ def _refresh_discovered_models(provider: dict, key: str, pool_ref) -> None:
         return
     free_only = name in _FREE_ONLY_DISCOVERY
     discovered = _filter_excluded(name, _discover_models(provider, key, free_only=free_only))
-    if not discovered:
+    if not discovered or not _provider_model_discovery_enabled(provider):
         return
 
     configured = _provider_models(provider)
@@ -2487,17 +2488,14 @@ class RequestRingBuffer:
         self.maxlen = maxlen
 
     def append(self, entry: dict) -> None:
-        if self._buf is None:
-            return
         with self._lock:
-            self._buf.append(entry)
+            if self._buf is not None:
+                self._buf.append(entry)
 
     def snapshot(self, limit: int = 100, provider: str | None = None,
                  status: str | None = None, endpoint: str | None = None) -> list:
-        if self._buf is None:
-            return []
         with self._lock:
-            items = list(self._buf)
+            items = list(self._buf) if self._buf is not None else []
         if provider:
             items = [e for e in items if e.get("provider") == provider]
         if status:
@@ -2508,17 +2506,14 @@ class RequestRingBuffer:
         return items[:limit]
 
     def clear(self) -> None:
-        if self._buf is None:
-            return
         with self._lock:
-            self._buf.clear()
+            if self._buf is not None:
+                self._buf.clear()
 
     @property
     def size(self) -> int:
-        if self._buf is None:
-            return 0
         with self._lock:
-            return len(self._buf)
+            return len(self._buf) if self._buf is not None else 0
 
     @property
     def enabled(self) -> bool:
@@ -2564,7 +2559,7 @@ class ResponseCache:
         self.misses        = 0
         self.semantic_hits = 0
         self._db = None
-        if persist and ttl > 0:
+        if persist:
             self._init_db(db_path)
 
     def _init_db(self, db_path: str):
@@ -2587,6 +2582,8 @@ class ResponseCache:
                      f"{'y' if len(rows)==1 else 'ies'}")
         except Exception as e:
             log.warning(f"Cache: could not open persistent store {db_path}: {e} — in-memory only")
+            if self._db is not None:
+                self._db.close()
             self._db = None
 
     def _db_upsert(self, key, data, ts, ns, emb):
@@ -4864,7 +4861,7 @@ def _features_snapshot() -> dict:
          "desc": "Short requests prefer low-latency providers on ties."},
         {"name": "model_discovery", "title": "Model discovery", "kind": "flag",
          "enabled": AUTO_DISCOVER_MODELS, "env": "AUTO_DISCOVER_MODELS", "on": "1", "off": "0",
-         "desc": "Refresh configured provider model lists from /models at startup, bounded by AUTO_DISCOVER_MODEL_LIMIT."},
+         "desc": "Refresh available models now and at startup. Provider-specific discovery preferences still apply."},
         {"name": "metrics_auth", "title": "Metrics auth", "kind": "builtin",
          "enabled": True, "desc": "Administrator authentication is always required on /metrics."},
         {"name": "cost_currency", "title": "Cost currency conversion", "kind": "flag",
@@ -4892,7 +4889,7 @@ def _features_snapshot() -> dict:
 # Every write is a plain, auditable file edit (.env or auth.json), identical to
 # what `hr auth add` / `hr model set` / `hr features enable` already produce —
 # nothing here is a new mechanism, just an HTTP front-end for the same files.
-# Changes take effect after a restart; the dashboard prompts for one via
+# Provider/model changes require a restart; feature toggles apply live. Restart uses
 # POST /v1/config/restart.
 
 @app.route("/v1/config/providers")
@@ -5034,7 +5031,20 @@ def config_model(provider):
     return jsonify({"provider": provider, "model": model, "restart_required": True})
 
 
+def _refresh_live_models():
+    for provider in PROVIDERS:
+        if not AUTO_DISCOVER_MODELS:
+            break
+        key = pool.first_key(provider["name"])
+        if key:
+            try:
+                _refresh_discovered_models(provider, key, pool)
+            except Exception:
+                log.exception("Live model discovery failed for %s", provider["name"])
+
+
 @app.route("/v1/config/features/<name>", methods=["POST"])
+@_locked_access
 def config_feature(name):
     """Toggle a flag-kind add-on on/off. Body: {"enabled": true|false}. Config-kind
     add-ons (per-key budgets, local model) aren't simple flag writes — use their
@@ -5049,10 +5059,56 @@ def config_feature(name):
         return jsonify({"error": {"message": f"'{name}' isn't a simple toggle — manage it with: {addon.get('manage', '(see docs)')}",
                                   "type": "invalid_request_error"}}), 400
 
-    body = request.get_json(force=True, silent=True) or {}
-    enabled = bool(body.get("enabled"))
-    _env_write_line(addon["env"], addon["on"] if enabled else addon["off"])
-    return jsonify({"name": name, "enabled": enabled, "restart_required": True})
+    global CACHE_TTL, CACHE_PERSIST, SEMANTIC_CACHE, FAST_ROUTE_TOKENS
+    global AUTO_DISCOVER_MODELS, COST_FX_RATE, REQUEST_LOG_SIZE
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or type(body.get("enabled")) is not bool:
+        return jsonify({"error": {"message": "enabled must be true or false"}}), 400
+    enabled = body["enabled"]
+    value = addon["on"] if enabled else addon["off"]
+    prepared = None
+    try:
+        # Prepare disk access before saving; failed setup must not appear enabled.
+        if name == "persistent_cache" and enabled and not cache.persistent:
+            prepared = ResponseCache(ttl=max(cache.ttl, 300), max_size=cache.max_size,
+                                     persist=True, db_path=CACHE_DB_PATH)
+            if not prepared.persistent:
+                raise OSError("Cache storage is not writable")
+        _env_write_line(addon["env"], value)
+    except OSError:
+        if prepared and prepared._db:
+            prepared._db.close()
+        return jsonify({"error": {"message": "Could not save this setting. Check configuration and cache storage permissions."}}), 500
+    if name == "response_cache":
+        with cache.lock:
+            cache.ttl = CACHE_TTL = int(value)
+    elif name == "persistent_cache":
+        with cache.lock:
+            if prepared:
+                cache._db = prepared._db
+                prepared._store.update(cache._store)
+                cache._store = OrderedDict(list(prepared._store.items())[-cache.max_size:]) if cache.max_size else OrderedDict()
+                for key, (data, ts, ns, emb) in cache._store.items():
+                    cache._db_upsert(key, data, ts, ns, emb)
+            elif not enabled and cache._db:
+                cache._db.close()
+                cache._db = None
+            CACHE_PERSIST = enabled
+    elif name == "semantic_cache":
+        SEMANTIC_CACHE = enabled
+    elif name == "fast_routing":
+        FAST_ROUTE_TOKENS = int(value)
+    elif name == "model_discovery":
+        AUTO_DISCOVER_MODELS = enabled
+        if enabled:
+            threading.Thread(target=_refresh_live_models, daemon=True).start()
+    elif name == "cost_currency":
+        COST_FX_RATE = float(value)
+    elif name == "request_log":
+        with request_log._lock:
+            REQUEST_LOG_SIZE = request_log.maxlen = int(value)
+            request_log._buf = deque(request_log._buf or [], maxlen=REQUEST_LOG_SIZE) if enabled else None
+    return jsonify({"name": name, "enabled": enabled, "restart_required": False})
 
 
 @app.route("/v1/config/rotation", methods=["POST"])

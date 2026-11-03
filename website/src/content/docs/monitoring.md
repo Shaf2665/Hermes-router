@@ -38,9 +38,16 @@ The following capabilities remain available within those pages:
 - **Request Log** — the last requests (endpoint, provider, model, latency, complexity score,
   cascade count, tokens, status), filterable by status and endpoint
 
-Every write (add a key, change a model, toggle an add-on, mint/revoke an access key) shows a
-"Restart Required" banner — click it to restart the router in place; the page reconnects
-automatically once it's back.
+Settings switches apply immediately and are saved for future starts. Response and semantic
+caching, disk persistence, fast routing, model discovery, currency conversion and request
+history do not restart the process or sign you out. Model discovery runs in the background;
+provider-specific overrides still apply. Disabling request history clears its in-memory
+entries; disabling disk caching stops writes but leaves previously saved data on disk.
+
+Application key creation, revocation and budgets also apply immediately. Adding provider
+credentials, changing configured models or key rotation still shows a restart banner.
+Direct `.env` edits and the file-based `hr features` CLI require a restart.
+The Settings page reports save failures without changing the switch state.
 
 It's pure HTML/JS (no framework, no external CDN) and reads/writes only the router's own
 `/v1/*` endpoints — so it adds essentially no memory or CPU to the router itself.

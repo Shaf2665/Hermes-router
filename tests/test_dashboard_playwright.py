@@ -110,6 +110,38 @@ def login(page, base_url):
     expect(page.locator("#plain-title")).not_to_contain_text("Checking")
 
 
+def test_live_settings_and_connect_layout(router_server, page):
+    login(page, router_server)
+    expect(page.locator('.sidebar-brand img')).to_have_attribute('alt', 'Hermes Router logo')
+    page.get_by_role('button', name='Settings', exact=True).click()
+    toggle = page.get_by_role('switch', name='Fast routing', exact=True)
+    expect(toggle).to_have_attribute('aria-checked', 'false')
+    toggle.click()
+    expect(toggle).to_have_attribute('aria-checked', 'true')
+    expect(page.locator('#settings-save-msg')).to_contain_text('applied')
+    expect(page.locator('#restart-banner')).not_to_be_visible()
+    page.reload()
+    expect(toggle).to_have_attribute('aria-checked', 'true')
+    toggle.click()
+    expect(toggle).to_have_attribute('aria-checked', 'false')
+    page.route('**/v1/config/features/fast_routing', lambda route: route.fulfill(status=500, json={'error': {'message': 'Storage unavailable'}}))
+    toggle.click()
+    expect(page.locator('#settings-save-msg')).to_contain_text('Storage unavailable')
+    expect(toggle).to_have_attribute('aria-checked', 'false')
+    page.locator('#theme').select_option('dark')
+    for width in (1012, 918, 390):
+        page.set_viewport_size({'width': width, 'height': 800})
+        page.get_by_role('button', name='Connect', exact=True).click()
+        field = page.locator('#connect-name').bounding_box()
+        button = page.locator('#connect-create').bounding_box()
+        assert button['x'] >= field['x'] + field['width'] + 8 or button['y'] >= field['y'] + field['height'] + 8
+        assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+        page.screenshot(path=str(ROOT / '.pytest_cache' / f'live-connect-{width}.png'), full_page=True)
+        page.get_by_role('button', name='Settings', exact=True).click()
+        assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+        page.screenshot(path=str(ROOT / '.pytest_cache' / f'live-settings-{width}.png'), full_page=True)
+
+
 def test_provider_presets_key_link_live_models_and_multiple_selection(router_server, page):
     login(page, router_server)
     page.locator('[data-page="providers"]').click()

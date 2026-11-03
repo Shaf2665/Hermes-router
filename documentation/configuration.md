@@ -16,6 +16,10 @@ hermes-router splits its behavior into two groups:
   environment variable (or some `auth.json` config), and unset = off (except the response
   cache, on by default).
 
+Dashboard **Settings** switches apply immediately and save their values for future starts.
+The file-based CLI below still needs a restart. Model discovery refreshes in the background
+when enabled; other switches affect subsequent requests without interrupting active streams.
+
 ### `hr features` — see and toggle add-ons
 
 ```bash
