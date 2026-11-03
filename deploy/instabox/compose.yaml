@@ -1,0 +1,34 @@
+services:
+  hermes:
+    image: shafiq735/hermes-router@sha256:86943b8c549de490c24136dbd91806e4097f548525536860bf1156b99bc74cec
+    container_name: hermes-router
+    restart: unless-stopped
+    # InstaBox provides HTTPS; Waitress otherwise strips untrusted proxy headers.
+    command: [waitress-serve, --host=0.0.0.0, --port=8319, --threads=16, --url-scheme=https, "router:app"]
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8319"
+      HR_TRUST_PROXY: "0"
+      HR_ADMIN_COOKIE_SECURE: "1"
+    volumes:
+      - ./data:/app/data
+    logging:
+      options:
+        max-size: 10m
+        max-file: "3"
+  gateway:
+    image: nginx@sha256:0e52bd054126cdc040b1276c0af347aeb02a41b9cfe305d6094767ac30e97949
+    restart: unless-stopped
+    environment:
+      HERMES_PUBLIC_HOST: ${HERMES_PUBLIC_HOST:?Set the hostname from InstaBox Ports}
+    ports:
+      - "8319:8080"
+    volumes:
+      - ./default.conf.template:/etc/nginx/templates/default.conf.template:ro
+    depends_on:
+      hermes:
+        condition: service_healthy
+    logging:
+      options:
+        max-size: 10m
+        max-file: "3"

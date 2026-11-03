@@ -26,6 +26,8 @@ Hermes runs the API and dashboard together. The Vercel website is documentation,
 
 The images use Linux containers. Docker Desktop is [not supported on Windows Server](https://docs.docker.com/desktop/troubleshoot-and-support/faqs/windowsfaqs/); use the native instructions there, or a Linux VM running Docker. For Windows 10/11 with Docker already installed, start Desktop and select Linux containers. Check [Docker's current Windows requirements](https://docs.docker.com/desktop/setup/install/windows-install/) for supported Windows builds and WSL versions.
 
+For an InstaBox VM, follow the [InstaBox hosting guide](/instabox/) for a public HTTPS dashboard and persistent storage.
+
 ## Published packages (2026-11-03)
 
 Docker Hub provides `shafiq735/hermes-router:providers-20261103` and `:providers-20261103-cli`, for Linux AMD64 and ARM64. The `latest` and `cli` tags track this release. Use a dated tag for reproducible installs.
