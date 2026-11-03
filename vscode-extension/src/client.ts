@@ -96,7 +96,7 @@ export class RouterClient {
       Authorization: `Bearer ${this.apiKey}`,
     });
     if (code === 401 || code === 403) {
-      throw new Error("unauthorized — check hermesRouter.apiKey (must match PROXY_API_KEYS)");
+      throw new Error("Administrator access denied. Run Hermes Router: Set Administrator Credential using the dashboard administrator key. Keep your application key in hermesRouter.apiKey for chat.");
     }
     if (code !== 200) {
       throw new Error(`status HTTP ${code}`);
@@ -109,7 +109,7 @@ export class RouterClient {
       Authorization: `Bearer ${this.apiKey}`,
     });
     if (code === 401 || code === 403) {
-      throw new Error("unauthorized — check hermesRouter.apiKey");
+      throw new Error("Administrator access denied. Run Hermes Router: Set Administrator Credential before restarting.");
     }
     if (code < 200 || code >= 300) {
       throw new Error(`restart HTTP ${code}: ${body.slice(0, 200)}`);

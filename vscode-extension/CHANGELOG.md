@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.7
+
+- Fix the dashboard remaining on “Loading…” because a generated button broke the webview's JavaScript.
+- Use delegated button actions and restrict the commands accepted from the dashboard.
+- Correct administrator-access error messages: keep the application API key for chat and use **Set Administrator Credential** for the owner panel and remote restart.
+- Add regression coverage for local/remote rendering, dashboard actions and missing administrator credentials.
+
 ## 0.9.6
 
 - Store administrator credentials separately in VS Code SecretStorage, scoped to the router URL.

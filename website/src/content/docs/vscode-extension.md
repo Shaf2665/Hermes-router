@@ -6,7 +6,7 @@ head:
     content: Hermes Router VS Code Extension for Copilot
 ---
 
-Package update (2026-11-03): [download the VS Code 0.9.6 VSIX](https://github.com/Shaf2665/Hermes-router/releases/download/vscode-v0.9.6/hermes-router-0.9.6.vsix). Use extension version 0.9.6 or newer for administrator controls. See [Setup](/setup/) for updated Docker images and migration.
+Package update (2026-11-04): [download the VS Code 0.9.7 VSIX](https://github.com/Shaf2665/Hermes-router/releases/download/vscode-v0.9.7/hermes-router-0.9.7.vsix). Use extension version 0.9.7 or newer for administrator controls. See [Setup](/setup/) for updated Docker images and migration.
 
 
 The Hermes Router extension connects Copilot Chat to your provider pool and offers optional owner controls: provider status, remote restart and the browser dashboard. Hermes routes model requests and tool calls; Copilot owns terminal commands, file edits and MCP tools.
@@ -69,12 +69,13 @@ Provider credentials, model overrides, key rotation, optional features, applicat
 
 With a router in Docker, set `hermesRouter.dockerContainer` to its container name. **Restart Router** then runs `docker restart <container>` on the host. Doctor and Codex import require the `:cli` image and the host Docker CLI. Updating an image requires pulling/rebuilding and recreating the container; the extension reports this instead of running an in-container update.
 
-The browser/remote restart endpoint only reports success on an installation with a supported restart helper. Native Windows and a minimal Docker image can return **409** with a remedy; a container restart policy does not make a missing helper supported. Use `docker restart <container>` on the host, or stop the native Windows router and rerun `start.ps1` in PowerShell. See [Setup](/setup/) for the preview's persistent Compose configuration and native Windows installation.
+The browser/remote restart endpoint only reports success on a supported installation. The current supplied Docker Compose deployments enable dashboard restart using `HR_CONTAINER_RESTART=1` with `restart: unless-stopped`. Older or custom Docker deployments without this opt-in, and native Windows, can return **409** with a remedy. Use `docker restart <container>` on the host, or stop the native Windows router and rerun `start.ps1` in PowerShell. See [Setup](/setup/) for the preview's persistent Compose configuration and native Windows installation.
 
 Native Windows supports browser configuration and chat. The extension's local `hr` controls still require Linux/macOS/WSL, or Docker controls through the host Docker CLI. A remote owner credential does not grant SSH or host command access.
 
 ## Troubleshooting
 
+- **Dashboard stuck on “Loading…”:** install version **0.9.7** or newer, then run **Developer: Reload Window**. Earlier builds could generate invalid dashboard JavaScript. Keep your application key in `hermesRouter.apiKey`; use **Hermes Router: Set Administrator Credential** with the separate administrator key to enable owner status.
 - **Chat returns 401:** check `hermesRouter.apiKey` is a live application key for this router. A revoked key fails new requests immediately.
 - **Owner panel returns 401/403 or asks for a credential:** run **Set Administrator Credential** and use `ADMIN_API_KEY`. Changing the application key will not grant owner access.
 - **Router unreachable:** check `baseUrl`, the running process and `/health`. A live process can still have no usable provider; verify a real request from Connect.

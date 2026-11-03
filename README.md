@@ -110,7 +110,7 @@ system-wide — `install.sh` only symlinks the `hr` command onto your PATH.
 
 ## Setup
 
-Package update (2026-11-03): [download the VS Code 0.9.6 VSIX](https://github.com/Shaf2665/Hermes-router/releases/download/vscode-v0.9.6/hermes-router-0.9.6.vsix). Use extension version 0.9.6 or newer for administrator controls. Docker images and upgrade instructions are in the setup guide.
+Package update (2026-11-04): [download the VS Code 0.9.7 VSIX](https://github.com/Shaf2665/Hermes-router/releases/download/vscode-v0.9.7/hermes-router-0.9.7.vsix). Use extension version 0.9.6 or newer for administrator controls. Docker images and upgrade instructions are in the setup guide.
 
 Dashboard update (2026-11-04): refreshed navigation, provider setup, light/dark appearance, and dashboard restarts for the supplied Docker Compose deployments. Images `ui-20261104` and `ui-20261104-cli` are published for AMD64 and ARM64. See [InstaBox hosting](documentation/instabox.md) and the [validation record](docs/research/2026-11-04-ui-refresh.md).
 

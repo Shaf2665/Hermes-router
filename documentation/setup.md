@@ -40,7 +40,7 @@ Use `ui-20261104-cli` instead if you need `docker exec hermes-router hr status`.
 docker exec hermes-router python -c "from pathlib import Path; print(next(x.split('=',1)[1] for x in Path('/app/data/.env').read_text().splitlines() if x.startswith('ADMIN_API_KEY=')))"
 ```
 
-The matching [VS Code 0.9.6 VSIX](https://github.com/Shaf2665/Hermes-router/releases/download/vscode-v0.9.6/hermes-router-0.9.6.vsix) can be installed using **Extensions: Install from VSIX…**. Use extension version 0.9.6 or newer for the administrator command.
+The matching [VS Code 0.9.7 VSIX](https://github.com/Shaf2665/Hermes-router/releases/download/vscode-v0.9.7/hermes-router-0.9.7.vsix) can be installed using **Extensions: Install from VSIX…**. Use extension version 0.9.6 or newer for the administrator command.
 
 Before upgrading an existing container, back up its configuration and mounted data. Pulling an image does not upgrade a running container: recreate it with the same volume, environment variables, ports and restart policy. Old installs that stored `.env` or `auth.json` only inside `/app` must copy them into the mounted data directory before recreation. Keep application keys for inference; retrieve the separate administrator key for dashboard access. See the backup section below.
 
