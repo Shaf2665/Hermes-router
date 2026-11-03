@@ -257,6 +257,8 @@ docker compose start
 
 The backup contains secrets; keep it private. Before an update, retain the previous source version/image and this backup. Apply the new tested source, then run `docker compose up -d --build`; verify `/health`, admin sign-in and a user-triggered message. Roll back by restoring the previous source/image and, if the storage format changed, its matching backup while the router is stopped. Do not overwrite live SQLite files.
 
+For dashboard-managed Docker instances, the launcher uses the named `<container-name>-data` volume mounted at `/data`. New containers keep `.env`, `auth.json`, `usage.db`, `instances.json`, `cache.db` and `router_state.json` there. Containers created with the initial foundation image may instead have `.env`, `usage.db` and `instances.json` in a separate `/app/data` volume. Before removing or recreating one, stop it and privately back up **both** `/data` and `/app/data`; preserve the administrator credential and SQLite ledger when migrating to `/data`. Do not overwrite existing files blindly or copy a live SQLite database. Updating the launcher does not migrate or modify existing containers.
+
 For native installs, stop Hermes and back up `.env`, `auth.json`, `usage.db`, `instances.json`, and optional `cache.db`/`router_state.json` where present. Run the installer again after updating source, then restart. Existing settings are preserved.
 
 Lost admin credential: retrieve `ADMIN_API_KEY` from the local environment file using filesystem/SSH access. To rotate it, replace its value with a new strong random value and restart. If the value is supplied by a service/container environment variable, rotate that source too. Never reset all client keys merely to recover dashboard access.

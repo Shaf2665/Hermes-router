@@ -1257,7 +1257,8 @@ def _parse_instance_env(value) -> tuple[dict, str | None]:
         val = str(v or "").strip()
         if not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", key):
             return {}, f"invalid env var name: {key}"
-        if key in {"HOST", "PORT", "ROUTER_AUTH_FILE", "ROUTER_STATE_FILE", "CACHE_DB_PATH"}:
+        if key in {"HOST", "PORT", "HR_ENV_FILE", "HR_USAGE_DB", "HERMES_INSTANCES_FILE",
+                   "ROUTER_AUTH_FILE", "ROUTER_STATE_FILE", "CACHE_DB_PATH"}:
             return {}, f"{key} is managed by the instance launcher"
         if any(c in val for c in "\n\r\0"):
             return {}, f"{key} must be a single-line value"
@@ -1342,7 +1343,13 @@ def _build_instance_from_body(body: dict, existing: dict | None = None) -> tuple
     if mode == "docker" and not api_key:
         api_key = _generate_proxy_key()
 
-    env, err = _parse_instance_env(body.get("env", existing.get("env", {})))
+    raw_env = body.get("env", existing.get("env", {}))
+    if "env" not in body and isinstance(raw_env, dict):
+        # Older registry entries could override these paths. Normalize inherited
+        # values so an unrelated metadata edit remains possible after upgrading.
+        raw_env = {k: v for k, v in raw_env.items()
+                   if k not in {"HR_ENV_FILE", "HR_USAGE_DB", "HERMES_INSTANCES_FILE"}}
+    env, err = _parse_instance_env(raw_env)
     if err:
         return None, err
     copy_provider_keys, err = _parse_copy_provider_keys(body.get("copy_provider_keys", existing.get("copy_provider_keys", [])))
@@ -1454,6 +1461,11 @@ def _docker_run_instance(entry: dict) -> tuple[bool, str]:
     env.update({
         "HOST": "0.0.0.0",
         "PORT": str(entry.get("container_port") or INSTANCE_CONTAINER_PORT),
+        # Keep all durable state on the named instance volume, rather than the
+        # image's anonymous /app/data volume (which recreation does not reuse).
+        "HR_ENV_FILE": "/data/.env",
+        "HR_USAGE_DB": "/data/usage.db",
+        "HERMES_INSTANCES_FILE": "/data/instances.json",
         "ROUTER_AUTH_FILE": "/data/auth.json",
         "ROUTER_STATE_FILE": "/data/router_state.json",
         "CACHE_DB_PATH": "/data/cache.db",

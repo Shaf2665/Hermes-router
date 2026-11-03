@@ -16,6 +16,51 @@ def finish_background_probes(monkeypatch):
 AUTH = {"Authorization": "Bearer sk-test-admin"}
 
 
+@pytest.mark.parametrize("field", ["HR_ENV_FILE", "HR_USAGE_DB", "HERMES_INSTANCES_FILE"])
+def test_instance_persistence_paths_are_launcher_managed(field):
+    env, error = router._parse_instance_env({field: "/tmp/nonpersistent"})
+    assert env == {}
+    assert error == f"{field} is managed by the instance launcher"
+
+
+def test_legacy_instance_path_overrides_do_not_block_metadata_updates():
+    existing = {"id": "legacy", "name": "old", "mode": "docker", "host_port": 8321,
+                "env": {"HR_ENV_FILE": "/old/.env", "HR_USAGE_DB": "/old/usage.db",
+                        "HERMES_INSTANCES_FILE": "/old/instances.json", "OPENAI_API_KEYS": "test"}}
+    updated, error = router._build_instance_from_body({"name": "renamed"}, existing)
+    assert error is None
+    assert updated["name"] == "renamed"
+    assert updated["env"] == {"OPENAI_API_KEYS": "test"}
+    assert existing["env"]["HR_USAGE_DB"] == "/old/usage.db"
+
+
+@pytest.mark.parametrize("action", ["start", "restart"])
+def test_recreated_instance_keeps_all_state_on_named_volume(monkeypatch, action):
+    entry = {"id": "persistence-fixture", "mode": "docker", "container_name": "fixture",
+             "host_port": 8321, "container_port": 8319, "api_key": "test-app",
+             "image": "hermes-router:latest",
+             "env": {"HR_USAGE_DB": "/old/override", "GEMINI_API_KEYS": "test-upstream"}}
+    monkeypatch.setattr(router, "_docker_state", lambda _: {"available": True, "exists": False})
+    calls = []
+    def command(args, timeout):
+        calls.append(args)
+        return True, "fixture-container", 0
+    monkeypatch.setattr(router, "_docker_cmd", command)
+    assert router._docker_action(entry, action) == (True, "fixture-container")
+    args, = calls
+    assert args[0] == "run"
+    assert args[args.index("-v") + 1] == "fixture-data:/data"
+    env = dict(args[i + 1].split("=", 1) for i, arg in enumerate(args) if arg == "-e")
+    assert {key: env[key] for key in (
+        "HR_ENV_FILE", "HR_USAGE_DB", "HERMES_INSTANCES_FILE", "ROUTER_AUTH_FILE",
+        "ROUTER_STATE_FILE", "CACHE_DB_PATH")} == {
+            "HR_ENV_FILE": "/data/.env", "HR_USAGE_DB": "/data/usage.db",
+            "HERMES_INSTANCES_FILE": "/data/instances.json", "ROUTER_AUTH_FILE": "/data/auth.json",
+            "ROUTER_STATE_FILE": "/data/router_state.json", "CACHE_DB_PATH": "/data/cache.db"}
+    assert env["PROXY_API_KEYS"] == "test-app"
+    assert env["GEMINI_API_KEYS"] == "test-upstream"
+
+
 def test_instances_require_auth_and_register_external(monkeypatch, tmp_path):
     monkeypatch.setattr(router, "INSTANCE_FILE", tmp_path / "instances.json")
     monkeypatch.setattr(
