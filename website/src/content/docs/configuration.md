@@ -2,6 +2,7 @@
 title: "Configuration"
 description: "auth.json, main .env settings and provider patterns, model overrides, key rotation, and advanced controls."
 ---
+# Configuration
 
 All configuration is via environment variables (in `.env`) and the `auth.json` credential
 store. Most settings are optional; the router can serve model requests once at least one
@@ -14,7 +15,7 @@ hermes-router splits its behavior into two groups:
 - **Core features** — always on; they *are* the router. Auth, the credential pool + key
   rotation, failover, the circuit breaker, smart routing, protocol translation
   (OpenAI/Anthropic/Codex), capability probing, token estimation, request guardrails, and
-  usage/estimated-cost tracking. You don't configure these on/off.
+  usage/estimated-cost tracking.
 - **Add-ons** — optional behaviors you turn on when you want them. Each is backed by an
   environment variable (or some `auth.json` config), and unset = off (except the response
   cache, on by default).
@@ -35,15 +36,14 @@ hr restart                            # apply
 | `persistent_cache` | `CACHE_PERSIST` | off | Mirror the cache to SQLite so it survives restarts |
 | `fast_routing` | `FAST_ROUTE_THRESHOLD` | off | Short requests prefer low-latency providers on ties |
 | `model_discovery` | `AUTO_DISCOVER_MODELS` | off | Refresh provider model lists from `/models` at startup |
-| `metrics_auth` | `METRICS_REQUIRE_AUTH` | off | Require the proxy key on `/metrics` |
+| `metrics_auth` | always enabled | on | Administrator authentication on `/metrics`; cannot be disabled |
 | `cost_currency` | `COST_FX_RATE` | off | Show a second currency (e.g. ₹) alongside USD spend |
-| `key_budgets` | `auth.json` / `PROXY_LIMIT_*` | off | Per-key RPM / daily request / token / cost ceilings — manage with `hr limit` |
+| `key_budgets` | `auth.json` / `PROXY_LIMIT_*` | off | Per-key RPM / daily request / token / estimated-cost ceilings — manage with `hr limit` |
 | `local_model` | `LOCAL_BASE_URL` / `LOCAL_MODEL` | off | Route to a model on your own machine — manage with `hr model set local` |
 
 `hr features enable/disable` toggles the simple **flag** add-ons by writing their variable to
 `.env`. The last two are richer config, so `hr features` shows their status and points you to
-the command that manages them (`hr limit`, `hr model`). The live state is also in `/v1/status`
-under `features` and in the VS Code dashboard.
+the command that manages them. The live state is also in `/v1/status` under `features`.
 
 ## Where your keys live
 
@@ -71,12 +71,17 @@ subscription) logins are stored separately under `codex_accounts` (via
 |---|---|---|
 | `PORT` | `8319` | Port to listen on |
 | `HOST` | `0.0.0.0` | Bind address. Set `127.0.0.1` to listen on localhost only (recommended on a shared/VPS host — reach it via localhost or an SSH tunnel). Keep `0.0.0.0` for Docker. |
-| `PROXY_API_KEYS` | *(auto-generated)* | Comma-separated keys your app uses to authenticate — and the key needed to open the web dashboard. If left unset (or on the `.env.example` placeholder), the router generates a real random key on first boot and saves it back to `.env`, logging it once. Add more from the dashboard's **Access Keys** page, or set your own here. |
+| `PROXY_API_KEYS` | *(auto-generated)* | Application inference keys; existing keys remain usable for inference. Dashboard key changes apply immediately and are stored in auth.json. |
+| `ADMIN_API_KEY` | *(auto-generated)* | Separate owner credential for dashboard and global/config APIs. Never give this to an application. |
+| `HR_ENV_FILE` | `.env` | Private environment file, also used for generated credentials. |
+| `HR_USAGE_DB` | `usage.db` | Durable per-key usage/reservation SQLite database; preserve it across upgrades. |
+| `HR_TRUST_PROXY` | `0` | Trust one proxy-provided scheme header only when behind a trusted reverse proxy with no direct public backend access. |
 | `ROUTER_AUTH_FILE` | `./auth.json` | Where keys are stored |
 | `HERMES_INSTANCES_FILE` | `./instances.json` | Where the dashboard's Instances registry is stored. It may contain generated instance proxy keys and copied provider keys, so keep it private and never commit it. |
 | `CACHE_TTL_SECONDS` | `300` | Response cache lifetime (`0` disables). Entries are namespaced per API key, so different `PROXY_API_KEYS` do not share a cached answer |
 | `LOG_LEVEL` | `INFO` | Logging verbosity |
-| `METRICS_REQUIRE_AUTH` | `0` | Require the proxy key on `/metrics` (`1` to enable) |
+| `ROUTER_REQUEST_TIMEOUT_SECONDS` | `180` | Cumulative upstream routing/failover budget; Requests timeouts cannot interrupt every DNS or trickling-read delay |
+| `SEMANTIC_EMBED_TIMEOUT_SECONDS` | `3` | Maximum budget assigned to semantic-cache embedding work |
 | `REASONING_TOKEN_RESERVE` | `4096` | Extra output budget added for reasoning models so hidden chain-of-thought doesn't eat the answer (`0` disables) |
 | `ROTATION_MODE` | `round-robin` | How keys are picked within a provider (set in the dashboard or via `hr mode`) — `round-robin` or `sequential` |
 
@@ -156,7 +161,7 @@ env vars are **global defaults**; set per-key overrides in `auth.json` with `hr 
 | `PROXY_LIMIT_RPM` | `0` | Requests/minute per key (rolling 60s window) |
 | `PROXY_LIMIT_REQ_DAY` | `0` | Requests per UTC day, per key |
 | `PROXY_LIMIT_TOKENS_DAY` | `0` | Tokens per UTC day, per key |
-| `PROXY_LIMIT_COST_DAY` | `0` | Estimated USD cost per UTC day, per key (see [Cost awareness](#cost--spend-awareness)) |
+| `PROXY_LIMIT_COST_DAY` | `0` | Estimated USD cost per UTC day, per key (see Cost awareness below) |
 
 ```bash
 hr limit set sk-team-1 --rpm 60 --req-day 500 --tokens-day 100000 --cost-day 5   # per-key, written to auth.json
@@ -198,7 +203,7 @@ with `MODEL_PRICES_FILE`.
 
 Set either of the first two to enable a `local` provider pointing at a model on your own
 machine. It's keyless (cloud providers remain the fallback). See
-[Providers → Local models](/providers/#local-models-ollama--lm-studio--llamacpp).
+[providers.md → Local models](/providers/).
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -331,7 +336,3 @@ hr restart             # apply the change
 Either way, failover, per-key cooldowns, and the circuit breaker keep working — the mode
 only changes *which ready key is preferred* next. The active mode shows in `hr status` and
 at `/v1/status`.
-
----
-
-**Next:** [Usage](/usage/) — call the router from the OpenAI or Anthropic SDK (tool calling, streaming, embeddings).

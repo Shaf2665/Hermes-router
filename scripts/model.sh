@@ -34,6 +34,7 @@ ok()   { printf '\033[1;32m[model]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[model]\033[0m %s\n' "$*"; }
 
 PROVIDERS_LIST="gemini openrouter sambanova github_models cerebras groq mistral cohere zai naga nvidia huggingface kimi opencode opencode_go openai anthropic codex local"
+PROVIDERS_LIST="$PROVIDERS_LIST $("$PYTHON" "$REPO/provider_catalog.py" names)"
 
 canonical_provider() {
   case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
@@ -47,6 +48,7 @@ canonical_provider() {
     cohere)                echo "cohere" ;;
     zai|glm|z.ai)          echo "zai" ;;
     naga)                  echo "naga" ;;
+    huggingface|hf|hugging_face) echo "huggingface" ;;
     nvidia|nim)            echo "nvidia" ;;
     kimi|moonshot)         echo "kimi" ;;
     opencode|opencode_zen|zen) echo "opencode" ;;
@@ -55,7 +57,7 @@ canonical_provider() {
     anthropic|claude)      echo "anthropic" ;;
     codex|chatgpt)         echo "codex" ;;
     local|ollama)          echo "local" ;;
-    *)                     echo "" ;;
+    *) "$PYTHON" "$REPO/provider_catalog.py" canonical "$1" ;;
   esac
 }
 
@@ -81,6 +83,7 @@ env_var_for() {
     anthropic)     echo "ANTHROPIC_MODEL" ;;
     codex)         echo "CODEX_MODEL" ;;
     local)         echo "LOCAL_MODEL" ;;
+    *) printf '%s_MODEL\n' "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')" ;;
   esac
 }
 
@@ -106,6 +109,7 @@ default_for() {
     anthropic)     echo "claude-haiku-4-5-20251001" ;;
     codex)         echo "gpt-5.5" ;;
     local)         echo "llama3.1" ;;
+    *) "$PYTHON" "$REPO/provider_catalog.py" default "$1" ;;
   esac
 }
 

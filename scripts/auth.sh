@@ -38,6 +38,7 @@ ok()   { printf '\033[1;32m[auth]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[auth]\033[0m %s\n' "$*"; }
 
 PROVIDERS_LIST="gemini openrouter sambanova github_models cerebras groq mistral cohere zai naga nvidia huggingface kimi opencode opencode_go openai anthropic"
+PROVIDERS_LIST="$PROVIDERS_LIST $("$PYTHON" "$REPO/provider_catalog.py" names)"
 
 # Normalize a provider name to its canonical form (accepts a couple of aliases).
 canonical_provider() {
@@ -59,7 +60,7 @@ canonical_provider() {
     opencode_go|opencodego|opencode-go|go) echo "opencode_go" ;;
     openai|gpt)            echo "openai" ;;
     anthropic|claude)      echo "anthropic" ;;
-    *)                     echo "" ;;
+    *) "$PYTHON" "$REPO/provider_catalog.py" canonical "$1" ;;
   esac
 }
 

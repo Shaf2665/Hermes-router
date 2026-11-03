@@ -10,7 +10,7 @@
 # By default installs to ~/.local/share/hermes-router
 # Override with: HERMES_ROUTER_DIR=~/mydir bash <(curl ...)
 #
-set -uo pipefail
+set -euo pipefail
 
 REPO_URL="https://github.com/Shaf2665/Hermes-router.git"
 INSTALL_DIR="${HERMES_ROUTER_DIR:-$HOME/.local/share/hermes-router}"

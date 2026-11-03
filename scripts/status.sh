@@ -10,7 +10,7 @@
 #   hr status            Show the dashboard
 #   hr status --json     Print the raw JSON (for scripts)
 #
-# Reads PORT and the proxy API key from .env (or override with env vars).
+# Reads PORT and the dedicated administrator key from .env (or env vars).
 #
 set -uo pipefail
 
@@ -30,9 +30,9 @@ from_env() {
 }
 
 PORT="${PORT:-$(from_env PORT || echo 8319)}"
-# Proxy key: env override → generated/configured PROXY_API_KEYS in .env.
-KEY="${PROXY_API_KEYS:-$(from_env PROXY_API_KEYS || true)}"
-KEY="${KEY%%,*}"   # first key if comma-separated
+# Status contains global telemetry and requires administrator access.
+KEY="${ADMIN_API_KEY:-$(from_env ADMIN_API_KEY || true)}"
+[ -n "$KEY" ] || { err "ADMIN_API_KEY is missing. Start the upgraded router once, then check $ENV_FILE."; exit 1; }
 
 JSON_ONLY=0
 [ "${1:-}" = "--json" ] && JSON_ONLY=1
@@ -43,7 +43,7 @@ raw="$(curl -fsS -H "Authorization: Bearer ${KEY}" "http://localhost:${PORT}/v1/
 if [ -z "$raw" ]; then
   err "couldn't reach the router on http://localhost:${PORT}"
   err "is it running? start it with:  hr start    (check:  hr status)"
-  err "if it's running on another port, set PORT, or the key with PROXY_API_KEYS."
+  err "if it's running on another port, set PORT, or the key with ADMIN_API_KEY."
   exit 1
 fi
 

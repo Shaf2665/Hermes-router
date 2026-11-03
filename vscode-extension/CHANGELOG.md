@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.6
+
+- Store administrator credentials separately in VS Code SecretStorage, scoped to the router URL.
+- Keep application keys for Copilot inference; use the administrator credential for global status and remote management.
+- Explain unsupported restart operations and link the foundation setup instructions.
+
 ## 0.9.5
 
 - **Accept a `/v1` base URL.** Every SDK example shows `base_url = http://host:8319/v1`, so

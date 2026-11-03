@@ -3,10 +3,14 @@ title: "Deployment"
 description: "Run hermes-router on Windows, macOS, Linux, Docker, or a Hugging Face Space — step by step."
 ---
 
+# Deployment & Platform Support
+
 This guide shows you **exactly how to run hermes-router**, step by step, no prior server
 experience needed. Pick the path that matches your computer and follow it top to bottom.
 
 ---
+
+> Foundation preview: use [Local and server setup](/setup/) for the new installation, persistent Compose configuration and credential migration. Published older images may still use legacy behavior.
 
 ## First, the big picture
 
@@ -184,7 +188,7 @@ You should see a dashboard of providers. That's it.
 
 **Day-to-day commands:** `hr auth add <provider>` (add a key), `hr status` (health),
 `hr restart` (apply changes), `hr update` (upgrade). Full list in the
-[README](/).
+[README](../README.md#commands).
 
 ---
 
@@ -223,10 +227,10 @@ your Docker container. In the extension settings:
 - **`hermesRouter.baseUrl`** → `http://localhost:8319`
 - **`hermesRouter.apiKey`** → the **same value as the container's `PROXY_API_KEYS`**.
 
-> A red **`401 unauthorized — check hermesRouter.apiKey`** in the dashboard means those two
-> values don't match — fix `apiKey` to equal `PROXY_API_KEYS` and click **Refresh**.
+> For global status or remote restart, use the extension's administrator connection command
+> with the separate ADMIN_API_KEY. Chat continues to use hermesRouter.apiKey.
 
-**Want the Add key / Restart / Model buttons to work too?** The plain image has no `hr` inside it,
+**Want local Docker restart/diagnostic controls?** The plain image has no `hr` inside it,
 so use the **`:cli`** image variant with a volume, and tell the extension the container name:
 
 ```powershell
@@ -235,7 +239,7 @@ docker run -d --name hermes-router -p 8319:8319 -v hermes-data:/app/data -e PROX
 
 Then set **`hermesRouter.dockerContainer`** to `hermes-router`. Now the buttons run via
 `docker exec`/`docker restart` against the container, and the `/app/data` volume keeps your keys
-and settings across restarts. Full details: [VS Code Extension → Docker](/vscode-extension/#using-the-router-in-docker).
+and settings across restarts. Full details: [vscode-extension.md](/vscode-extension/).
 
 (Sticking with the plain image? Add providers by re-running with another `-e <PROVIDER>_API_KEYS=…`
 and "restart" with `docker restart hermes-router`.)
@@ -463,7 +467,7 @@ Expected: a JSON reply with the model's answer inside `choices[0].message.conten
 
 **4. Open the dashboard.** Browse to **`http://localhost:8319/`** for the live monitoring
 dashboard — provider health, request log, cache stats, per-key usage, and the **Instances** tab.
-It asks for your proxy key once and remembers it in the browser. With Docker the mapped port
+Sign in with the separate ADMIN_API_KEY; the browser keeps an expiring HttpOnly session. With Docker the mapped port
 (`-p 8319:8319`) already exposes it to your host. Running on a remote box bound to
 `HOST=127.0.0.1`? Tunnel it: `ssh -L 8319:127.0.0.1:8319 user@server`, then open
 `http://localhost:8319/` locally. See [monitoring.md](/monitoring/) for the full dashboard tour.
@@ -556,7 +560,3 @@ drop in `~/Library/LaunchAgents` and `launchctl load -w`.
 **Hugging Face Space:** free CPU hardware sleeps after inactivity; a later visit wakes it.
 Paid hardware normally stays running unless you configure sleep. This is platform lifecycle
 behavior, not a router restart guarantee.
-
----
-
-**Next:** [Providers](/providers/) — add free API keys so the router has providers to route across.

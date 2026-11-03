@@ -2,8 +2,12 @@ services:
   hermes-router:
     build: .
     ports:
-      - "${PORT:-8319}:${PORT:-8319}"
-    env_file: .env
+      - "127.0.0.1:${PORT:-8319}:8319"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8319
+    volumes:
+      - hermes-data:/app/data
     restart: unless-stopped
     healthcheck:
       # python:3.12-slim ships without curl/wget — probe with the stdlib instead
@@ -11,3 +15,6 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+
+volumes:
+  hermes-data:

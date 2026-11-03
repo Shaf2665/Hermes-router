@@ -1,0 +1,15 @@
+{
+  "runs": [
+    {
+      "date": "2026-11-02T02:51:16.183699+00:00",
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "files": 82,
+      "usage_status": "unavailable; zeros are schema placeholders",
+      "monetary_cost": null
+    }
+  ],
+  "total_input_tokens": 0,
+  "total_output_tokens": 0,
+  "usage_status": "unavailable; totals are not measured semantic token usage"
+}

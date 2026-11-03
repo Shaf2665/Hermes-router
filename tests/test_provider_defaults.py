@@ -26,5 +26,7 @@ def test_cli_defaults_match_router_defaults():
     script = (ROOT / "scripts" / "model.sh").read_text()
 
     for provider, model in router.PROVIDER_MODEL_DEFAULT.items():
+        if provider in router.ADDITIONAL_DEFAULTS:
+            continue
         assert f'{provider})' in script
         assert f'echo "{model}"' in script

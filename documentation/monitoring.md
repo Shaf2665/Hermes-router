@@ -3,7 +3,7 @@
 ## Web dashboard
 
 The router serves a built-in **browser dashboard** — no install, no extra service. It ships
-inside `router.py`, so it's available the moment the router is running. Just open the router
+as `dashboard.html`, served by `router.py`, so it's available the moment the router is running. Just open the router
 in a browser:
 
 ```
@@ -11,12 +11,13 @@ http://localhost:8319/          # redirects to the dashboard
 http://localhost:8319/dashboard
 ```
 
-On first load it asks for your proxy API key (one of `PROXY_API_KEYS` — see
-[below](#proxy-api-keys--the-dashboard-key) if you don't have one yet) and remembers it in the
-browser's local storage. It's a full control panel, not just a read-only view — a left sidebar
-splits it into pages, refreshed every 5 seconds:
+Sign in using `ADMIN_API_KEY` from the router's private environment file. The browser uses
+an expiring HttpOnly session; it does not retain the administrator key in local storage.
+Home, Providers, Connect, Activity and Settings organize the existing controls. Polling is
+limited to visible data and pauses when the tab is hidden; failed panels retain their own error state.
+The following capabilities remain available within those pages:
 
-- **Overview** — a plain-language status card, the endpoint/model to point your app at, a
+- **Home** — a plain-language status card, the endpoint/model to point your app at, a
   setup checklist, and summary stats (requests, tokens, spend, cache hit-rate, error rate)
 - **Providers** — health cards (worst-first) plus a detailed table (rating, latency, keys,
   breaker state, cost)
@@ -26,7 +27,7 @@ splits it into pages, refreshed every 5 seconds:
   per-key request counts and daily budget usage
 - **Access Keys** — mint new `PROXY_API_KEYS` for teammates/other apps, with optional rate/
   budget limits, and revoke them — see
-  [below](#proxy-api-keys--the-dashboard-key)
+  [below](#application-keys-and-administrator-access)
 - **Models** — override a provider's model(s), and a capability table (rating, tool support,
   reasoning) for every configured model
 - **Add-ons** — toggle optional features on/off, plus live cache stats
@@ -51,7 +52,7 @@ icon in the panel header) that opens this page in your browser.
 
 ## Instances: run and monitor more than one router
 
-The dashboard's **Instances** page turns one Hermes Router into a small control plane for other
+The dashboard's **Settings → Instances** section turns one Hermes Router into a small control plane for other
 Hermes Router processes. This is useful when you want separate routers for agents, teams,
 experiments, or isolated provider-key pools. Each instance has its own base URL and proxy key, so
 an agent only needs the usual OpenAI-compatible settings:
@@ -89,7 +90,7 @@ file path and Docker defaults.
 The same feature is available over HTTP for scripts or orchestrators:
 
 ```bash
-# Set this to one of your PROXY_API_KEYS values.
+# Set this to your ADMIN_API_KEY for global monitoring.
 export HERMES_ROUTER_KEY='replace-with-your-router-key'
 
 # list instances (secrets are masked)
@@ -108,25 +109,18 @@ curl -X POST http://localhost:8319/v1/instances \
   -d '{"name":"agent-b","mode":"docker","host_port":8321,"copy_provider_keys":["gemini","openai"],"start":true}'
 ```
 
-## Proxy API keys & the dashboard key
+## Application keys and administrator access
 
-`PROXY_API_KEYS` is the credential your app uses to call the router **and** the key that unlocks
-the web dashboard — there's only one tier, no separate "admin" vs. "chat" key. If you never set
-one, the router generates a real random key on first boot and saves it to `.env`, logging it once
-so you can copy it (this also replaces the placeholder value `.env.example` ships with, so
-copying that file verbatim doesn't leave every install on the same public default). Once you have
-one real key, it's left alone — nothing regenerates it out from under you.
+`PROXY_API_KEYS` authenticates inference. `ADMIN_API_KEY` unlocks the dashboard and
+configuration/global monitoring APIs. Both are generated if absent and saved to the private
+environment file without printing full credentials in logs. See [setup.md](setup.md) for retrieval
+and migration. An old application key no longer grants administration privileges.
 
-**Adding more keys** — for a teammate, a CI pipeline, or another app — is done from the
-dashboard's **Access Keys** page: give it an optional name and optional limits (requests/min,
-requests/day, tokens/day, cost/day — blank means unlimited), and it generates a new key. **The
-full key is shown exactly once**, in a copy box — after that, only its last 6 characters are ever
-displayed again, matching every other key in this project. A key needs a restart (the dashboard
-prompts for one) before it can actually authenticate.
-
-Existing access keys can have their name/limits edited in place, or be revoked — revoking removes
-it from `PROXY_API_KEYS` so it can no longer authenticate. You can't revoke the last remaining
-key; that would lock out the dashboard itself.
+Create named application keys from Connect or Settings. The full key is shown once.
+Creation, revocation and policy updates take effect immediately for new requests; an admitted
+stream may finish. Access metadata is persisted in `auth.json`. Administrator access remains
+separate even if there are no application keys. Limits and reservations survive restart in
+`usage.db`; provider-reported totals and conservative estimates are distinguishable.
 
 ## Terminal dashboard (`hr status`)
 
@@ -142,11 +136,11 @@ hr status --json   # raw JSON for scripts
 
 A Prometheus-compatible endpoint is exposed at `/metrics`. It contains operational metrics,
 provider names, and the last six characters of proxy keys, but no request content or full keys.
-It is **unauthenticated by default**, like `/health`; set `METRICS_REQUIRE_AUTH=1` when those
-identifiers should not be public.
+It requires the **administrator key**. The old `METRICS_REQUIRE_AUTH` toggle is no longer
+used: global telemetry cannot be made public through that flag.
 
 ```bash
-curl http://localhost:8319/metrics
+curl -H "Authorization: Bearer $ADMIN_API_KEY" http://localhost:8319/metrics
 ```
 
 Point Prometheus/Grafana at it to track per-provider traffic and the cache over time.
@@ -193,11 +187,11 @@ scrape_configs:
     metrics_path: /metrics
 ```
 
-If you've set `METRICS_REQUIRE_AUTH=1`, add your proxy key as a bearer token:
+Add administrator credentials to the scrape job. Prefer a private file readable by Prometheus:
 
 ```yaml
     authorization:
-      credentials: YOUR_ROUTER_KEY
+      credentials_file: /etc/prometheus/hermes-admin-key
 ```
 
 **2. Alert on it** — an example rules file covering the failure modes that actually matter
@@ -258,7 +252,7 @@ to a provider, once its daily spend crosses the limit.
 
 ## Usage analytics (`/v1/usage`)
 
-`GET /v1/usage` (proxy key required) returns a JSON summary for dashboards and billing:
+`GET /v1/usage` returns only the caller's usage for an application key, or the global summary for administrator authentication:
 
 - **per provider** — requests, errors, tokens served, and estimated `cost` (`{"usd": …}`, plus a
   converted currency when `COST_FX_RATE` is set)
@@ -277,7 +271,7 @@ curl -H "Authorization: Bearer $HERMES_ROUTER_KEY" http://localhost:8319/v1/usag
 
 ## JSON status (`/v1/status`)
 
-`GET /v1/status` (proxy key required) returns the full picture as JSON: per-provider key
+`GET /v1/status` (administrator authentication required) returns the full picture as JSON: per-provider key
 cooldown state, rating, model, latency, `supports_tools`, `reasoning`, tokens served,
 circuit-breaker status, plus cache (incl. semantic + a `persistent` flag), routing, and per-key
 limit/usage config. This is what `hr status` renders.
@@ -294,7 +288,7 @@ usage; `hr status` shows both in the footer. See [configuration.md](configuratio
 
 ## Request log (`/v1/logs`)
 
-`GET /v1/logs` (proxy key required) returns the most recent requests from an **in-memory ring
+`GET /v1/logs` (administrator authentication required) returns the most recent requests from an **in-memory ring
 buffer** — the data source behind the web dashboard's live log. The log never writes to disk: the
 last `REQUEST_LOG_SIZE` entries (default **500**) are kept in RAM and the oldest fall off as new
 ones arrive (~250 KB at the default size). Set `REQUEST_LOG_SIZE=0` to disable it entirely.

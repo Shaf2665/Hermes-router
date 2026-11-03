@@ -21,6 +21,7 @@ export default defineConfig({
 					items: [
 						{ label: 'Introduction', slug: 'index' },
 						{ label: 'Getting Started', slug: 'getting-started' },
+						{ label: 'Local and Server Setup (Preview)', slug: 'setup' },
 						{ label: 'Core Concepts', slug: 'concepts' },
 						{ label: 'Routing Features', slug: 'routing' },
 					],

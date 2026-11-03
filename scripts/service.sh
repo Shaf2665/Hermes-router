@@ -20,13 +20,25 @@
 # The unit name is HERMES_ROUTER_SERVICE (default: hermes-router) — the same name
 # `hr restart` looks for.
 #
-set -uo pipefail
+set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO" || { echo "cannot cd to repo dir"; exit 1; }
 ENV_FILE="${HR_ENV_FILE:-$REPO/.env}"
 SERVICE="${HERMES_ROUTER_SERVICE:-hermes-router}"
-PORT="${PORT:-8319}"
+configured_port=""
+if [ -f "$ENV_FILE" ]; then
+  configured_port="$(sed -n 's/^[[:space:]]*PORT=//p' "$ENV_FILE" | head -1)"
+fi
+port_environment=""
+if [ -n "${PORT:-}" ]; then port_environment="Environment=\"PORT=${PORT}\""; fi
+PORT="${PORT:-${configured_port:-8319}}"
+if ! [[ "$PORT" =~ ^[0-9]{1,5}$ ]] || [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
+  echo "PORT must be an integer from 1 to 65535" >&2; exit 1
+fi
+if ! [[ "$SERVICE" =~ ^[a-zA-Z0-9_.@-]+$ ]]; then
+  echo "HERMES_ROUTER_SERVICE contains an invalid unit name" >&2; exit 1
+fi
 
 log()  { printf '\033[1;36m[service]\033[0m %s\n' "$*"; }
 err()  { printf '\033[1;31m[service]\033[0m %s\n' "$*" >&2; }
@@ -67,6 +79,16 @@ EOF
 }
 
 # --- unit file contents ----------------------------------------------------------
+unit_escape() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\r'/\\r}"
+  value="${value//$'\t'/\\t}"
+  printf '%s' "${value//%/%%}"
+}
+
 # $1 = "system" | "user"
 unit_text() {
   local scope="$1" user_line="" wanted="multi-user.target"
@@ -80,12 +102,13 @@ Wants=network-online.target
 [Service]
 Type=simple
 ${user_line}
-WorkingDirectory=${REPO}
-ExecStart=${PY} ${REPO}/router.py
+WorkingDirectory="$(unit_escape "$REPO")"
+ExecStart="$(unit_escape "${PY//\$/\$\$}")" "$(unit_escape "${REPO//\$/\$\$}/router.py")"
 Restart=always
 RestartSec=5
-Environment="HOME=${HOME}"
-Environment="PORT=${PORT}"
+Environment="HOME=$(unit_escape "$HOME")"
+${port_environment}
+Environment="HR_ENV_FILE=$(unit_escape "$ENV_FILE")"
 
 [Install]
 WantedBy=${wanted}
@@ -95,7 +118,7 @@ EOF
 health_ok() {
   command -v curl >/dev/null 2>&1 || return 2
   for _ in $(seq 1 15); do
-    curl -fsS "http://localhost:${PORT}/health" >/dev/null 2>&1 && return 0
+    curl -fsS --max-time 2 "http://localhost:${PORT}/health" >/dev/null 2>&1 && return 0
     sleep 1
   done
   return 1
@@ -136,25 +159,32 @@ case "$cmd" in
       exit 1
     fi
     log "installing ${SCOPE} service '${SERVICE}' → ${UNIT_PATH}"
+    boot_text="enabled on boot"
     if [ "$SCOPE" = "user" ]; then
       mkdir -p "$(dirname "$UNIT_PATH")"
       unit_text user > "$UNIT_PATH"
-      loginctl enable-linger "$(id -un)" >/dev/null 2>&1 || warn "could not enable linger — service may not start until you log in."
+      if ! loginctl enable-linger "$(id -un)" >/dev/null 2>&1; then
+        boot_text="enabled for login; boot without login requires linger"
+        warn "could not enable linger — service may not start until you log in."
+      fi
     else
       unit_text system | $SUDO tee "$UNIT_PATH" >/dev/null
     fi
-    sctl daemon-reload
-    sctl enable "${SERVICE}.service" >/dev/null 2>&1 || true
+    sctl daemon-reload || { err "failed to reload service definitions"; exit 1; }
+    sctl enable "${SERVICE}.service" || { err "failed to enable the boot service"; exit 1; }
     sctl restart "${SERVICE}.service" || { err "failed to start the service. Check: hr service status"; exit 1; }
-    health_ok
-    case $? in
-      0) ok "installed + started '${SERVICE}', enabled on boot. (manage with: hr restart / hr service status)" ;;
-      2) ok "installed + enabled on boot (install 'curl' to enable health checks)." ;;
-      *) warn "service installed + enabled, but /health didn't respond yet — check: hr service status" ;;
-    esac
-    if [ "$SCOPE" = "user" ]; then
-      log "user service: starts on boot via linger. Use 'systemctl --user' to inspect."
+    if health_ok; then
+      ok "installed + started '${SERVICE}', ${boot_text}. (manage with: hr restart / hr service status)"
+    else
+      result=$?
+      if [ "$result" -eq 2 ]; then
+        ok "installed + started '${SERVICE}', ${boot_text} (install 'curl' to enable health checks)."
+      else
+        err "service installed, but /health didn't respond — check: hr service status"
+        exit 1
+      fi
     fi
+    if [ "$SCOPE" = "user" ]; then log "user service: use 'systemctl --user' to inspect."; fi
     ;;
 
   uninstall|remove)
@@ -162,7 +192,7 @@ case "$cmd" in
     resolve_scope
     if [ ! -e "$UNIT_PATH" ]; then warn "no unit at ${UNIT_PATH} — nothing to remove."; exit 0; fi
     log "removing service '${SERVICE}'…"
-    sctl disable --now "${SERVICE}.service" >/dev/null 2>&1 || true
+    sctl disable --now "${SERVICE}.service" || { err "failed to stop/disable service; unit retained"; exit 1; }
     if [ "$SCOPE" = "user" ]; then rm -f "$UNIT_PATH"; else $SUDO rm -f "$UNIT_PATH"; fi
     sctl daemon-reload
     ok "removed '${SERVICE}'. (the router process is stopped; run 'hr start' to run it manually)"

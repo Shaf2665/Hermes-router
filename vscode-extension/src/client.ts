@@ -95,7 +95,7 @@ export class RouterClient {
     const { code, body } = await get(`${this.base()}/v1/status`, {
       Authorization: `Bearer ${this.apiKey}`,
     });
-    if (code === 401) {
+    if (code === 401 || code === 403) {
       throw new Error("unauthorized — check hermesRouter.apiKey (must match PROXY_API_KEYS)");
     }
     if (code !== 200) {
@@ -108,7 +108,7 @@ export class RouterClient {
     const { code, body } = await post(`${this.base()}/v1/config/restart`, {
       Authorization: `Bearer ${this.apiKey}`,
     });
-    if (code === 401) {
+    if (code === 401 || code === 403) {
       throw new Error("unauthorized — check hermesRouter.apiKey");
     }
     if (code < 200 || code >= 300) {

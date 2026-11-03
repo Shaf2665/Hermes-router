@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="POSIX symlink/PATH service harness; exercised in Linux release checks")
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -35,6 +37,7 @@ def setup_env(tmp_path):
     executable(bin_dir / "curl", '[ -f "$TEST_HEALTHY" ]\n')
     executable(bin_dir / "nohup", '''echo "manual:$PORT" >> "$TEST_EVENTS"
 : > "$TEST_HEALTHY"
+/bin/sleep 0.2
 ''')
     executable(bin_dir / "systemctl", '''echo "systemctl:$*" >> "$TEST_EVENTS"
 scope=system

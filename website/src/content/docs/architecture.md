@@ -206,9 +206,9 @@ Your app always speaks one format; the router adapts to whatever the chosen prov
 | `POST /v1/messages` | proxy key | Anthropic Messages API (translated) |
 | `POST /v1/embeddings` | proxy key | OpenAI embeddings (stable provider order) |
 | `GET /v1/models` | proxy key | Advertises the `hermes-router` model id |
-| `GET /v1/status` | proxy key | Per-provider health, latency, keys, rotation, cache |
+| `GET /v1/status` | administrator | Per-provider health, latency, keys, rotation, cache |
 | `GET /health` | none | Liveness check for uptime monitors |
-| `GET /metrics` | optional | Prometheus metrics (set `METRICS_REQUIRE_AUTH=1` to lock) |
+| `GET /metrics` | administrator | Prometheus metrics; authentication is always required |
 
 ## Observability
 

@@ -13,7 +13,12 @@ auth.json
 instances.json
 router_state.json
 cache.db
+usage.db
+*.db-shm
+*.db-wal
+*.db-journal
 router.log
+router.pid
 
 # Local virtualenv / build caches
 venv/
@@ -33,6 +38,8 @@ __pycache__/
 website/
 vscode-extension/
 documentation/
+docs/
+graphify-out/
 tests/
 *.md
 *.png
@@ -41,3 +48,5 @@ Dockerfile
 Dockerfile.cli
 install.sh
 get.sh
+install.ps1
+start.ps1

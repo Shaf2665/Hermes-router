@@ -110,12 +110,25 @@ system-wide — `install.sh` only symlinks the `hr` command onto your PATH.
 
 ## Setup
 
+Package update (2026-11-03): [download the VS Code 0.9.6 VSIX](https://github.com/Shaf2665/Hermes-router/releases/download/vscode-v0.9.6/hermes-router-0.9.6.vsix). Use extension version 0.9.6 or newer for administrator controls. Docker images and upgrade instructions are in the setup guide.
+
+**Foundation preview:** see [Local and server setup](documentation/setup.md) for the new
+Windows starter, persistent Docker Compose installation, administrator/application-key
+migration, first request and SSH/HTTPS server access. These instructions require this preview
+source from [`codex/hermes-upgrade-design`](https://github.com/Shaf2665/Hermes-router/tree/codex/hermes-upgrade-design); the published `main` installer and older images may not contain it yet.
+
+For the initial codebase exploration, see the [graph report](graphify-out/GRAPH_REPORT.md).
+Download [graph.html](graphify-out/graph.html) and open it locally to explore the graph.
+It records the original `9d87915` baseline, before the foundation changes; use the
+[foundation validation report](docs/research/foundation-validation.md) for the updated behavior.
+
 **Requirements:** Python 3.10+ and at least one configured cloud provider key or local model
 (see **[Providers](documentation/providers.md)**).
 
 > **Platform note:** the router runs on **Linux, macOS, and Windows**. The one-liner and
-> `hr` CLI below are for Linux/macOS (and WSL2). On **Windows** use Docker, WSL2, or run
-> `python router.py` directly — see **[Deployment](documentation/deployment.md)**.
+> `hr` CLI below are for Linux/macOS (and WSL2). On **Windows**, the foundation preview
+> provides native `install.ps1` and `start.ps1`; Docker is also supported — see
+> **[Local and server setup](documentation/setup.md)**.
 
 ### One-liner install
 
@@ -245,3 +258,7 @@ you run it as a systemd service).
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+### Provider presets
+
+The Providers dashboard includes 65 API-key presets: choose a provider, open its key link, paste your key and select multiple models. Base URLs are already filled in. See the [provider directory and setup steps](documentation/providers.md#add-a-provider-from-the-dashboard). Free offers, trial credits and paid subscriptions are labeled separately; verify current prices with each provider.

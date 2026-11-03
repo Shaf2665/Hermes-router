@@ -1,0 +1,35 @@
+{
+  "corpus_tokens": 113258,
+  "corpus_words": 84944,
+  "nodes": 475,
+  "edges": 1044,
+  "avg_query_tokens": 3390,
+  "reduction_ratio": 33.4,
+  "per_question": [
+    {
+      "question": "how does authentication work",
+      "query_tokens": 8216,
+      "reduction": 13.8
+    },
+    {
+      "question": "what is the main entry point",
+      "query_tokens": 166,
+      "reduction": 682.3
+    },
+    {
+      "question": "how are errors handled",
+      "query_tokens": 8236,
+      "reduction": 13.8
+    },
+    {
+      "question": "what connects the data layer to the api",
+      "query_tokens": 166,
+      "reduction": 682.3
+    },
+    {
+      "question": "what are the core abstractions",
+      "query_tokens": 166,
+      "reduction": 682.3
+    }
+  ]
+}
