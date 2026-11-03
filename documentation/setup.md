@@ -24,21 +24,21 @@ The images use Linux containers. Docker Desktop is [not supported on Windows Ser
 
 ## Published packages (2026-11-03)
 
-Docker Hub provides `shafiq735/hermes-router:foundation-20261103` and `:foundation-20261103-cli`, for Linux AMD64 and ARM64. The `latest` and `cli` tags track this release. Use a dated tag for reproducible installs.
+Docker Hub provides `shafiq735/hermes-router:providers-20261103` and `:providers-20261103-cli`, for Linux AMD64 and ARM64. The `latest` and `cli` tags track this release. Use a dated tag for reproducible installs.
 
 For a fresh install without building source, run this single command in PowerShell or Bash:
 
 ```bash
-docker run -d --name hermes-router --restart unless-stopped -p 127.0.0.1:8319:8319 -v hermes-data:/app/data shafiq735/hermes-router:foundation-20261103
+docker run -d --name hermes-router --restart unless-stopped -p 127.0.0.1:8319:8319 -v hermes-data:/app/data shafiq735/hermes-router:providers-20261103
 ```
 
-Use `foundation-20261103-cli` instead if you need `docker exec hermes-router hr status`. Open `http://localhost:8319` and retrieve the administrator credential with:
+Use `providers-20261103-cli` instead if you need `docker exec hermes-router hr status`. Open `http://localhost:8319` and retrieve the administrator credential with:
 
 ```bash
 docker exec hermes-router python -c "from pathlib import Path; print(next(x.split('=',1)[1] for x in Path('/app/data/.env').read_text().splitlines() if x.startswith('ADMIN_API_KEY=')))"
 ```
 
-The matching [VS Code 0.9.6 VSIX](https://github.com/Shaf2665/Hermes-router/releases/download/vscode-v0.9.6/hermes-router-0.9.6.vsix) can be installed using **Extensions: Install from VSIX…**. Marketplace publication is pending publisher permissions; an older Marketplace installation will not gain the administrator command automatically.
+The matching [VS Code 0.9.6 VSIX](https://github.com/Shaf2665/Hermes-router/releases/download/vscode-v0.9.6/hermes-router-0.9.6.vsix) can be installed using **Extensions: Install from VSIX…**. Use extension version 0.9.6 or newer for the administrator command.
 
 Before upgrading an existing container, back up its configuration and mounted data. Pulling an image does not upgrade a running container: recreate it with the same volume, environment variables, ports and restart policy. Old installs that stored `.env` or `auth.json` only inside `/app` must copy them into the mounted data directory before recreation. Keep application keys for inference; retrieve the separate administrator key for dashboard access. See the backup section below.
 

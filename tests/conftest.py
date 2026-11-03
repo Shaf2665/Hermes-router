@@ -37,6 +37,11 @@ for name in [
 ]:
     os.environ.pop(name, None)
 
+from provider_catalog import ADDITIONAL_DEFAULTS
+for provider in ADDITIONAL_DEFAULTS:
+    os.environ.pop(provider.upper() + "_API_KEYS", None)
+    os.environ.pop(provider.upper() + "_API_KEY", None)
+
 os.environ.update({
     "PROXY_API_KEYS": "sk-test",
     "ADMIN_API_KEY": "sk-test-admin",

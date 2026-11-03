@@ -29,6 +29,8 @@ from functools import wraps
 from collections import deque, OrderedDict, defaultdict
 from flask import Flask, request, jsonify, Response, stream_with_context, redirect, g, has_request_context
 from urllib.parse import urlparse, urlunparse
+from provider_catalog import PROVIDER_PRESETS, ADDITIONAL_DEFAULTS
+
 import requests
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -707,6 +709,12 @@ def _build_providers() -> list[dict]:
             "keys":     [os.environ.get("LOCAL_API_KEY", "local")],
         })
 
+    for name, default in ADDITIONAL_DEFAULTS.items():
+        keys = _keys_for(name, name.upper() + "_API_KEYS")
+        if keys:
+            providers.append({"name": name, "base_url": PROVIDER_PRESETS[name]["base_url"],
+                              "model": os.environ.get(name.upper() + "_MODEL", default), "keys": keys})
+
     if not providers:
         log.warning("No providers configured — set GEMINI_API_KEYS, OPENROUTER_API_KEYS, etc. in .env")
 
@@ -775,7 +783,7 @@ PROVIDERS = _build_providers()
 # When auto-discovering a replacement model for these, restrict to :free ids so
 # a probe can never silently promote the router onto a paid model.
 _FREE_ONLY_DISCOVERY = {"openrouter", "naga", "opencode"}
-_MODEL_DISCOVERY_SKIP = {"anthropic", "codex", "local", "huggingface"}
+_MODEL_DISCOVERY_SKIP = {"anthropic", "codex", "local", "huggingface"} | set(ADDITIONAL_DEFAULTS)
 
 
 def _is_free_model_id(model: str) -> bool:
@@ -844,6 +852,11 @@ PROVIDER_MODEL_DEFAULT = {
     "opencode_go": "deepseek-v4-flash,kimi-k2.7-code,mimo-v2.5", "openai": "gpt-4o-mini",
     "anthropic": "claude-haiku-4-5-20251001", "codex": "gpt-5.5", "local": "llama3.1",
 }
+
+KEY_SETTABLE_PROVIDERS.extend(ADDITIONAL_DEFAULTS)
+PROVIDER_KEY_ENV.update({p: p.upper() + "_API_KEYS" for p in ADDITIONAL_DEFAULTS})
+PROVIDER_MODEL_ENV.update({p: p.upper() + "_MODEL" for p in ADDITIONAL_DEFAULTS})
+PROVIDER_MODEL_DEFAULT.update(ADDITIONAL_DEFAULTS)
 
 ENV_FILE_PATH = Path(os.environ.get("HR_ENV_FILE", ".env"))
 
@@ -1793,7 +1806,7 @@ def _probe_provider(provider: dict, key: str) -> tuple:
             return False, latency, provider["model"], "rate_limited"
         if r.status_code in (401, 403):
             return False, latency, provider["model"], "auth"
-        if r.status_code in (400, 404):
+        if r.status_code in (400, 404) and provider["name"] not in ADDITIONAL_DEFAULTS:
             # Providers that list paid models alongside free ones — never let
             # auto-discovery silently pick something that costs credits.
             alt = _discover_best_model(provider["base_url"], key, provider.get("headers", {}),
@@ -4888,12 +4901,73 @@ def config_providers():
         "key_settable": KEY_SETTABLE_PROVIDERS,
         "model_settable": list(PROVIDER_MODEL_ENV.keys()),
         "defaults": PROVIDER_MODEL_DEFAULT,
+        "presets": PROVIDER_PRESETS,
+        "configured_models": {p: _env_read_line(env) or os.environ.get(env, "")
+                              for p, env in PROVIDER_MODEL_ENV.items()},
         # Live key count per currently-configured provider, e.g. {"gemini": 6} —
         # informational context for the Access Keys page's provider picker, not
         # an enforced quota split (see monitoring docs on provider scoping).
         "key_counts": {p["name"]: len(p.get("keys", [])) for p in PROVIDERS},
         "copyable_provider_keys": _provider_key_counts_for_instance_copy(),
     })
+
+
+@app.route("/v1/config/providers/<provider>/models", methods=["POST"])
+def config_provider_models(provider):
+    """Explicit catalog lookup; does not save keys or enable discovered models."""
+    err = _admin_check()
+    if err:
+        return err
+    preset = PROVIDER_PRESETS.get(provider)
+    if not preset:
+        return jsonify({"error": {"message": "Unknown provider"}}), 404
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": {"message": "Expected an object"}}), 400
+    key = body.get("key", "")
+    if not isinstance(key, str) or len(key) > 16384 or any(c in key for c in "\r\n"):
+        return jsonify({"error": {"message": "Invalid API key"}}), 400
+    key = key.strip()
+    if not key:
+        keys = _keys_for_instance_copy(provider)
+        key = keys[0] if keys else ""
+    if not key:
+        return jsonify({"error": {"message": "Paste an API key first"}}), 400
+    headers = {"Authorization": "Bearer " + key}
+    if provider == "anthropic":
+        headers = {"x-api-key": key, "anthropic-version": "2023-06-01"}
+    try:
+        # Fixed public preset host; reject redirects so a key never follows one.
+        with _HTTP.get(preset["base_url"].rstrip("/") + "/models", headers=headers,
+                       timeout=(3, 8), allow_redirects=False, stream=True) as response:
+            if response.status_code != 200:
+                return jsonify({"error": {"message": "Provider could not list models (HTTP "
+                    + str(response.status_code) + "). Check the key or use the suggestions below."}}), 502
+            chunks, size = [], 0
+            deadline = time.monotonic() + 12
+            for chunk in response.iter_content(65536):
+                size += len(chunk)
+                if size > 2_000_000 or time.monotonic() > deadline:
+                    raise ValueError("catalog limit")
+                chunks.append(chunk)
+            payload = json.loads(b"".join(chunks))
+        items = payload.get("data", [])
+        if not isinstance(items, list):
+            raise ValueError("invalid catalog")
+        models = set()
+        for item in items[:5000]:
+            model = item.get("id") if isinstance(item, dict) else None
+            if provider == "gemini" and isinstance(model, str):
+                model = model.removeprefix("models/")
+            if isinstance(model, str) and len(model) <= 200 and re.fullmatch(r"[A-Za-z0-9@+._\-:/]+", model):
+                models.add(model)
+        if not models:
+            return jsonify({"error": {"message": "No compatible model IDs returned. Use the suggestions or enter a model ID."}}), 502
+        return jsonify({"models": sorted(models), "source": "live",
+                        "notice": "This list may include paid models. Check prices before selecting."})
+    except (requests.RequestException, ValueError, TypeError, AttributeError):
+        # Do not return upstream bodies or exception text: either may echo secrets.
+        return jsonify({"error": {"message": "Could not load the provider catalog. Use the suggestions or enter a model ID."}}), 502
 
 
 @app.route("/v1/config/keys/<provider>", methods=["POST"])
@@ -4905,11 +4979,16 @@ def config_add_key(provider):
     if provider not in KEY_SETTABLE_PROVIDERS:
         return jsonify({"error": {"message": f"unknown or non-key provider: {provider}",
                                   "type": "invalid_request_error"}}), 400
-    body = request.get_json(force=True, silent=True) or {}
-    key = (body.get("key") or "").strip()
+    body = request.get_json(force=True, silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": {"message": "Expected an object"}}), 400
+    key = body.get("key")
+    if not isinstance(key, str):
+        return jsonify({"error": {"message": "key must be text"}}), 400
+    key = key.strip()
     if not key:
         return jsonify({"error": {"message": "missing 'key'", "type": "invalid_request_error"}}), 400
-    if "\n" in key or "\r" in key:
+    if len(key) > 16384 or "\n" in key or "\r" in key:
         return jsonify({"error": {"message": "key must not contain newlines", "type": "invalid_request_error"}}), 400
     added, total = _auth_json_add_key(provider, key)
     return jsonify({"provider": provider, "added": added, "total_keys": total,
@@ -4932,13 +5011,18 @@ def config_model(provider):
         _env_write_line(env_var, None)
         return jsonify({"provider": provider, "reset": True, "restart_required": True})
 
-    body = request.get_json(force=True, silent=True) or {}
-    model = (body.get("model") or "").strip()
+    body = request.get_json(force=True, silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": {"message": "Expected an object"}}), 400
+    model = body.get("model")
+    if not isinstance(model, str):
+        return jsonify({"error": {"message": "model must be text"}}), 400
+    model = model.strip()
     if not model:
         return jsonify({"error": {"message": "missing 'model'", "type": "invalid_request_error"}}), 400
     if any(c in model for c in "\n\r"):
         return jsonify({"error": {"message": "model must not contain newlines", "type": "invalid_request_error"}}), 400
-    if not re.fullmatch(r"[A-Za-z0-9._\-:/, ]+", model):
+    if not re.fullmatch(r"[A-Za-z0-9@+._\-:/, ]+", model):
         return jsonify({"error": {"message": "model contains unsupported characters",
                                   "type": "invalid_request_error"}}), 400
     _env_write_line(env_var, model)

@@ -197,18 +197,18 @@ tr:hover td{background:rgba(108,140,255,.04)}
 #restart-banner .actions{display:flex;gap:8px}
 
 /* ── config forms ── */
-.config-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:14px}
+.config-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;padding:14px}
 @media(max-width:820px){.config-grid{grid-template-columns:1fr}}
 .config-grid.narrow{grid-template-columns:1fr;max-width:440px}
 .config-intro{padding:12px 14px 0;color:var(--muted);line-height:1.45}
-.config-form{display:flex;flex-direction:column;gap:8px}
+.config-form{min-width:0;display:flex;flex-direction:column;gap:8px}
 .config-form label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
 .config-form select, .config-form input{
   background:var(--surface2);border:1px solid var(--border);border-radius:6px;
   color:var(--text);padding:7px 10px;font-size:12px;font-family:inherit;outline:none}
 .config-form select:focus, .config-form input:focus{border-color:var(--accent)}
 .config-form .row{display:flex;gap:8px}
-.config-form .row > *{flex:1}
+.config-form .row > *{flex:1;min-width:0}
 .config-msg{font-size:11px;min-height:16px}
 .config-msg.ok{color:var(--green)}
 .config-msg.err{color:var(--red)}
@@ -384,13 +384,26 @@ body{font-size:16px;line-height:1.5}button,input,select,textarea{font-family:inh
           <div class="page-intro" style="padding:12px 14px 0">Keys the router uses to call upstream providers (Gemini, OpenAI, …) — not the keys your own apps use to call the router (see Settings → Application access for that).</div>
           <div class="config-grid">
             <div class="config-form">
-              <label>Add API key</label>
+              <label for="cfg-key-provider">1. Choose a provider</label>
               <div class="row">
-                <select id="cfg-key-provider"></select>
+                <select id="cfg-key-provider" onchange="onKeyProviderChange()"></select>
               </div>
+              <p id="cfg-provider-access" class="field-hint"></p>
+              <a id="cfg-provider-key-link" target="_blank" rel="noopener noreferrer">Get API key ↗</a>
+              <p id="cfg-provider-note" class="field-hint"></p>
+              <label for="cfg-provider-url">Preset base URL</label>
+              <input id="cfg-provider-url" readonly>
+              <label for="cfg-key-value">2. Paste your API key</label>
               <input id="cfg-key-value" type="password" placeholder="paste provider API key" autocomplete="off">
+              <label>3. Choose models</label>
+              <button class="btn" onclick="runAction(this,()=>loadProviderModels())">Refresh model list</button>
+              <p class="field-hint" id="cfg-provider-model-status" role="status"></p>
+              <div id="cfg-provider-models" style="max-height:220px;overflow:auto"></div>
+              <label for="cfg-provider-custom-models">Other model IDs (optional, comma-separated)</label>
+              <input id="cfg-provider-custom-models" placeholder="Paste a model ID if it is not listed">
+              <p class="field-hint">Only selected models will be saved. A free tier does not mean every model is free. Check the provider’s prices and limits.</p>
               <div class="row">
-                <button class="btn" onclick="runAction(this,()=>addKey())">Add key</button>
+                <button class="btn primary" onclick="runAction(this,()=>addKey())">Save provider</button>
               </div>
               <div class="config-msg" id="cfg-key-msg"></div>
             </div>
@@ -846,7 +859,7 @@ function showGate(message) {
     accessKeysData = [];
     instancesData = [];
     configProviders = null;
-    for (const id of ['connect-key', 'new-key-value', 'new-instance-key-value', 'cfg-key-value', 'inst-api-key', 'inst-env'])
+    for (const id of ['connect-key', 'new-key-value', 'new-instance-key-value', 'cfg-key-value', 'cfg-provider-custom-models', 'inst-api-key', 'inst-env'])
         document.getElementById(id).value = '';
     document.getElementById('connect-key-panel').hidden = true;
     document.getElementById('connect-test').disabled = true;
@@ -1645,7 +1658,12 @@ async function fetchConfigProviders() {
             return;
         configProviders = data;
         const keySel = document.getElementById('cfg-key-provider');
-        keySel.innerHTML = configProviders.key_settable.map(p => `<option value="${attr(p)}">${esc(p)}</option>`).join('');
+        const previous = keySel.value;
+        keySel.innerHTML = configProviders.key_settable.slice().sort((a,b) =>
+            (configProviders.presets?.[a]?.label || a).localeCompare(configProviders.presets?.[b]?.label || b))
+            .map(p => `<option value="${attr(p)}">${esc(configProviders.presets?.[p]?.label || p)} — ${esc(configProviders.presets?.[p]?.access || '')}</option>`).join('');
+        if (previous && configProviders.key_settable.includes(previous)) keySel.value = previous;
+        else { keySel.value = 'gemini'; onKeyProviderChange(); }
         const modelSel = document.getElementById('cfg-model-provider');
         modelSel.innerHTML = configProviders.model_settable.map(p => `<option value="${attr(p)}">${esc(p)}</option>`).join('');
         onModelProviderChange();
@@ -1712,6 +1730,51 @@ function setWarnMsg(id, text) {
     el.textContent = text;
     el.className = 'config-msg warn';
 }
+let providerSelectionGeneration = 0;
+function selectedProviderModels() {
+    return [...document.querySelectorAll('#cfg-provider-models input:checked')].map(el => el.value);
+}
+function renderProviderModelChoices(models, selected) {
+    document.getElementById('cfg-provider-models').innerHTML = [...new Set([...selected, ...models])].map(model =>
+        `<label style="display:flex;gap:8px;align-items:center;overflow-wrap:anywhere"><input type="checkbox" style="width:auto" value="${attr(model)}" ${selected.includes(model) ? 'checked' : ''}>${esc(model)}</label>`).join('');
+}
+function onKeyProviderChange() {
+    providerSelectionGeneration++;
+    const provider = document.getElementById('cfg-key-provider').value;
+    const preset = configProviders?.presets?.[provider];
+    document.getElementById('cfg-key-value').value = '';
+    document.getElementById('cfg-provider-custom-models').value = '';
+    document.getElementById('cfg-key-msg').textContent = '';
+    if (!preset) return;
+    document.getElementById('cfg-provider-access').textContent = preset.access;
+    document.getElementById('cfg-provider-note').textContent = preset.note;
+    document.getElementById('cfg-provider-url').value = preset.base_url;
+    document.getElementById('cfg-provider-key-link').href = preset.key_url;
+    const configured = configProviders.configured_models?.[provider];
+    const selected = configured ? configured.split(',').map(m=>m.trim()).filter(Boolean) : [];
+    renderProviderModelChoices(preset.models || [], selected);
+    document.getElementById('cfg-provider-model-status').textContent = 'Suggestions — refresh for your account’s current catalog, or enter a model ID below.';
+}
+async function loadProviderModels() {
+    const generation = providerSelectionGeneration, session = sessionGeneration;
+    const provider = document.getElementById('cfg-key-provider').value;
+    const status = document.getElementById('cfg-provider-model-status');
+    status.textContent = 'Loading models…';
+    try {
+        const response = await adminFetch('/v1/config/providers/' + encodeURIComponent(provider) + '/models', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({key:document.getElementById('cfg-key-value').value.trim()})
+        });
+        const data = await response.json();
+        if (generation !== providerSelectionGeneration || session !== sessionGeneration || !authenticated) return;
+        if (!response.ok) { status.textContent = apiError(data) || 'Could not load models. Suggestions are still available.'; return; }
+        renderProviderModelChoices(data.models, selectedProviderModels());
+        status.textContent = `${data.models.length} models from provider. ${data.notice}`;
+    } catch (_) {
+        if (generation === providerSelectionGeneration && session === sessionGeneration)
+            status.textContent = 'Could not load models. Use the suggestions or enter a model ID.';
+    }
+}
 async function addKey() {
     const provider = document.getElementById('cfg-key-provider').value;
     const key = document.getElementById('cfg-key-value').value.trim();
@@ -1719,8 +1782,14 @@ async function addKey() {
         setMsg('cfg-key-msg', 'Enter a key first.', false);
         return;
     }
+    const models = [...new Set([...selectedProviderModels(), ...document.getElementById('cfg-provider-custom-models').value.split(',').map(m=>m.trim()).filter(Boolean)])];
+    if (!models.length || models.some(m => !/^[A-Za-z0-9@+._:/-]+$/.test(m))) {
+        setMsg('cfg-key-msg', 'Select at least one model or enter valid model IDs.', false);
+        return;
+    }
+    const generation = providerSelectionGeneration, session = sessionGeneration;
     try {
-        const r = await adminFetch('/v1/config/keys/' + encodeURIComponent(provider), {
+        const r = await adminFetch('/v1/config/keys/'  + encodeURIComponent(provider), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ key }),
@@ -1730,16 +1799,23 @@ async function addKey() {
             setMsg('cfg-key-msg', apiError(d) || 'Failed.', false);
             return;
         }
-        if (d.duplicate) {
-            setMsg('cfg-key-msg', 'Already stored — no change.', false);
+        if (session !== sessionGeneration || !authenticated) return;
+        showRestartBanner();
+        if (generation === providerSelectionGeneration) document.getElementById('cfg-key-value').value = '';
+        const modelResponse = await adminFetch('/v1/config/model/' + encodeURIComponent(provider), {
+            method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({model:models.join(',')})
+        });
+        const modelData = await modelResponse.json();
+        if (session !== sessionGeneration || generation !== providerSelectionGeneration || !authenticated) return;
+        if (!modelResponse.ok) {
+            setMsg('cfg-key-msg', 'Key saved, but models were not saved. ' + (apiError(modelData) || 'Retry before restarting.'), false);
             return;
         }
-        document.getElementById('cfg-key-value').value = '';
-        setMsg('cfg-key-msg', `Saved — ${provider} now has ${d.total_keys} key(s).`, true);
-        showRestartBanner();
+        configProviders.configured_models[provider] = models.join(',');
+        setMsg('cfg-key-msg', `Saved — ${provider}: ${models.length} model(s), ${d.total_keys} key(s). Restart Hermes to apply.`, true);
     }
     catch (e) {
-        setMsg('cfg-key-msg', 'Network error: ' + e.message, false);
+        if (session === sessionGeneration && generation === providerSelectionGeneration) setMsg('cfg-key-msg', 'Save interrupted. The key may already be saved; retry to finish saving models.', false);
     }
 }
 async function setModel() {

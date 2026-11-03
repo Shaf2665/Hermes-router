@@ -110,6 +110,47 @@ def login(page, base_url):
     expect(page.locator("#plain-title")).not_to_contain_text("Checking")
 
 
+def test_provider_presets_key_link_live_models_and_multiple_selection(router_server, page):
+    login(page, router_server)
+    page.locator('[data-page="providers"]').click()
+    page.locator('#cfg-key-provider').select_option('kilo_gateway')
+    expect(page.locator('#cfg-provider-url')).to_have_value('https://ai-gateway.kilo.ai/api/v1')
+    expect(page.locator('#cfg-provider-key-link')).to_have_attribute('href', 'https://app.kilo.ai/')
+    page.locator('#cfg-key-value').fill('mock-provider-key')
+    page.get_by_role('button', name='Save provider', exact=True).click()
+    expect(page.locator('#cfg-key-msg')).to_contain_text('Select at least one model')
+    page.route('**/v1/config/providers/kilo_gateway/models', lambda route: route.fulfill(
+        json={'models': ['model-a:free', 'model-b:free'], 'notice': 'Check prices.'}))
+    page.get_by_role('button', name='Refresh model list', exact=True).click()
+    expect(page.locator('#cfg-provider-model-status')).to_contain_text('2 models')
+    for checkbox in page.locator('#cfg-provider-models input').all():
+        checkbox.check()
+    page.get_by_role('button', name='Save provider', exact=True).click()
+    expect(page.locator('#cfg-key-msg')).to_contain_text('2 model(s)')
+    expect(page.locator('#cfg-key-value')).to_have_value('')
+    result = page.request.get(router_server + '/v1/config/providers').json()
+    assert result['configured_models']['kilo_gateway'] == 'model-a:free,model-b:free'
+    assert 'mock-provider-key' not in page.evaluate('JSON.stringify(localStorage)')
+    page.locator('#cfg-key-value').fill('must-not-follow-provider-switch')
+    page.locator('#cfg-key-provider').select_option('groq')
+    expect(page.locator('#cfg-key-value')).to_have_value('')
+    expect(page.locator('#cfg-provider-key-link')).to_have_attribute('href', 'https://console.groq.com/keys')
+    page.set_viewport_size({'width': 390, 'height': 844})
+    assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+
+
+def test_provider_catalog_failure_keeps_suggestions(router_server, page):
+    login(page, router_server)
+    page.locator('[data-page="providers"]').click()
+    page.locator('#cfg-key-provider').select_option('kilo_gateway')
+    page.locator('#cfg-key-value').fill('mock-provider-key')
+    page.route('**/v1/config/providers/kilo_gateway/models', lambda route: route.fulfill(
+        status=502, json={'error': {'message': 'Provider cannot list models'}}))
+    page.get_by_role('button', name='Refresh model list', exact=True).click()
+    expect(page.locator('#cfg-provider-model-status')).to_contain_text('Provider cannot list models')
+    expect(page.locator('#cfg-provider-models')).to_contain_text('kilo-auto/free')
+
+
 def test_session_login_resume_logout_and_no_persistent_secret(router_server, page):
     page.goto(router_server + "/dashboard", wait_until="domcontentloaded")
     expect(page.get_by_text("Enter your administrator credential")).to_be_visible()
@@ -227,7 +268,8 @@ def test_pending_provider_change_and_failed_restart_are_truthful(router_server, 
     page.get_by_role("button", name="Providers", exact=True).click()
     page.locator("#cfg-key-provider").select_option("openai")
     page.locator("#cfg-key-value").fill("mock-provider-key-no-network")
-    page.get_by_role("button", name="Add key", exact=True).click()
+    page.locator("#cfg-provider-models input").first.check()
+    page.get_by_role("button", name="Save provider", exact=True).click()
     expect(page.locator("#cfg-key-msg")).to_contain_text("Saved")
     expect(page.locator("#cfg-key-value")).to_have_value("")
     page.get_by_role("button", name="Home", exact=True).click()
