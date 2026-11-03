@@ -2,6 +2,15 @@
 
 These instructions apply to the **foundation preview in this source checkout**. The public `main` branch and previously published Docker images may still contain the earlier version. Use the tested preview source/archive supplied with this change; do not mix its dashboard or Python modules with an older install.
 
+Get the preview from GitHub into a new directory:
+
+```bash
+git clone --branch codex/hermes-upgrade-design --single-branch https://github.com/Shaf2665/Hermes-router.git Hermes-router-preview
+cd Hermes-router-preview
+```
+
+Without Git, download the [preview source ZIP](https://github.com/Shaf2665/Hermes-router/archive/refs/heads/codex/hermes-upgrade-design.zip) and extract it. Run the platform instructions below from that extracted folder. This branch contains the foundation changes; it has not been merged into `main`.
+
 Hermes runs the API and dashboard together. The Vercel website is documentation, not your private router. You need Python 3.10+ for a native installation, or Docker with Compose. You also need one provider account/key or a running local model. Provider usage may cost money; Hermes does not supply a subscription.
 
 | Where you run it | Installation | Starts after reboot |

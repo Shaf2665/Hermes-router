@@ -34,4 +34,8 @@ env/
 *.swo
 router.log
 router.pid
+# Graph extraction caches and machine-specific interpreter/mtime metadata
+graphify-out/cache/
+graphify-out/.graphify_python
+graphify-out/manifest.json
 .claude/settings.json
