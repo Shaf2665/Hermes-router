@@ -110,6 +110,8 @@ system-wide — `install.sh` only symlinks the `hr` command onto your PATH.
 
 ## Setup
 
+Package update (2026-11-03): [download the VS Code 0.9.6 VSIX](https://github.com/Shaf2665/Hermes-router/releases/download/vscode-v0.9.6/hermes-router-0.9.6.vsix). Marketplace publication is pending publisher permissions. Docker images and upgrade instructions are in the setup guide.
+
 **Foundation preview:** see [Local and server setup](documentation/setup.md) for the new
 Windows starter, persistent Docker Compose installation, administrator/application-key
 migration, first request and SSH/HTTPS server access. These instructions require this preview
