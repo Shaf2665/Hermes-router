@@ -112,7 +112,7 @@ system-wide — `install.sh` only symlinks the `hr` command onto your PATH.
 
 Package update (2026-11-04): [download the VS Code 0.9.7 VSIX](https://github.com/Shaf2665/Hermes-router/releases/download/vscode-v0.9.7/hermes-router-0.9.7.vsix). Use extension version 0.9.6 or newer for administrator controls. Docker images and upgrade instructions are in the setup guide.
 
-Dashboard update (2026-11-04): official Hermes logo, corrected Connect form, and Stitch-informed Settings with switches that save and apply without restarting. Images `settings-20261104` and `settings-20261104-cli` are published for AMD64 and ARM64. See [InstaBox hosting](documentation/instabox.md) and the [validation record](docs/research/2026-11-04-live-settings.md).
+Dashboard update (2026-11-04): provider API keys, model selections/resets, and Settings switches save and apply without restarting. Active responses can finish on their original model. Includes the official Hermes logo and improved Connect and Settings pages. Images `providers-20261104` and `providers-20261104-cli` support AMD64 and ARM64. See [InstaBox hosting](documentation/instabox.md) and the [validation record](docs/research/2026-11-04-live-providers.md).
 
 **Foundation preview:** see [Local and server setup](documentation/setup.md) for the new
 Windows starter, persistent Docker Compose installation, administrator/application-key
@@ -232,7 +232,7 @@ your own in `.env` and run `hr restart`.
 unhealthy and is cooling off; it'll be re-probed automatically. If it shows `no keys`, add
 some with `hr auth add`.
 
-**Keys not picked up after adding** — you must `hr restart` for new keys to load.
+**Keys not picked up after adding** — dashboard saves apply immediately. Keys added through `hr auth add` or direct file edits still need `hr restart`.
 
 **Port already in use** — something else is on `8319`. Set `PORT=8320` in `.env` (and point
 your app at the new port), then `hr restart`.

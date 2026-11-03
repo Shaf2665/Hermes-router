@@ -434,11 +434,11 @@ def _keys(env_var: str) -> list[str]:
     return out
 
 
-def _keys_for(provider_name: str, env_var: str) -> list[str]:
+def _keys_for(provider_name: str, env_var: str, auth_keys=None) -> list[str]:
     """All keys for a provider: auth.json entries first (the primary store that
     `hr auth add` writes to), then any matching .env keys as a fallback. Deduped,
     order preserved. A provider with keys in EITHER source is enabled."""
-    merged = list(_AUTH_KEYS.get(provider_name, []))
+    merged = list((_AUTH_KEYS if auth_keys is None else auth_keys).get(provider_name, []))
     merged += _keys(env_var)
     seen, out = set(), []
     for k in merged:
@@ -502,109 +502,116 @@ def _provider_models(provider: dict) -> list[str]:
 
 # ── Provider definitions ───────────────────────────────────────────────────────
 
-def _build_providers() -> list[dict]:
+def _build_providers(auth_keys=None, model_overrides=None) -> list[dict]:
+    env = dict(os.environ)
+    for name, value in (model_overrides or {}).items():
+        if value is None:
+            env.pop(name, None)
+        else:
+            env[name] = value
+    keys_for = lambda name, key_env: _keys_for(name, key_env) if auth_keys is None else _keys_for(name, key_env, auth_keys)
     providers = []
 
-    gemini_keys = _keys_for("gemini", "GEMINI_API_KEYS")
+    gemini_keys = keys_for("gemini", "GEMINI_API_KEYS")
     if gemini_keys:
         providers.append({
             "name":     "gemini",
             "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
-            "model":    os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite"),
+            "model":    env.get("GEMINI_MODEL", "gemini-2.5-flash-lite"),
             "keys":     gemini_keys,
         })
 
-    openrouter_keys = _keys_for("openrouter", "OPENROUTER_API_KEYS")
+    openrouter_keys = keys_for("openrouter", "OPENROUTER_API_KEYS")
     if openrouter_keys:
         providers.append({
             "name":     "openrouter",
             "base_url": "https://openrouter.ai/api/v1",
-            "model":    os.environ.get("OPENROUTER_MODEL", "nvidia/nemotron-3-super-120b-a12b:free"),
+            "model":    env.get("OPENROUTER_MODEL", "nvidia/nemotron-3-super-120b-a12b:free"),
             "keys":     openrouter_keys,
             "headers":  {
-                "HTTP-Referer": os.environ.get("OPENROUTER_SITE_URL", "https://github.com/Shaf2665/hermes-router"),
-                "X-Title":      os.environ.get("OPENROUTER_APP_NAME", "hermes-router"),
+                "HTTP-Referer": env.get("OPENROUTER_SITE_URL", "https://github.com/Shaf2665/hermes-router"),
+                "X-Title":      env.get("OPENROUTER_APP_NAME", "hermes-router"),
             },
         })
 
-    sambanova_keys = _keys_for("sambanova", "SAMBANOVA_API_KEYS")
+    sambanova_keys = keys_for("sambanova", "SAMBANOVA_API_KEYS")
     if sambanova_keys:
         providers.append({
             "name":     "sambanova",
             "base_url": "https://api.sambanova.ai/v1",
-            "model":    os.environ.get("SAMBANOVA_MODEL", "DeepSeek-V3.2"),
+            "model":    env.get("SAMBANOVA_MODEL", "DeepSeek-V3.2"),
             "keys":     sambanova_keys,
         })
 
-    github_keys = _keys_for("github_models", "GITHUB_MODELS_TOKENS")
+    github_keys = keys_for("github_models", "GITHUB_MODELS_TOKENS")
     if github_keys:
         providers.append({
             "name":     "github_models",
             "base_url": "https://models.inference.ai.azure.com",
-            "model":    os.environ.get("GITHUB_MODELS_MODEL", "gpt-4o"),
+            "model":    env.get("GITHUB_MODELS_MODEL", "gpt-4o"),
             "keys":     github_keys,
         })
 
-    cerebras_keys = _keys_for("cerebras", "CEREBRAS_API_KEYS")
+    cerebras_keys = keys_for("cerebras", "CEREBRAS_API_KEYS")
     if cerebras_keys:
         providers.append({
             "name":     "cerebras",
             "base_url": "https://api.cerebras.ai/v1",
-            "model":    os.environ.get("CEREBRAS_MODEL", "gpt-oss-120b"),
+            "model":    env.get("CEREBRAS_MODEL", "gpt-oss-120b"),
             "keys":     cerebras_keys,
         })
 
-    groq_keys = _keys_for("groq", "GROQ_API_KEYS")
+    groq_keys = keys_for("groq", "GROQ_API_KEYS")
     if groq_keys:
         providers.append({
             "name":     "groq",
             "base_url": "https://api.groq.com/openai/v1",
-            "model":    os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b"),
+            "model":    env.get("GROQ_MODEL", "openai/gpt-oss-120b"),
             "keys":     groq_keys,
         })
 
-    mistral_keys = _keys_for("mistral", "MISTRAL_API_KEYS")
+    mistral_keys = keys_for("mistral", "MISTRAL_API_KEYS")
     if mistral_keys:
         providers.append({
             "name":     "mistral",
             "base_url": "https://api.mistral.ai/v1",
-            "model":    os.environ.get("MISTRAL_MODEL", "mistral-medium-3-5"),
+            "model":    env.get("MISTRAL_MODEL", "mistral-medium-3-5"),
             "keys":     mistral_keys,
         })
 
-    cohere_keys = _keys_for("cohere", "COHERE_API_KEYS")
+    cohere_keys = keys_for("cohere", "COHERE_API_KEYS")
     if cohere_keys:
         providers.append({
             "name":     "cohere",
             "base_url": "https://api.cohere.ai/compatibility/v1",
-            "model":    os.environ.get("COHERE_MODEL", "command-a-03-2025"),
+            "model":    env.get("COHERE_MODEL", "command-a-03-2025"),
             "keys":     cohere_keys,
         })
 
-    zai_keys = _keys_for("zai", "GLM_API_KEYS")
+    zai_keys = keys_for("zai", "GLM_API_KEYS")
     if zai_keys:
         providers.append({
             "name":     "zai",
             "base_url": "https://api.z.ai/api/paas/v4",
-            "model":    os.environ.get("ZAI_MODEL", "glm-4.7-flash"),
+            "model":    env.get("ZAI_MODEL", "glm-4.7-flash"),
             "keys":     zai_keys,
         })
 
-    naga_keys = _keys_for("naga", "NAGA_API_KEYS")
+    naga_keys = keys_for("naga", "NAGA_API_KEYS")
     if naga_keys:
         providers.append({
             "name":     "naga",
             "base_url": "https://api.naga.ac/v1",
-            "model":    os.environ.get("NAGA_MODEL", "nemotron-3-super-120b-a12b:free"),
+            "model":    env.get("NAGA_MODEL", "nemotron-3-super-120b-a12b:free"),
             "keys":     naga_keys,
         })
 
-    nvidia_keys = _keys_for("nvidia", "NVIDIA_API_KEYS")
+    nvidia_keys = keys_for("nvidia", "NVIDIA_API_KEYS")
     if nvidia_keys:
         providers.append({
             "name":     "nvidia",
             "base_url": "https://integrate.api.nvidia.com/v1",
-            "model":    os.environ.get("NVIDIA_MODEL", "deepseek-ai/deepseek-v4-flash"),
+            "model":    env.get("NVIDIA_MODEL", "deepseek-ai/deepseek-v4-flash"),
             "keys":     nvidia_keys,
         })
 
@@ -613,12 +620,12 @@ def _build_providers() -> list[dict]:
     # receive monthly credit; the amount and catalog can change. The `:cheapest`
     # suffix routes to the cheapest eligible partner. Use a
     # token from huggingface.co/settings/tokens (with Inference Providers access).
-    huggingface_keys = _keys_for("huggingface", "HUGGINGFACE_API_KEYS")
+    huggingface_keys = keys_for("huggingface", "HUGGINGFACE_API_KEYS")
     if huggingface_keys:
         providers.append({
             "name":     "huggingface",
             "base_url": "https://router.huggingface.co/v1",
-            "model":    os.environ.get("HUGGINGFACE_MODEL", "openai/gpt-oss-120b:cheapest"),
+            "model":    env.get("HUGGINGFACE_MODEL", "openai/gpt-oss-120b:cheapest"),
             "keys":     huggingface_keys,
         })
 
@@ -626,24 +633,24 @@ def _build_providers() -> list[dict]:
     # OpenAI-compatible endpoint and authenticates with a normal API key (sk-...),
     # so it drops in like any other provider. Model id `kimi-for-coding`. Get a key
     # from platform.kimi.ai / platform.moonshot.ai.
-    kimi_keys = _keys_for("kimi", "KIMI_API_KEYS")
+    kimi_keys = keys_for("kimi", "KIMI_API_KEYS")
     if kimi_keys:
         providers.append({
             "name":     "kimi",
-            "base_url": os.environ.get("KIMI_BASE_URL", "https://api.kimi.com/coding/v1"),
-            "model":    os.environ.get("KIMI_MODEL", "kimi-for-coding"),
+            "base_url": env.get("KIMI_BASE_URL", "https://api.kimi.com/coding/v1"),
+            "model":    env.get("KIMI_MODEL", "kimi-for-coding"),
             "keys":     kimi_keys,
         })
 
     # OpenCode Zen — an OpenAI-compatible gateway for coding models with a pool of
     # models currently marked free (default below). One API key (`hr auth add opencode`);
     # paid premium models (claude/gpt/gemini/…) are reachable too via OPENCODE_MODEL.
-    opencode_keys = _keys_for("opencode", "OPENCODE_API_KEYS")
+    opencode_keys = keys_for("opencode", "OPENCODE_API_KEYS")
     if opencode_keys:
         providers.append({
             "name":     "opencode",
-            "base_url": os.environ.get("OPENCODE_BASE_URL", "https://opencode.ai/zen/v1"),
-            "model":    os.environ.get(
+            "base_url": env.get("OPENCODE_BASE_URL", "https://opencode.ai/zen/v1"),
+            "model":    env.get(
                 "OPENCODE_MODEL",
                 "deepseek-v4-flash-free,nemotron-3-ultra-free,"
                 "mimo-v2.5-free,north-mini-code-free",
@@ -655,30 +662,30 @@ def _build_providers() -> list[dict]:
     # paid subscription tier. Enabled only when an
     # `opencode_go` key is configured (signals you've turned on Go billing), so it
     # never adds dead attempts before you subscribe.
-    opencode_go_keys = _keys_for("opencode_go", "OPENCODE_GO_API_KEYS")
+    opencode_go_keys = keys_for("opencode_go", "OPENCODE_GO_API_KEYS")
     if opencode_go_keys:
         providers.append({
             "name":     "opencode_go",
-            "base_url": os.environ.get("OPENCODE_GO_BASE_URL", "https://opencode.ai/zen/go/v1"),
-            "model":    os.environ.get("OPENCODE_GO_MODEL", "deepseek-v4-flash,kimi-k2.7-code,mimo-v2.5"),
+            "base_url": env.get("OPENCODE_GO_BASE_URL", "https://opencode.ai/zen/go/v1"),
+            "model":    env.get("OPENCODE_GO_MODEL", "deepseek-v4-flash,kimi-k2.7-code,mimo-v2.5"),
             "keys":     opencode_go_keys,
         })
 
-    openai_keys = _keys_for("openai", "OPENAI_API_KEYS")
+    openai_keys = keys_for("openai", "OPENAI_API_KEYS")
     if openai_keys:
         providers.append({
             "name":     "openai",
             "base_url": "https://api.openai.com/v1",
-            "model":    os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+            "model":    env.get("OPENAI_MODEL", "gpt-4o-mini"),
             "keys":     openai_keys,
         })
 
-    anthropic_keys = _keys_for("anthropic", "ANTHROPIC_API_KEYS")
+    anthropic_keys = keys_for("anthropic", "ANTHROPIC_API_KEYS")
     if anthropic_keys:
         providers.append({
             "name":     "anthropic",
             "base_url": "https://api.anthropic.com/v1",
-            "model":    os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
+            "model":    env.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
             "keys":     anthropic_keys,
             "protocol": "anthropic",   # triggers format translation in forward()
         })
@@ -691,7 +698,7 @@ def _build_providers() -> list[dict]:
         providers.append({
             "name":     "codex",
             "base_url": "https://chatgpt.com/backend-api/codex",
-            "model":    os.environ.get("CODEX_MODEL", "gpt-5.5"),
+            "model":    env.get("CODEX_MODEL", "gpt-5.5"),
             "keys":     codex_ids,     # account_ids, resolved to tokens at send time
             "protocol": "codex",
         })
@@ -701,19 +708,19 @@ def _build_providers() -> list[dict]:
     # keyless, but the rotation pool needs ≥1 entry, so we use a sentinel key
     # (LOCAL_API_KEY, default "local") that forward() sends as a harmless Bearer
     # header the server ignores. Enabled by setting LOCAL_BASE_URL or LOCAL_MODEL.
-    if os.environ.get("LOCAL_BASE_URL") or os.environ.get("LOCAL_MODEL"):
+    if env.get("LOCAL_BASE_URL") or env.get("LOCAL_MODEL"):
         providers.append({
             "name":     "local",
-            "base_url": os.environ.get("LOCAL_BASE_URL", "http://localhost:11434/v1"),
-            "model":    os.environ.get("LOCAL_MODEL", "llama3.1"),
-            "keys":     [os.environ.get("LOCAL_API_KEY", "local")],
+            "base_url": env.get("LOCAL_BASE_URL", "http://localhost:11434/v1"),
+            "model":    env.get("LOCAL_MODEL", "llama3.1"),
+            "keys":     [env.get("LOCAL_API_KEY", "local")],
         })
 
     for name, default in ADDITIONAL_DEFAULTS.items():
-        keys = _keys_for(name, name.upper() + "_API_KEYS")
+        keys = keys_for(name, name.upper() + "_API_KEYS")
         if keys:
             providers.append({"name": name, "base_url": PROVIDER_PRESETS[name]["base_url"],
-                              "model": os.environ.get(name.upper() + "_MODEL", default), "keys": keys})
+                              "model": env.get(name.upper() + "_MODEL", default), "keys": keys})
 
     if not providers:
         log.warning("No providers configured — set GEMINI_API_KEYS, OPENROUTER_API_KEYS, etc. in .env")
@@ -772,7 +779,7 @@ def _build_providers() -> list[dict]:
     }
     for p in providers:
         env_var = f"{p['name'].upper()}_EMBED_MODEL"
-        p["embed_model"] = os.environ.get(env_var, _embed_defaults.get(p["name"], ""))
+        p["embed_model"] = env.get(env_var, _embed_defaults.get(p["name"], ""))
 
     return providers
 
@@ -1726,41 +1733,43 @@ def _refresh_discovered_models(provider: dict, key: str, pool_ref) -> None:
     """
     if not _provider_model_discovery_enabled(provider):
         return
+    was_current = any(provider is p for p in PROVIDERS)
     name = provider["name"]
     if name in _MODEL_DISCOVERY_SKIP and os.environ.get(f"{name.upper()}_AUTO_DISCOVER_MODELS") is None:
         log.info(f"[ratings]   {name}: model discovery skipped by default")
         return
     free_only = name in _FREE_ONLY_DISCOVERY
     discovered = _filter_excluded(name, _discover_models(provider, key, free_only=free_only))
-    if not discovered or not _provider_model_discovery_enabled(provider):
-        return
+    with _ACCESS_LOCK:
+        if (not discovered or not _provider_model_discovery_enabled(provider)
+                or (was_current and not any(provider is p for p in PROVIDERS))):
+            return
 
-    configured = _provider_models(provider)
-    discovered_set = set(discovered)
-    # Prune only when doing so still leaves a configured model; otherwise the
-    # existing invalid-model repair path can try to recover a primary model.
-    kept = _filter_excluded(name, [m for m in configured if m in discovered_set])
-    if not kept:
-        kept = discovered[:1]
-    # Never drop valid configured models; only bound appended discoveries.
-    extras = [m for m in discovered if m not in kept]
-    append_limit = max(0, AUTO_DISCOVER_MODEL_LIMIT - len(kept))
-    refreshed = list(dict.fromkeys(kept + extras[:append_limit]))
-    if not refreshed or refreshed == configured:
-        return
+        configured = _provider_models(provider)
+        discovered_set = set(discovered)
+        # Prune only when doing so still leaves a configured model; otherwise the
+        # existing invalid-model repair path can try to recover a primary model.
+        kept = _filter_excluded(name, [m for m in configured if m in discovered_set])
+        if not kept:
+            kept = discovered[:1]
+        # Never drop valid configured models; only bound appended discoveries.
+        extras = [m for m in discovered if m not in kept]
+        append_limit = max(0, AUTO_DISCOVER_MODEL_LIMIT - len(kept))
+        refreshed = list(dict.fromkeys(kept + extras[:append_limit]))
+        if not refreshed or refreshed == configured:
+            return
 
-    provider["models"] = refreshed
-    old_primary = provider["model"]
-    provider["model"] = refreshed[0]
-    for m in refreshed:
-        try:
-            pool_ref.ensure_model(name, m, provider["keys"])
-        except AttributeError:
-            pass
-    if old_primary != provider["model"]:
-        pool_ref.rename_model(name, old_primary, provider["model"])
-    log.info(f"[ratings]   {name}: discovered models → {', '.join(refreshed)}")
-
+        provider["models"] = refreshed
+        old_primary = provider["model"]
+        provider["model"] = refreshed[0]
+        for m in refreshed:
+            try:
+                pool_ref.ensure_model(name, m, provider["keys"])
+            except AttributeError:
+                pass
+        if old_primary != provider["model"]:
+            pool_ref.rename_model(name, old_primary, provider["model"])
+        log.info(f"[ratings]   {name}: discovered models → {', '.join(refreshed)}")
 
 def _probe_anthropic(provider: dict, key: str) -> tuple:
     """Probe Anthropic using the Messages API (not OpenAI-format /chat/completions)."""
@@ -1780,7 +1789,7 @@ def _probe_anthropic(provider: dict, key: str) -> tuple:
         return False, (time.time() - t0) * 1000, provider["model"], "network"
 
 
-def _probe_provider(provider: dict, key: str) -> tuple:
+def _probe_provider(provider: dict, key: str, repair=True) -> tuple:
     """Returns (success, latency_ms, model_used, status). Auto-discovers alt model on 400/404.
 
     A read-timeout means the provider accepted the request and is still
@@ -1812,7 +1821,7 @@ def _probe_provider(provider: dict, key: str) -> tuple:
             return False, latency, provider["model"], "rate_limited"
         if r.status_code in (401, 403):
             return False, latency, provider["model"], "auth"
-        if r.status_code in (400, 404) and provider["name"] not in ADDITIONAL_DEFAULTS:
+        if repair and r.status_code in (400, 404) and provider["name"] not in ADDITIONAL_DEFAULTS:
             # Providers that list paid models alongside free ones — never let
             # auto-discovery silently pick something that costs credits.
             alt = _discover_best_model(provider["base_url"], key, provider.get("headers", {}),
@@ -2075,41 +2084,49 @@ def _resolve_caps(p: dict, key: str, model: str, ok: bool) -> dict:
     }
 
 
+def _publish_ratings(providers, provider_state, model_state):
+    global _provider_state, _model_state
+    with _ACCESS_LOCK:
+        current = {p["name"] for p in providers if any(p is live for live in PROVIDERS)}
+        _provider_state = {**_provider_state, **{n: v for n, v in provider_state.items() if n in current}}
+        _model_state = {**{k: v for k, v in _model_state.items() if k[0] not in current},
+                        **{k: v for k, v in model_state.items() if k[0] in current}}
+        try:
+            _atomic_write_text(STATE_FILE, json.dumps({"last_updated_ts": time.time(),
+                "providers": _provider_state,
+                "model_state": {f"{n}::{m}": v for (n, m), v in _model_state.items()}}))
+        except OSError:
+            log.warning("Could not persist provider capability metadata")
+
+
 def _initialize_ratings(providers: list, pool_ref):
     """Background: probe all providers, fix bad models, assign ratings, persist state."""
-    global _provider_state, _model_state
+    loaded_providers, loaded_models = {}, dict(_model_state)
     if STATE_FILE.exists():
         try:
             cached_doc = json.loads(STATE_FILE.read_text())
-            _provider_state = cached_doc.get("providers", {})
+            loaded_providers = cached_doc.get("providers", {})
             # Per-model caps were persisted as "name::model" keys — restore tuples.
-            _model_state = {}
+            loaded_models = {}
             for k, v in (cached_doc.get("model_state") or {}).items():
                 n, _, m = k.partition("::")
                 if m:
-                    _model_state[(n, m)] = v
-            log.info(f"[ratings] Loaded cached state ({len(_provider_state)} providers, "
-                     f"{len(_model_state)} models)")
+                    loaded_models[(n, m)] = v
+            log.info(f"[ratings] Loaded cached state ({len(loaded_providers)} providers, "
+                     f"{len(loaded_models)} models)")
             # Probes cost a real completion per model, so skip them while the state
             # is fresh AND still covers every configured provider and model.
             age = time.time() - cached_doc.get("last_updated_ts", 0)
             models_covered = all(
-                _cached_model_caps_compatible(_model_state.get((p["name"], m)))
+                _cached_model_caps_compatible(loaded_models.get((p["name"], m)))
                 for p in providers for m in _provider_models(p)
             )
             discovery_requested = any(_provider_model_discovery_enabled(p) for p in providers)
             if (not discovery_requested
                     and STATE_TTL_HOURS > 0 and age < STATE_TTL_HOURS * 3600
-                    and all(p["name"] in _provider_state for p in providers)
+                    and all(p["name"] in loaded_providers for p in providers)
                     and models_covered):
-                for p in providers:
-                    cached_model = _provider_state[p["name"]].get("model")
-                    if cached_model and cached_model != p["model"]:
-                        old = p["model"]
-                        p["model"] = cached_model
-                        if p.get("models"):
-                            p["models"][0] = cached_model
-                        pool_ref.rename_model(p["name"], old, cached_model)
+                _publish_ratings(providers, loaded_providers, loaded_models)
                 log.info(f"[ratings] State is {age/3600:.1f}h old (< {STATE_TTL_HOURS}h TTL) "
                          "— skipping startup probes")
                 return
@@ -2120,7 +2137,7 @@ def _initialize_ratings(providers: list, pool_ref):
     new_state = {}
     new_model_state = {}
     cached_models = {
-        key: caps for key, caps in _model_state.items() if _cached_model_caps_compatible(caps)
+        key: caps for key, caps in loaded_models.items() if _cached_model_caps_compatible(caps)
     }
     for p in providers:
         name  = p["name"]
@@ -2141,19 +2158,24 @@ def _initialize_ratings(providers: list, pool_ref):
             log.info(f"[ratings]   {name}: skipped — no usable models")
             continue
         ok, latency, actual, probe_status = _probe_provider(p, key)
+        if not any(p is live for live in PROVIDERS):
+            continue
         # A primary model can be rate-limited, missing tools, or otherwise rejected
         # while the provider/key is still usable for other configured models.
         # Only auth/network failures confidently make every model unusable.
         caps_probe_ok = ok or probe_status not in ("auth", "network")
-        original   = p["model"]
-        overridden = actual != original
-        if overridden:
-            log.info(f"[ratings]   {name}: model fixed {original} → {actual}")
-            p["model"] = actual
-            if p.get("models"):
-                p["models"][0] = actual
-                p["models"] = list(dict.fromkeys(p["models"]))
-            pool_ref.rename_model(name, original, actual)
+        with _ACCESS_LOCK:
+            if not any(p is live for live in PROVIDERS):
+                continue
+            original   = p["model"]
+            overridden = actual != original
+            if overridden:
+                log.info(f"[ratings]   {name}: model fixed {original} → {actual}")
+                p["model"] = actual
+                if p.get("models"):
+                    p["models"][0] = actual
+                    p["models"] = list(dict.fromkeys(p["models"]))
+                pool_ref.rename_model(name, original, actual)
         # Per-model capabilities for the whole list (primary = models[0] = actual).
         # Reuse a cached entry when present so adding one model doesn't re-probe all.
         for m in _provider_models(p) or ([actual] if actual else []):
@@ -2172,18 +2194,7 @@ def _initialize_ratings(providers: list, pool_ref):
                             "original_model": original, "supports_tools": prim["supports_tools"],
                             "tools_confirmed": prim.get("tools_confirmed", False),
                             "reasoning": prim["reasoning"], "probe_status": probe_status}
-    _provider_state = new_state
-    _model_state = new_model_state
-    try:
-        STATE_FILE.write_text(json.dumps({"last_updated": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                                           "last_updated_ts": time.time(),
-                                           "providers": new_state,
-                                           "model_state": {f"{n}::{m}": v
-                                                           for (n, m), v in new_model_state.items()}},
-                                          indent=2))
-        log.info("[ratings] State persisted to disk")
-    except Exception as e:
-        log.warning(f"[ratings] Could not persist state: {e}")
+    _publish_ratings(providers, new_state, new_model_state)
 
 
 def _initialize_providers(providers, pool_ref):
@@ -2301,6 +2312,17 @@ class CredentialPool:
             prov = self.pools.get(provider_name)
             if prov and old in prov and old != new:
                 prov[new] = prov.pop(old)
+
+    def sync_provider(self, provider):
+        with self.lock:
+            models = _provider_models(provider) + ([provider["embed_model"]] if provider.get("embed_model") else [])
+            buckets = self.pools.setdefault(provider["name"], {})
+            for model in models:
+                entries = buckets.setdefault(model, deque())
+                known = {entry["key"] for entry in entries}
+                entries.extend({"key": key, "cool_until": 0.0} for key in provider["keys"] if key not in known)
+            # shortcut: retired buckets survive until restart for active requests;
+            # add request-counted reclamation if frequent model edits grow this pool.
 
     def ensure_model(self, provider_name: str, model: str, keys: list[str]):
         """Ensure the pool has a bucket for a newly discovered model."""
@@ -2681,6 +2703,16 @@ class ResponseCache:
                 log.info(f"  semantic match sim={best_sim:.3f}")
                 return best_data
         return None
+
+    def clear(self):
+        with self.lock:
+            self._store.clear()
+            if self._db is not None:
+                try:
+                    self._db.execute("DELETE FROM cache")
+                    self._db.commit()
+                except sqlite3.Error:
+                    log.warning("Could not clear persisted response cache")
 
     @property
     def size(self) -> int:
@@ -4237,6 +4269,10 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
     _req_ctx.started = time.monotonic()
     _req_ctx.deadline = _req_ctx.started + REQUEST_TIMEOUT
 
+    # Old in-flight responses must not populate the new configuration's cache.
+    routing_identity = [(p["name"], p.get("base_url", ""), _provider_models(p)) for p in PROVIDERS]
+    ns += ":" + hashlib.sha256(json.dumps(routing_identity, sort_keys=True).encode()).hexdigest()[:16]
+
     # Generic routing hints on the existing completion endpoint. `:fast`
     # prefers a local model; a tool loop can request strict tool transport,
     # cache isolation, and session affinity while retaining normal failover.
@@ -4889,7 +4925,7 @@ def _features_snapshot() -> dict:
 # Every write is a plain, auditable file edit (.env or auth.json), identical to
 # what `hr auth add` / `hr model set` / `hr features enable` already produce —
 # nothing here is a new mechanism, just an HTTP front-end for the same files.
-# Provider/model changes require a restart; feature toggles apply live. Restart uses
+# Provider keys, models and feature toggles apply live; rotation still requires
 # POST /v1/config/restart.
 
 @app.route("/v1/config/providers")
@@ -4972,7 +5008,56 @@ def config_provider_models(provider):
         return jsonify({"error": {"message": "Could not load the provider catalog. Use the suggestions or enter a model ID."}}), 502
 
 
+def _validated_model(value):
+    if not isinstance(value, str) or len(value) > 8192:
+        raise ValueError("model must be text (up to 8192 characters)")
+    models = list(dict.fromkeys(m.strip() for m in value.split(",") if m.strip()))
+    if not models or any(not re.fullmatch(r"[A-Za-z0-9@+._\-:/]+", m) for m in models):
+        raise ValueError("Enter one or more valid model IDs")
+    return ",".join(models)
+
+
+def _refresh_provider_capabilities(provider):
+    name = provider["name"]
+    try:
+        key = provider["keys"][0]
+        ok, latency, actual, status = _probe_provider(provider, key, repair=False)
+        caps = { (name, model): _resolve_caps(provider, key, model, ok or status not in ("auth", "network"))
+                 for model in _provider_models(provider) }
+        primary = caps.get((name, provider["model"]), {})
+        state = {name: {**primary, "model": provider["model"], "available": ok or status in ("rate_limited", "http", "timeout"),
+                       "latency_ms": latency, "probe_status": status}}
+        _publish_ratings([provider], state, caps)
+    except Exception:
+        log.warning("Capability refresh failed for %s", name)
+
+
+def _apply_live_provider(name, candidate, auth_keys, model_override):
+    global PROVIDERS, _AUTH_KEYS, _provider_state, _model_state
+    _AUTH_KEYS = auth_keys
+    for env, value in model_override.items():
+        if value is None:
+            os.environ.pop(env, None)
+        else:
+            os.environ[env] = value
+    previous = next((p for p in PROVIDERS if p["name"] == name), None)
+    if candidate == previous:
+        return
+    if candidate is not None:
+        pool.sync_provider(candidate)
+    PROVIDERS = [candidate if p["name"] == name else p for p in PROVIDERS if p["name"] != name or candidate is not None]
+    if previous is None and candidate is not None:
+        PROVIDERS = [*PROVIDERS, candidate]
+    _provider_state = {**_provider_state, name: {"model": candidate["model"] if candidate else "", "probe_status": "checking"}}
+    active_models = _provider_models(candidate) if candidate else []
+    _model_state = {k: v for k, v in _model_state.items() if k[0] != name or k[1] in active_models}
+    cache.clear()
+    if candidate is not None and _provider_models(candidate):
+        threading.Thread(target=_refresh_provider_capabilities, args=(candidate,), daemon=True).start()
+
+
 @app.route("/v1/config/keys/<provider>", methods=["POST"])
+@_locked_access
 def config_add_key(provider):
     """Add one API key for a provider to auth.json. Body: {"key": "..."}"""
     err = _admin_check()
@@ -4992,12 +5077,37 @@ def config_add_key(provider):
         return jsonify({"error": {"message": "missing 'key'", "type": "invalid_request_error"}}), 400
     if len(key) > 16384 or "\n" in key or "\r" in key:
         return jsonify({"error": {"message": "key must not contain newlines", "type": "invalid_request_error"}}), 400
-    added, total = _auth_json_add_key(provider, key)
+    overrides = {}
+    if "model" in body:
+        try:
+            overrides[PROVIDER_MODEL_ENV[provider]] = _validated_model(body["model"])
+        except ValueError as error:
+            return jsonify({"error": {"message": str(error)}}), 400
+    old_model = _env_read_line(PROVIDER_MODEL_ENV[provider])
+    auth_keys = _load_auth_json()
+    auth_keys[provider] = list(dict.fromkeys([*auth_keys.get(provider, []), key]))
+    candidate = next(p for p in _build_providers(auth_keys, overrides) if p["name"] == provider)
+    previous = next((p for p in PROVIDERS if p["name"] == provider), None)
+    if previous is not None and not overrides:
+        candidate = {**previous, "keys": candidate["keys"]}
+    try:
+        for env, value in overrides.items():
+            _env_write_line(env, value)
+        added, total = _auth_json_add_key(provider, key)
+    except (OSError, ValueError):
+        if overrides:
+            try:
+                _env_write_line(PROVIDER_MODEL_ENV[provider], old_model)
+            except OSError:
+                log.error("Could not roll back provider model configuration")
+        return jsonify({"error": {"message": "Could not save provider configuration. Check file permissions and retry."}}), 500
+    _apply_live_provider(provider, candidate, auth_keys, overrides)
     return jsonify({"provider": provider, "added": added, "total_keys": total,
-                    "duplicate": not added, "restart_required": added})
+                    "duplicate": not added, "restart_required": False})
 
 
 @app.route("/v1/config/model/<provider>", methods=["POST", "DELETE"])
+@_locked_access
 def config_model(provider):
     """POST {"model": "m1,m2"} to override a provider's model(s); DELETE to reset
     to the built-in default (just removes the .env override line)."""
@@ -5009,26 +5119,22 @@ def config_model(provider):
         return jsonify({"error": {"message": f"unknown provider: {provider}",
                                   "type": "invalid_request_error"}}), 400
 
-    if request.method == "DELETE":
-        _env_write_line(env_var, None)
-        return jsonify({"provider": provider, "reset": True, "restart_required": True})
-
-    body = request.get_json(force=True, silent=True)
-    if not isinstance(body, dict):
-        return jsonify({"error": {"message": "Expected an object"}}), 400
-    model = body.get("model")
-    if not isinstance(model, str):
-        return jsonify({"error": {"message": "model must be text"}}), 400
-    model = model.strip()
-    if not model:
-        return jsonify({"error": {"message": "missing 'model'", "type": "invalid_request_error"}}), 400
-    if any(c in model for c in "\n\r"):
-        return jsonify({"error": {"message": "model must not contain newlines", "type": "invalid_request_error"}}), 400
-    if not re.fullmatch(r"[A-Za-z0-9@+._\-:/, ]+", model):
-        return jsonify({"error": {"message": "model contains unsupported characters",
-                                  "type": "invalid_request_error"}}), 400
-    _env_write_line(env_var, model)
-    return jsonify({"provider": provider, "model": model, "restart_required": True})
+    model = None
+    if request.method != "DELETE":
+        body = request.get_json(silent=True)
+        try:
+            model = _validated_model(body.get("model") if isinstance(body, dict) else None)
+        except ValueError as error:
+            return jsonify({"error": {"message": str(error)}}), 400
+    overrides = {env_var: model}
+    auth_keys = _load_auth_json()
+    candidate = next((p for p in _build_providers(auth_keys, overrides) if p["name"] == provider), None)
+    try:
+        _env_write_line(env_var, model)
+    except OSError:
+        return jsonify({"error": {"message": "Could not save model configuration. Check file permissions and retry."}}), 500
+    _apply_live_provider(provider, candidate, auth_keys, overrides)
+    return jsonify({"provider": provider, "model": model, "reset": model is None, "restart_required": False})
 
 
 def _refresh_live_models():
@@ -5456,9 +5562,8 @@ def status():
     keys = {}
     with pool.lock:
         for name, model_pools in pool.pools.items():
-            # Representative key status from the provider's primary model bucket
-            # (insertion order → models[0]); per-model buckets share the same keys.
-            primary = next(iter(model_pools), None)
+            # Retired buckets remain for active requests; report the current model.
+            primary = next((p["model"] for p in PROVIDERS if p["name"] == name), None)
             entries = model_pools.get(primary, []) if primary else []
             keys[name] = [
                 {
@@ -5487,8 +5592,7 @@ def status():
             entry["rating"] = st["rating"]
         if st.get("latency_ms"):
             entry["latency_ms"] = st["latency_ms"]
-        if st.get("model"):
-            entry["model"] = st["model"]
+        entry["model"] = p.get("model", "")
         if p.get("models"):
             entry["models"] = p["models"]
             # Per-model capability breakdown (rating + tool/reasoning support), so

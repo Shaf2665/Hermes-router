@@ -30,15 +30,15 @@ For an InstaBox VM, follow the [InstaBox hosting guide](/instabox/) for a public
 
 ## Published packages (2026-11-04)
 
-Docker Hub provides `shafiq735/hermes-router:settings-20261104` and `:settings-20261104-cli`, for Linux AMD64 and ARM64. The `latest` and `cli` tags track this release. Use a dated tag for reproducible installs.
+Docker Hub provides `shafiq735/hermes-router:providers-20261104` and `:providers-20261104-cli`, for Linux AMD64 and ARM64. The `latest` and `cli` tags track this release. Use a dated tag for reproducible installs.
 
 For a fresh install without building source, run this single command in PowerShell or Bash:
 
 ```bash
-docker run -d --name hermes-router --restart unless-stopped -e HR_CONTAINER_RESTART=1 -p 127.0.0.1:8319:8319 -v hermes-data:/app/data shafiq735/hermes-router:settings-20261104
+docker run -d --name hermes-router --restart unless-stopped -e HR_CONTAINER_RESTART=1 -p 127.0.0.1:8319:8319 -v hermes-data:/app/data shafiq735/hermes-router:providers-20261104
 ```
 
-Use `settings-20261104-cli` instead if you need `docker exec hermes-router hr status`. Open `http://localhost:8319` and retrieve the administrator credential with:
+Use `providers-20261104-cli` instead if you need `docker exec hermes-router hr status`. Open `http://localhost:8319` and retrieve the administrator credential with:
 
 ```bash
 docker exec hermes-router python -c "from pathlib import Path; print(next(x.split('=',1)[1] for x in Path('/app/data/.env').read_text().splitlines() if x.startswith('ADMIN_API_KEY=')))"
@@ -276,8 +276,8 @@ Application key revoked or replaced: create a new key through the authenticated 
 | Docker cannot connect to its engine | Start Docker Desktop/Engine and rerun `docker compose ps`. |
 | Port already occupied | Stop the other process or choose another host port; update the browser/client URL too. |
 | Dashboard rejects an old proxy key | Use the separate `ADMIN_API_KEY`; your app keeps its inference key. |
-| No configured/compatible provider | Add a provider or local model, apply pending restart, and check tools/vision/model eligibility. |
-| Provider key saved but test still fails | Check the restart banner and model ID, then read the request error; saving a key is not a connectivity test. |
+| No configured/compatible provider | Save a provider key and models in the dashboard; changes apply live. Check tools/vision/model eligibility. |
+| Provider key saved but test still fails | Check the model ID, provider key and request error; saving a key is not a successful connectivity test. |
 | 429 from Hermes | Check this application's request/token/money limit and the retry delay. |
 | Everything is unavailable | Check provider credentials, quotas and network access; failover needs another eligible provider. |
 | Remote dashboard works, client cannot connect | Use the server's HTTPS address or the client's own SSH tunnel; `localhost` always means the machine running that client. |

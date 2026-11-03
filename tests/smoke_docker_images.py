@@ -12,6 +12,16 @@ def docker(*args, input=None):
 probe = '''
 import requests,time,json,hashlib
 from pathlib import Path
+from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
+import threading
+class Upstream(BaseHTTPRequestHandler):
+    def log_message(self,*args): pass
+    def do_POST(self):
+        body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        payload=json.dumps({'model':body['model'],'choices':[{'message':{'role':'assistant','content':'OK'},'finish_reason':'stop'}],'usage':{'prompt_tokens':1,'completion_tokens':1}}).encode()
+        self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(payload)));self.end_headers();self.wfile.write(payload)
+upstream=ThreadingHTTPServer(('127.0.0.1',18320),Upstream)
+threading.Thread(target=upstream.serve_forever,daemon=True).start()
 base='http://127.0.0.1:8319'
 for _ in range(100):
     try:
@@ -46,14 +56,30 @@ else:
 headers={'Authorization':'Bearer '+app}
 assert requests.get(base+'/v1/models',headers=headers).status_code==200
 assert requests.get(base+'/v1/status',headers=headers).status_code==401
-assert requests.get(base+'/v1/usage',headers=headers).json()['keys'][0]['req_total']==1
-print('health/dashboard/auth/live settings/persistent settings/durable usage OK')
+assert requests.get(base+'/v1/usage',headers=headers).json()['keys'][0]['req_total']>=1
+owner={'Authorization':'Bearer '+admin}
+started=Path('/proc/1/stat').read_text().split()[21]
+if attempt == 0:
+    saved=requests.post(base+'/v1/config/keys/kimi',headers=owner,json={'key':'mock-provider-key','model':'model-a'})
+    assert saved.status_code==200 and saved.json()['restart_required'] is False
+    expected='model-a'
+else:
+    expected='model-b'
+body={'model':'hermes-router','messages':[{'role':'user','content':'test live model'}],'max_tokens':8}
+answer=requests.post(base+'/v1/chat/completions',headers=headers,json=body).json()
+assert answer['model']==expected,answer
+changed=requests.post(base+'/v1/config/model/kimi',headers=owner,json={'model':'model-b'})
+assert changed.status_code==200 and changed.json()['restart_required'] is False
+assert requests.post(base+'/v1/chat/completions',headers=headers,json=body).json()['model']=='model-b'
+assert Path('/proc/1/stat').read_text().split()[21]==started
+upstream.shutdown()
+print('health/dashboard/auth/live provider/model/settings/persistence/durable usage OK')
 '''
 try:
     docker('volume','create',volume)
     for attempt in range(2):
-        docker('run','-d','--platform',platform,'--name',name,'-e','AUTO_DISCOVER_MODELS=0','-v',volume+':/app/data',tag)
-        print(platform,tag,attempt,docker('exec','-i',name,'python','-',input=probe).strip(),flush=True)
+        docker('run','-d','--platform',platform,'--name',name,'-e','AUTO_DISCOVER_MODELS=0','-e','KIMI_BASE_URL=http://127.0.0.1:18320/v1','-v',volume+':/app/data',tag)
+        print(platform,tag,attempt,docker('exec','-i',name,'python','-',input='attempt='+str(attempt)+'\n'+probe).strip(),flush=True)
         if tag.endswith('-cli'):
             docker('exec',name,'hr','status','--json')
             docker('exec',name,'hr','features','list')

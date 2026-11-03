@@ -27,7 +27,15 @@ def _free_port():
 
 
 @pytest.fixture
-def router_server(tmp_path):
+def stream_release():
+    release = threading.Event()
+    release.started = threading.Event()
+    yield release
+    release.set()
+
+
+@pytest.fixture
+def router_server(tmp_path, stream_release):
     class Provider(BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
@@ -36,8 +44,20 @@ def router_server(tmp_path):
             self._send({"data": [{"id": "test-local"}]})
 
         def do_POST(self):
-            self.rfile.read(int(self.headers.get("Content-Length", 0)))
-            self._send({"id": "test-completion", "model": "test-local", "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 8, "completion_tokens": 1, "total_tokens": 9}})
+            data = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+            if data.get('stream'):
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/event-stream')
+                self.end_headers()
+                chunk = {'id':'test-stream', 'model':data['model'], 'choices':[{'index':0,'delta':{'content':'OK'},'finish_reason':None}]}
+                self.wfile.write(('data: ' + json.dumps(chunk) + '\n\n').encode())
+                self.wfile.flush()
+                if data.get('messages', [{}])[-1].get('content') == '__hold_stream__':
+                    stream_release.started.set()
+                    stream_release.wait(10)
+                self.wfile.write(b'data: [DONE]\n\n')
+                return
+            self._send({"id": "test-completion", "model": data.get('model', 'test-local'), "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 8, "completion_tokens": 1, "total_tokens": 9}})
 
         def _send(self, data):
             payload = json.dumps(data).encode()
@@ -68,7 +88,9 @@ def router_server(tmp_path):
         "LOCAL_MODEL": "test-local",
     })
     log = (tmp_path / "server.log").open("w", encoding="utf-8")
-    proc = subprocess.Popen([sys.executable, str(ROOT / "router.py")], cwd=tmp_path, env=env, stdout=log, stderr=subprocess.STDOUT)
+    env["PYTHONPATH"] = str(ROOT)
+    server_code = "import router; from waitress import serve; router._probe_provider=lambda p,k,**kw:(True,1,p['model'],'ok'); router._resolve_caps=lambda *a:{'rating':1,'supports_tools':True,'tools_confirmed':True,'reasoning':False}; serve(router.app,host=router.HOST,port=router.PORT,threads=4)"
+    proc = subprocess.Popen([sys.executable, '-c', server_code], cwd=tmp_path, env=env, stdout=log, stderr=subprocess.STDOUT)
     try:
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
@@ -295,7 +317,7 @@ def test_visible_page_polling_deduplicates_and_pauses(router_server, page):
     assert any("/v1/logs" in url for url in calls)
 
 
-def test_pending_provider_change_and_failed_restart_are_truthful(router_server, page):
+def test_live_provider_save_and_pending_rotation_restart_are_truthful(router_server, page):
     login(page, router_server)
     page.get_by_role("button", name="Providers", exact=True).click()
     page.locator("#cfg-key-provider").select_option("openai")
@@ -304,6 +326,9 @@ def test_pending_provider_change_and_failed_restart_are_truthful(router_server, 
     page.get_by_role("button", name="Save provider", exact=True).click()
     expect(page.locator("#cfg-key-msg")).to_contain_text("Saved")
     expect(page.locator("#cfg-key-value")).to_have_value("")
+    expect(page.locator("#restart-banner")).not_to_be_visible()
+    page.locator('.rotation-settings > summary').click()
+    page.get_by_role('button', name='Save rotation mode', exact=True).click()
     page.get_by_role("button", name="Home", exact=True).click()
     expect(page.locator("#plain-state")).to_contain_text("restart required")
     page.route("**/v1/config/restart", lambda route: route.fulfill(status=409, json={"error": {"message": "Restart unsupported in this runtime"}}))
@@ -398,3 +423,34 @@ def test_rotation_control_still_saves_in_advanced_section(router_server, page):
     page.get_by_role('button', name='Save rotation mode', exact=True).click()
     expect(page.locator('#cfg-rotation-msg')).to_contain_text('Saved rotation mode')
     expect(page.locator('#restart-banner')).to_be_visible()
+
+
+def test_model_change_keeps_active_stream_and_new_requests_use_new_model(router_server, stream_release):
+    import requests
+    headers = {'Authorization': 'Bearer ' + AUTH_KEY}
+    owner = {'Authorization': 'Bearer ' + ADMIN_KEY}
+    body = {'model':'hermes-router', 'messages':[{'role':'user','content':'repeat this'}], 'max_tokens':8}
+    initial = requests.post(router_server+'/v1/chat/completions', headers=headers, json=body).json()
+    assert initial['model'] == 'test-local'
+    from concurrent.futures import ThreadPoolExecutor
+    def consume():
+        with requests.post(router_server+'/v1/chat/completions', headers=headers,
+                json={**body, 'messages':[{'role':'user','content':'__hold_stream__'}], 'stream':True}, stream=True, timeout=15) as response:
+            return list(response.iter_lines(chunk_size=1))
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        active = executor.submit(consume)
+        try:
+            assert stream_release.started.wait(3)
+            assert not active.done()
+            uptime = requests.get(router_server+'/v1/usage',headers=owner).json()['uptime_s']
+            changed = requests.post(router_server+'/v1/config/model/local', headers=owner,json={'model':'changed-local'})
+            assert changed.status_code == 200 and changed.json()['restart_required'] is False
+            assert not active.done()
+        finally:
+            stream_release.set()
+        lines = active.result(timeout=5)
+        assert b'test-local' in lines[0]
+        assert b'data: [DONE]' in lines
+    after = requests.post(router_server+'/v1/chat/completions', headers=headers, json=body).json()
+    assert after['model'] == 'changed-local'
+    assert requests.get(router_server+'/v1/usage',headers=owner).json()['uptime_s'] >= uptime

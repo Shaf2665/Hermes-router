@@ -44,8 +44,11 @@ history do not restart the process or sign you out. Model discovery runs in the 
 provider-specific overrides still apply. Disabling request history clears its in-memory
 entries; disabling disk caching stops writes but leaves previously saved data on disk.
 
-Application key creation, revocation and budgets also apply immediately. Adding provider
-credentials, changing configured models or key rotation still shows a restart banner.
+Application key creation, revocation and budgets also apply immediately. Provider API
+keys and model changes (including resetting defaults) apply live. Active responses finish
+with their original model; subsequent requests use the new configuration. Provider checks
+run in the background and may make small upstream test requests. Adding a key preserves
+existing cooldowns and usage counters. Key rotation changes still show a restart banner.
 Direct `.env` edits and the file-based `hr features` CLI require a restart.
 The Settings page reports save failures without changing the switch state.
 

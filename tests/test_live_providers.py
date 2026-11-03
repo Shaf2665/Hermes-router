@@ -1,0 +1,94 @@
+import json
+import threading
+import pytest
+import router
+
+ADMIN = {'Authorization': 'Bearer sk-test-admin'}
+
+
+@pytest.fixture
+def client(monkeypatch, tmp_path):
+    monkeypatch.setattr(router, 'AUTH_FILE', tmp_path / 'auth.json')
+    monkeypatch.setattr(router, 'ENV_FILE_PATH', tmp_path / '.env')
+    monkeypatch.setattr(router, 'STATE_FILE', tmp_path / 'state.json')
+    monkeypatch.setattr(router, '_AUTH_KEYS', {})
+    monkeypatch.setattr(router, 'PROVIDERS', [])
+    monkeypatch.setattr(router, 'pool', router.CredentialPool([]))
+    monkeypatch.setattr(router, '_provider_state', {})
+    monkeypatch.setattr(router, '_model_state', {})
+    monkeypatch.setattr(router, 'cache', router.ResponseCache())
+    monkeypatch.setenv('OPENAI_MODEL', 'previous-startup-model')
+    monkeypatch.setenv('LOCAL_MODEL', '')
+    monkeypatch.setenv('LOCAL_BASE_URL', '')
+    monkeypatch.setattr(router, '_probe_provider', lambda p, key, **kw: (True, 1, p['model'], 'ok'))
+    monkeypatch.setattr(router, '_resolve_caps', lambda *args: {'rating': 1, 'supports_tools': True, 'tools_confirmed': True, 'reasoning': False})
+    yield router.app.test_client()
+
+
+def test_add_key_and_models_live_preserves_cooldowns_and_inflight_snapshot(client):
+    added = client.post('/v1/config/keys/openai', headers=ADMIN, json={'key': 'fake-one', 'model': 'model-a,model-b'})
+    assert added.status_code == 200 and added.json['restart_required'] is False
+    assert router.PROVIDERS[0]['models'] == ['model-a', 'model-b']
+    assert router.pool.get_key('openai', 'model-a') == 'fake-one'
+    router.pool.mark_rate_limited('openai', 'fake-one', 'model-a', 60)
+    old = router.PROVIDERS[0]
+    added = client.post('/v1/config/keys/openai', headers=ADMIN, json={'key': 'fake-two'})
+    assert added.json['restart_required'] is False
+    assert router.pool.get_key('openai', 'model-a') == 'fake-two'
+    assert old['keys'] == ['fake-one']
+    assert router.pool.key_requests_for('openai', 'fake-one') == 1
+    duplicate = client.post('/v1/config/keys/openai', headers=ADMIN, json={'key': 'fake-two'})
+    assert duplicate.json['duplicate'] is True
+    assert router.pool.key_count('openai', 'model-a') == 2
+    changed = client.post('/v1/config/model/openai', headers=ADMIN, json={'model': 'model-c'})
+    assert changed.json['restart_required'] is False
+    assert router.PROVIDERS[0]['models'] == ['model-c']
+    assert old['models'] == ['model-a', 'model-b']
+    assert router.pool.get_key('openai', 'model-c') in ('fake-one', 'fake-two')
+    assert router._build_providers()[0]['model'] == 'model-c'
+    assert client.delete('/v1/config/model/openai', headers=ADMIN).json['restart_required'] is False
+    assert router.PROVIDERS[0]['model'] == router.PROVIDER_MODEL_DEFAULT['openai']
+    assert json.loads(router.AUTH_FILE.read_text())['providers']['openai'] == ['fake-one', 'fake-two']
+
+
+def test_invalid_or_failed_save_leaves_runtime_unchanged(client, monkeypatch):
+    assert client.post('/v1/config/keys/openai', headers=ADMIN, json={'key':'fake', 'model': ', ,'}).status_code == 400
+    assert not router.AUTH_FILE.exists()
+    def fail(*args): raise OSError('read-only')
+    monkeypatch.setattr(router, '_atomic_write_text', fail)
+    assert client.post('/v1/config/keys/openai', headers=ADMIN, json={'key':'fake'}).status_code == 500
+    assert client.post('/v1/config/model/openai', headers=ADMIN, json={'model':'new'}).status_code == 500
+    assert router.PROVIDERS == []
+    assert router._AUTH_KEYS == {}
+
+
+def test_application_key_cannot_change_provider(client):
+    for endpoint, body in [('keys', {'key':'fake'}), ('model', {'model':'new'})]:
+        assert client.post('/v1/config/'+endpoint+'/openai', headers={'Authorization':'Bearer sk-test'}, json=body).status_code == 401
+
+
+def test_model_change_invalidates_old_cached_answer(client):
+    client.post('/v1/config/keys/openai', headers=ADMIN, json={'key':'fake'})
+    payload = {'messages': [{'role':'user','content':'hi'}]}
+    router.cache.set(payload, {'model':'old'})
+    assert client.post('/v1/config/model/openai', headers=ADMIN, json={'model':'new'}).status_code == 200
+    assert router.cache.get(payload) is None
+
+
+def test_stale_capability_results_cannot_overwrite_new_model(client):
+    client.post('/v1/config/keys/openai', headers=ADMIN, json={'key':'fake', 'model':'old'})
+    old = router.PROVIDERS[0]
+    client.post('/v1/config/model/openai', headers=ADMIN, json={'model':'new'})
+    router._publish_ratings([old], {'openai': {'model':'old'}}, {('openai','old'): {'rating':99}})
+    assert router._provider_state['openai']['model'] == 'new'
+    assert ('openai','old') not in router._model_state
+
+
+def test_key_save_failure_rolls_back_model_override(client, monkeypatch):
+    router._env_write_line('OPENAI_MODEL', 'before')
+    def fail(*args): raise OSError('read-only auth')
+    monkeypatch.setattr(router, '_auth_json_add_key', fail)
+    result = client.post('/v1/config/keys/openai', headers=ADMIN, json={'key':'fake', 'model':'after'})
+    assert result.status_code == 500
+    assert router._env_read_line('OPENAI_MODEL') == 'before'
+    assert router.PROVIDERS == []

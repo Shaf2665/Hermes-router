@@ -10,6 +10,10 @@ they're stored).
 Want help choosing? See the [free model rankings](free-model-rankings.md) for a
 quality-first comparison of the exact models Hermes Router uses by default.
 
+Dashboard provider keys and model selections apply immediately, including model resets.
+Active responses finish normally. Background capability checks may use a small amount of
+provider quota. File-based CLI or environment changes still require a restart.
+
 ## Add a provider from the dashboard
 
 Open **Providers**, choose a provider, click **Get API key**, sign in on the provider’s

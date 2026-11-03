@@ -47,7 +47,8 @@ docker compose exec -T hermes python -c "from pathlib import Path; print('\n'.jo
 ```
 
 Use the value of `ADMIN_API_KEY` to sign in. In **Providers**, add a provider key,
-choose its models, and save. Click **Restart Now** in the dashboard to apply the changes.
+choose its models, and save. Keys and model changes apply immediately; no restart or
+new dashboard login is needed. Provider checks run in the background.
 Browser sessions end on restart; sign in again after a few seconds. For a terminal fallback:
 
 ```bash

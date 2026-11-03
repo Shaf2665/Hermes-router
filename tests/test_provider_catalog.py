@@ -30,6 +30,12 @@ def test_all_presets_are_wired_into_runtime_and_configuration(monkeypatch):
 
 
 def test_save_key_and_multiple_models_survives_reload(monkeypatch, tmp_path):
+    monkeypatch.setattr(router, '_refresh_provider_capabilities', lambda *args: None)
+    for name in ('PROVIDERS', '_AUTH_KEYS', '_provider_state', '_model_state'):
+        monkeypatch.setattr(router, name, getattr(router, name))
+    monkeypatch.setattr(router, 'pool', router.CredentialPool([]))
+    monkeypatch.setenv('KILO_GATEWAY_MODEL', '')
+
     monkeypatch.setattr(router, "AUTH_FILE", tmp_path / "auth.json")
     monkeypatch.setattr(router, "ENV_FILE_PATH", tmp_path / "router.env")
     client = router.app.test_client()

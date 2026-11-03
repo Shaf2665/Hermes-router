@@ -555,7 +555,7 @@ pre{padding:18px;background:var(--surface2);border:1px solid var(--border);borde
       </details></section>
 <section class="page" id="page-connect">
 <div class="page-heading"><h2>Connect your tool</h2><p>Check a real request, then use the same application key in your client.</p></div>
-<ol class="connect-steps"><li><strong>Connect a provider</strong><p>Add its credential in Providers, apply any required restart, then return here.</p><button class="btn" onclick="showPage('providers')">Open Providers</button></li>
+<ol class="connect-steps"><li><strong>Connect a provider</strong><p>Save its API key and models in Providers, then return here. Changes apply immediately.</p><button class="btn" onclick="showPage('providers')">Open Providers</button></li>
 <li class="config-form"><strong>Create an application key</strong><p>This key can send requests. Keep your administrator credential for managing Hermes.</p><div class="connect-key-form"><div><label for="connect-name">Application name</label><input id="connect-name" value="My first client" maxlength="120"></div><button class="btn primary" id="connect-create" onclick="createConnectKey()">Create application key</button></div><div id="connect-key-panel" hidden><label for="connect-key">Copy this key now; it is shown once</label><div class="row"><input id="connect-key" readonly type="password" autocomplete="off"><button class="btn" onclick="copyConnectKey()">Copy application key</button><button class="btn" onclick="dismissConnectKey()">Forget key on this page</button></div></div><div id="connect-create-msg" class="config-msg" role="status"></div></li>
 <li><strong>Check the connection</strong><p>Sends “Reply with OK” through your configured provider using this application key. A small upstream charge may apply.</p><button class="btn primary" id="connect-test" onclick="testConnection()" disabled>Send test request</button><div id="connect-test-msg" class="config-msg" role="status"></div></li>
 <li><strong>Connect your client</strong><p>OpenAI-compatible endpoint: <code id="connect-endpoint"></code> · model: <code>hermes-router</code></p><label for="client-format">Client format</label><select id="client-format" onchange="renderClientSnippet()"><option value="curl">curl (POSIX shell)</option><option value="python">OpenAI Python SDK</option><option value="vscode">Hermes VS Code extension</option></select><pre id="client-snippet" tabindex="0"></pre><p class="field-hint">Replace YOUR_APPLICATION_KEY with your copied key. Snippets keep credentials out of the page after dismissal.</p></li></ol>
@@ -1863,7 +1863,7 @@ async function addKey() {
         const r = await adminFetch('/v1/config/keys/'  + encodeURIComponent(provider), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ key }),
+            body: JSON.stringify({ key, model: models.join(',') }),
         });
         const d = await r.json();
         if (!r.ok) {
@@ -1871,22 +1871,15 @@ async function addKey() {
             return;
         }
         if (session !== sessionGeneration || !authenticated) return;
-        showRestartBanner();
-        if (generation === providerSelectionGeneration) document.getElementById('cfg-key-value').value = '';
-        const modelResponse = await adminFetch('/v1/config/model/' + encodeURIComponent(provider), {
-            method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({model:models.join(',')})
-        });
-        const modelData = await modelResponse.json();
-        if (session !== sessionGeneration || generation !== providerSelectionGeneration || !authenticated) return;
-        if (!modelResponse.ok) {
-            setMsg('cfg-key-msg', 'Key saved, but models were not saved. ' + (apiError(modelData) || 'Retry before restarting.'), false);
-            return;
-        }
+        if (d.restart_required) showRestartBanner();
+        if (generation !== providerSelectionGeneration) return;
+        document.getElementById('cfg-key-value').value = '';
         configProviders.configured_models[provider] = models.join(',');
-        setMsg('cfg-key-msg', `Saved — ${provider}: ${models.length} model(s), ${d.total_keys} key(s). Restart Hermes to apply.`, true);
+        setMsg('cfg-key-msg', `Saved — ${provider}: ${models.length} model(s), ${d.total_keys} key(s). ${d.restart_required ? "Restart Hermes to apply." : "Applied immediately. Provider checks run in the background."}`, true);
+        await refresh();
     }
     catch (e) {
-        if (session === sessionGeneration && generation === providerSelectionGeneration) setMsg('cfg-key-msg', 'Save interrupted. The key may already be saved; retry to finish saving models.', false);
+        if (session === sessionGeneration && generation === providerSelectionGeneration) setMsg('cfg-key-msg', 'Save interrupted. Check the provider list and retry if needed.', false);
     }
 }
 async function setModel() {
@@ -1907,8 +1900,10 @@ async function setModel() {
             setMsg('cfg-model-msg', apiError(d) || 'Failed.', false);
             return;
         }
-        setMsg('cfg-model-msg', `Set ${provider} → ${model}`, true);
-        showRestartBanner();
+        setMsg('cfg-model-msg', `Saved ${provider} → ${model}. ${d.restart_required ? "Restart to apply." : "Applied immediately."}`, true);
+        if (d.restart_required) showRestartBanner();
+        await loadConfigProviders();
+        await refresh();
     }
     catch (e) {
         setMsg('cfg-model-msg', 'Network error: ' + e.message, false);
@@ -1927,8 +1922,10 @@ async function resetModel() {
             return;
         }
         document.getElementById('cfg-model-value').value = '';
-        setMsg('cfg-model-msg', `Reset ${provider} to default.`, true);
-        showRestartBanner();
+        setMsg('cfg-model-msg', `Reset ${provider} to default. ${d.restart_required ? "Restart to apply." : "Applied immediately."}`, true);
+        if (d.restart_required) showRestartBanner();
+        await loadConfigProviders();
+        await refresh();
     }
     catch (e) {
         setMsg('cfg-model-msg', 'Network error: ' + e.message, false);
