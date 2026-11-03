@@ -299,16 +299,18 @@ bash "$1"
     return result, log.read_text() if log.exists() else ''
 
 
-def test_setup_stops_its_child_before_installing_service(tmp_path):
+def test_setup_installs_service_without_starting_competing_child(tmp_path):
     result, calls = setup_run(tmp_path)
     assert result.returncode == 0, result.stderr + result.stdout
-    assert calls.index('kill ') < calls.index('service-install')
+    assert 'service-install' in calls
+    assert 'standalone-start' not in calls and 'kill ' not in calls
     assert not (tmp_path / 'router.pid').exists()
 
 
 def test_setup_refuses_service_install_over_untracked_process(tmp_path):
     result, calls = setup_run(tmp_path, existing=True)
-    assert result.returncode != 0
+    assert result.returncode == 0
+    assert 'stop the running router' in result.stdout
     assert 'service-install' not in calls and 'kill ' not in calls
 
 

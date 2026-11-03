@@ -3520,10 +3520,31 @@ def _to_codex_body(payload: dict, model: str) -> dict:
         if role == "system":
             instructions.append(content)
             continue
-        # assistant turns use output_text; user/tool use input_text
-        ctype = "output_text" if role == "assistant" else "input_text"
+        # Tool results: the Responses API has no "tool" role — they become
+        # function_call_output items linked to the call by call_id.
+        if role == "tool":
+            input_items.append({"type": "function_call_output",
+                                "call_id": msg.get("tool_call_id") or "",
+                                "output": content})
+            continue
+        if role == "assistant":
+            # Keep any assistant text, then emit each tool call as its own
+            # function_call item (an assistant turn with only tool_calls has no text).
+            if content:
+                input_items.append({"type": "message", "role": "assistant",
+                                    "content": [{"type": "output_text", "text": content}]})
+            for i, tc in enumerate(msg.get("tool_calls") or []):
+                fn = tc.get("function") or {}
+                args = fn.get("arguments")
+                if not isinstance(args, str):
+                    args = json.dumps(args if args is not None else {})
+                input_items.append({"type": "function_call",
+                                    "call_id": tc.get("id") or f"call_{i}",
+                                    "name": fn.get("name", ""),
+                                    "arguments": args or "{}"})
+            continue
         input_items.append({"type": "message", "role": role,
-                             "content": [{"type": ctype, "text": content}]})
+                            "content": [{"type": "input_text", "text": content}]})
 
     body: dict = {
         "model":        model,
@@ -3576,18 +3597,31 @@ def _codex_text_and_tools(data: dict):
     return "".join(text_parts), tool_calls
 
 
+def _codex_output_source(final: dict, done_items: list) -> dict:
+    """The response whose `output` to read: the completed response when it
+    carries output items, else the items collected from output_item.done."""
+    if final and final.get("output"):
+        return final
+    return {"output": done_items}
+
+
 def _from_codex_response(events: list) -> dict:
     """Aggregate a list of Responses SSE event objects into one OpenAI
     chat-completion JSON (used for non-streaming clients)."""
     final = {}
     text_acc = []
+    done_items = []
     for ev in events:
         t = ev.get("type", "")
         if t == "response.completed" and isinstance(ev.get("response"), dict):
             final = ev["response"]
         elif t == "response.output_text.delta":
             text_acc.append(ev.get("delta", ""))
-    text, tool_calls = _codex_text_and_tools(final) if final else ("", [])
+        elif t == "response.output_item.done" and isinstance(ev.get("item"), dict):
+            done_items.append(ev["item"])
+    # With store=false the Codex backend sends an empty `output` in
+    # response.completed; the items only arrive as response.output_item.done.
+    text, tool_calls = _codex_text_and_tools(_codex_output_source(final, done_items))
     if not text and text_acc:
         text = "".join(text_acc)
     message = {"role": "assistant", "content": text or None}
@@ -3625,6 +3659,7 @@ def _codex_streaming_generator(resp: requests.Response):
     yield chunk({"role": "assistant"})
     event_type = None
     finish = "stop"
+    done_items = []
     for raw in resp.iter_lines():
         if not raw:
             continue
@@ -3646,6 +3681,8 @@ def _codex_streaming_generator(resp: requests.Response):
             d = ev.get("delta", "")
             if d:
                 yield chunk({"content": d})
+        elif etype == "response.output_item.done" and isinstance(ev.get("item"), dict):
+            done_items.append(ev["item"])
         elif etype == "response.completed" and isinstance(ev.get("response"), dict):
             usage = ev["response"].get("usage")
             if usage:
@@ -3653,7 +3690,7 @@ def _codex_streaming_generator(resp: requests.Response):
                               "completion_tokens": usage.get("output_tokens", 0)}
                 normalized["total_tokens"] = usage.get("total_tokens", sum(normalized.values()))
                 yield "data: " + json.dumps({"choices": [], "usage": normalized}) + "\n\n"
-            _, tcs = _codex_text_and_tools(ev["response"])
+            _, tcs = _codex_text_and_tools(_codex_output_source(ev["response"], done_items))
             if tcs:
                 finish = "tool_calls"
                 for i, tc in enumerate(tcs):
