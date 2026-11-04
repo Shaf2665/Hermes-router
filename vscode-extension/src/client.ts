@@ -41,7 +41,7 @@ function request(
     try {
       url = new URL(urlStr);
     } catch (e) {
-      return reject(new Error(`bad URL: ${urlStr}`));
+      return reject(new Error("Invalid router URL. Check hermesRouter.baseUrl."));
     }
     const lib = url.protocol === "https:" ? https : http;
     const req = lib.request(
@@ -107,7 +107,7 @@ export class RouterClient {
     const { code, body } = await get(`${this.base()}/v1/client-config`, {
       Authorization: `Bearer ${this.apiKey}`, "Cache-Control": "no-cache",
     });
-    if (code === 401 || code === 403) throw new Error("Context sync unauthorized — check hermesRouter.apiKey.");
+    if (code === 401 || code === 403) throw new Error("Context sync unauthorized. Set hermesRouter.apiKey to an active application key from dashboard Connect. The dashboard administrator key cannot be used here.");
     if (code === 404) throw new Error("This router needs the context-sync update. Update the router before using this extension.");
     if (code !== 200) throw new Error(`Context sync HTTP ${code}. Retry when the router is available.`);
     return parseClientConfiguration(JSON.parse(body));
@@ -150,7 +150,7 @@ export class RouterClient {
       try {
         url = new URL(`${this.base()}/v1/chat/completions`);
       } catch {
-        return reject(new Error(`bad URL: ${this.base()}`));
+        return reject(new Error("Invalid router URL. Check hermesRouter.baseUrl."));
       }
       const lib = url.protocol === "https:" ? https : http;
       const body: any = { model: opts.model, messages: opts.messages, stream: true, max_tokens: opts.maxOutputTokens };

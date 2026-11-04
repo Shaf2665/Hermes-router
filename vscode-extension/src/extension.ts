@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { URL } from "url";
 import { RouterClient } from "./client";
 import { StatusBar } from "./statusBar";
 import { DashboardProvider } from "./dashboard";
@@ -85,6 +86,28 @@ export function activate(context: vscode.ExtensionContext) {
     await vscode.env.openExternal(vscode.Uri.parse(url));
   });
   reg("hermesRouter.refresh", refresh);
+  reg("hermesRouter.checkContextSync", async () => {
+    out.show(true);
+    // Do not log keys, query strings, or URL-embedded credentials.
+    try {
+      const target = new URL(makeClient().dashboardUrl());
+      target.username = ""; target.password = ""; target.search = ""; target.hash = "";
+      out.appendLine("Context sync target: " + target.toString());
+    } catch { out.appendLine("Context sync target: invalid URL"); }
+    try {
+      const config = await modelProvider.refreshConfiguration();
+      if (!config.model) throw new Error(config.reason || "No eligible model has confirmed limits.");
+      const m = config.model;
+      const message = `Hermes context: ${m.context_window.toLocaleString()} total tokens ` +
+        `(${m.max_input_tokens.toLocaleString()} input + ${m.max_output_tokens.toLocaleString()} output).`;
+      out.appendLine(message);
+      vscode.window.showInformationMessage(message);
+    } catch (error: any) {
+      const message = error?.message || "Context sync failed.";
+      out.appendLine(message);
+      vscode.window.showErrorMessage(message);
+    }
+  });
   reg("hermesRouter.setAdminCredential", async () => {
     const credential = await vscode.window.showInputBox({
       title: "Hermes Router administrator credential",
