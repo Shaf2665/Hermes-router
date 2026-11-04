@@ -2958,6 +2958,7 @@ def _streaming_with_usage(gen, name: str, model: str | None = None):
     def iterate():
         nonlocal usage, has_output, completed
         buf = ""
+        stream_error = False
         for chunk in gen:
             if time.monotonic() >= deadline:
                 raise requests.Timeout("Router request deadline exceeded")
@@ -2968,6 +2969,8 @@ def _streaming_with_usage(gen, name: str, model: str | None = None):
                     continue
                 try:
                     event = json.loads(line[5:].strip())
+                    if "error" in event:
+                        stream_error = True
                     if isinstance(event.get("usage"), dict):
                         usage = event["usage"]
                     has_output = has_output or any(
@@ -2976,7 +2979,9 @@ def _streaming_with_usage(gen, name: str, model: str | None = None):
                 except (ValueError, TypeError):
                     pass
             yield chunk
-        completed = True
+        # Adapters may report an upstream failure as SSE and finish normally.
+        # Exhausting their generator is not evidence of a successful response.
+        completed = not stream_error
 
     def finalize():
         try:
