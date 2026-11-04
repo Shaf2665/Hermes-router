@@ -2,6 +2,11 @@ import * as vscode from "vscode";
 import { RouterClient, RouterStatus } from "./client";
 import { isDocker, isLocal } from "./cli";
 
+const DASHBOARD_COMMANDS = new Set([
+  "hermesRouter.openWebDashboard", "hermesRouter.restart",
+  "hermesRouter.doctor", "hermesRouter.setAdminCredential",
+]);
+
 export class DashboardProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "hermesRouter.dashboard";
   private view?: vscode.WebviewView;
@@ -15,7 +20,7 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
     view.webview.onDidReceiveMessage((msg) => {
       if (msg?.type === "refresh") {
         void this.refresh();
-      } else if (msg?.type === "command" && typeof msg.command === "string") {
+      } else if (msg?.type === "command" && typeof msg.command === "string" && DASHBOARD_COMMANDS.has(msg.command)) {
         void vscode.commands.executeCommand(msg.command);
       }
     });
@@ -38,8 +43,8 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
   private shell(): string {
     const canRunDoctor = isDocker() || isLocal();
     const doctorButton = canRunDoctor
-      ? `<button class="secondary" onclick="cmd('hermesRouter.doctor')">Run doctor</button>`
-      : `<button class="secondary" onclick="cmd('hermesRouter.doctor')">Doctor info</button>`;
+      ? `<button class="secondary" data-command="hermesRouter.doctor">Run doctor</button>`
+      : `<button class="secondary" data-command="hermesRouter.doctor">Doctor info</button>`;
     // Compact control center. The browser dashboard remains the single place for
     // configuration writes; this panel makes the current state understandable in
     // VS Code without forcing users to read a dense provider table first.
@@ -84,7 +89,11 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
 <script>
   const vscode = acquireVsCodeApi();
   function send(type){ vscode.postMessage({type}); }
-  function cmd(command){ vscode.postMessage({type:'command', command}); }
+  document.addEventListener('click', (event) => {
+    const button = event.target.closest('button');
+    if (button?.dataset.action === 'refresh') send('refresh');
+    else if (button?.dataset.command) vscode.postMessage({type:'command', command:button.dataset.command});
+  });
   function esc(s){ return String(s==null?'':s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
   function num(n){ return n == null ? '0' : Number(n).toLocaleString(); }
   function tok(n){ if(!n) return '0'; if(n>=1e6) return (n/1e6).toFixed(1)+'M'; if(n>=1e3) return (n/1e3).toFixed(1)+'K'; return String(n); }
@@ -97,7 +106,7 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
     if (m.type === 'error') {
       el.innerHTML = '<div class="err">⚠ ' + esc(m.message) + '</div>' +
         '<div class="muted">Check the router URL and run Set Administrator Credential for owner controls. Chat continues to use your application key setting.</div>' +
-        '<div class="actions" style="margin-top:10px"><button onclick="send(\\'refresh\\')">Refresh</button><button class="secondary" onclick="cmd(\\'hermesRouter.openWebDashboard\\')">Open web</button><button onclick="cmd(\\'hermesRouter.setAdminCredential\\')">Set administrator credential</button></div>';
+        '<div class="actions" style="margin-top:10px"><button data-action="refresh">Refresh</button><button class="secondary" data-command="hermesRouter.openWebDashboard">Open web</button><button data-command="hermesRouter.setAdminCredential">Set administrator credential</button></div>';
       return;
     }
     if (m.type !== 'status') return;
@@ -149,14 +158,14 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
 
     el.innerHTML = '<div class="stack">' +
       '<section class="hero"><span class="state '+stateCls+'">'+stateText+'</span><h2>'+headline+'</h2><p>'+detail+'</p></section>' +
-      '<div class="actions"><button onclick="cmd(\\'hermesRouter.openWebDashboard\\')">Open web dashboard</button><button class="secondary" onclick="cmd(\\'hermesRouter.restart\\')">Restart router</button></div>' +
+      '<div class="actions"><button data-command="hermesRouter.openWebDashboard">Open web dashboard</button><button class="secondary" data-command="hermesRouter.restart">Restart router</button></div>' +
       '<div class="metrics"><div class="metric"><div class="label">Ready keys</div><div class="value">'+readyKeys+'/'+totalKeys+'</div></div>' +
       '<div class="metric"><div class="label">Errors</div><div class="value">'+errRate.toFixed(1)+'%</div></div>' +
       '<div class="metric"><div class="label">Tokens</div><div class="value">'+tok(totalTokens)+'</div></div>' +
       '<div class="metric"><div class="label">Spend</div><div class="value">'+usd(totalCost)+'</div></div></div>' +
       '<div class="card"><h3>Router</h3><p>Rotation: <span class="pill">'+esc(mode)+'</span> Cache: <span class="pill">'+(cache.enabled ? Math.round((cache.hit_rate||0)*100)+'%' : 'off')+'</span>'+(sem.enabled ? ' <span class="pill">semantic</span>' : '')+'</p></div>' +
       '<div><h3>Providers needing attention first</h3><div class="list">'+(items.map(i=>i.html).join('') || '<p>No providers configured.</p>')+'</div></div>' +
-      '<div class="actions"><button class="secondary" onclick="send(\\'refresh\\')">Refresh</button>${doctorButton}</div>' +
+      '<div class="actions"><button class="secondary" data-action="refresh">Refresh</button>${doctorButton}</div>' +
       '</div>';
   });
 

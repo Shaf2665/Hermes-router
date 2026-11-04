@@ -58,6 +58,7 @@ The docs read in order, from zero experience to a running, monitored router:
 
 - **[Monitoring](documentation/monitoring.md)** — **web dashboard** (`/dashboard`), **Instances** manager, `hr status`, Prometheus `/metrics`, `/v1/status` (tokens, spend)
 - **[VS Code Extension](documentation/vscode-extension.md)** — monitor & manage the router, and use it as a model in Copilot Chat
+- **[Context synchronization](documentation/context-sync.md)** — keep extension context limits in sync with dashboard settings; coordinated upgrade and troubleshooting
 
 ---
 
@@ -110,12 +111,21 @@ system-wide — `install.sh` only symlinks the `hr` command onto your PATH.
 
 ## Setup
 
-Package update (2026-11-03): [download the VS Code 0.9.6 VSIX](https://github.com/Shaf2665/Hermes-router/releases/download/vscode-v0.9.6/hermes-router-0.9.6.vsix). Use extension version 0.9.6 or newer for administrator controls. Docker images and upgrade instructions are in the setup guide.
+**Context sync:** this source includes extension **0.9.8** and its matching router API.
+Changing **Settings → Context length** updates the extension's effective limits
+every 10 seconds by default, with another check before each chat request. Confirm
+actual model capacities first; a larger setting cannot enlarge a provider's model.
+See [Context synchronization](documentation/context-sync.md) for setup and examples.
 
-**Foundation preview:** see [Local and server setup](documentation/setup.md) for the new
+The published [0.9.7 VSIX](https://github.com/Shaf2665/Hermes-router/releases/download/vscode-v0.9.7/hermes-router-0.9.7.vsix)
+fixes dashboard loading but does not include context sync. Build and install 0.9.8
+from this checkout and update the router together; merging source does not update
+your running server or installed extension.
+
+See [Local and server setup](documentation/setup.md) for the
 Windows starter, persistent Docker Compose installation, administrator/application-key
-migration, first request and SSH/HTTPS server access. These instructions require this preview
-source from [`codex/hermes-upgrade-design`](https://github.com/Shaf2665/Hermes-router/tree/codex/hermes-upgrade-design); the published `main` installer and older images may not contain it yet.
+migration, first request and SSH/HTTPS server access. Use the current `main` source
+for the router and extension; previously published images and packages may lag behind it.
 
 For the initial codebase exploration, see the [graph report](graphify-out/GRAPH_REPORT.md).
 Download [graph.html](graphify-out/graph.html) and open it locally to explore the graph.
@@ -126,7 +136,7 @@ It records the original `9d87915` baseline, before the foundation changes; use t
 (see **[Providers](documentation/providers.md)**).
 
 > **Platform note:** the router runs on **Linux, macOS, and Windows**. The one-liner and
-> `hr` CLI below are for Linux/macOS (and WSL2). On **Windows**, the foundation preview
+> `hr` CLI below are for Linux/macOS (and WSL2). On **Windows**, the current source
 > provides native `install.ps1` and `start.ps1`; Docker is also supported — see
 > **[Local and server setup](documentation/setup.md)**.
 
@@ -161,7 +171,8 @@ curl http://localhost:8319/health
 
 Or open **`http://localhost:8319/`** in a browser for the live monitoring dashboard —
 provider health, request log, cache stats, per-key usage, and an **Instances** tab for
-tracking other Hermes routers or launching Docker-backed ones (it'll ask for your proxy key).
+tracking other Hermes routers or launching Docker-backed ones. Sign in using the separate
+administrator credential; application keys remain for chat.
 
 ### Quick start
 

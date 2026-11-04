@@ -73,6 +73,7 @@ subscription) logins are stored separately under `codex_accounts` (via
 | `HR_USAGE_DB` | `usage.db` | Durable per-key usage/reservation SQLite database; preserve it across upgrades. |
 | `HR_TRUST_PROXY` | `0` | Trust one proxy-provided scheme header only when behind a trusted reverse proxy with no direct public backend access. |
 | `ROUTER_AUTH_FILE` | `./auth.json` | Where keys are stored |
+| `ROUTER_CONTEXT_CONFIG` | `{"context_window":0,"model_limits":{}}` | Persisted minimum context and confirmed per-model capacities. Prefer **Settings → Context length**; dashboard saves apply to new requests without a restart. See [Context synchronization](context-sync.md). |
 | `HERMES_INSTANCES_FILE` | `./instances.json` | Where the dashboard's Instances registry is stored. It may contain generated instance proxy keys and copied provider keys, so keep it private and never commit it. |
 | `CACHE_TTL_SECONDS` | `300` | Response cache lifetime (`0` disables). Entries are namespaced per API key, so different `PROXY_API_KEYS` do not share a cached answer |
 | `LOG_LEVEL` | `INFO` | Logging verbosity |
@@ -80,6 +81,25 @@ subscription) logins are stored separately under `codex_accounts` (via
 | `SEMANTIC_EMBED_TIMEOUT_SECONDS` | `3` | Maximum budget assigned to semantic-cache embedding work |
 | `REASONING_TOKEN_RESERVE` | `4096` | Extra output budget added for reasoning models so hidden chain-of-thought doesn't eat the answer (`0` disables) |
 | `ROTATION_MODE` | `round-robin` | How keys are picked within a provider (set in the dashboard or via `hr mode`) — `round-robin` or `sequential` |
+
+### Context length and the VS Code extension
+
+In **Settings → Context length**, choose **Auto** or a minimum model context.
+The minimum excludes smaller or unknown-capacity models and sets extension
+0.9.8's target budget. Auto uses confirmed capacities for extension discovery;
+other clients retain legacy Auto routing when capacities are unknown.
+
+If discovery does not provide both context and output limits, enter the actual
+provider/account limits under **Confirm model capacities**. These are capacities,
+not limits you can increase beyond what the provider supports. The extension
+reserves output space and respects provider ceilings and application-key scopes.
+
+The dashboard persists one validated JSON object in `ROUTER_CONTEXT_CONFIG` in
+the router's environment file. `context_window: 0` means Auto. `model_limits`
+maps `provider::model` to integer `context_window` and `max_output_tokens` values.
+Keep this file/volume during upgrades. Manual file edits require a process restart;
+dashboard saves do not. See [Context synchronization](context-sync.md) for examples,
+upgrade requirements, and the application-key/admin API boundaries.
 
 ### Advanced settings
 

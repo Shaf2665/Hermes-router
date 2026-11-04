@@ -1,12 +1,12 @@
 # hermes-router — VS Code extension
 
-Package update (2026-11-03): [download the VS Code 0.9.6 VSIX](https://github.com/Shaf2665/Hermes-router/releases/download/vscode-v0.9.6/hermes-router-0.9.6.vsix). Use extension version 0.9.6 or newer for administrator controls. Docker images and upgrade instructions are in the setup guide.
+Context synchronization is available in **extension 0.9.8 from this source checkout**, paired with the matching router. The published [0.9.7 VSIX](https://github.com/Shaf2665/Hermes-router/releases/download/vscode-v0.9.7/hermes-router-0.9.7.vsix) fixes dashboard loading but does not include context synchronization. Build 0.9.8 below; merging source does not update an installed extension or publish a new package.
 
 The Hermes Router extension connects Copilot Chat to your provider pool and offers optional owner controls: provider status, remote restart and the browser dashboard. Hermes routes model requests and tool calls; Copilot owns terminal commands, file edits and MCP tools.
 
-These instructions cover the **foundation source preview**. Previously published Marketplace/VSIX builds may predate the administrator credential command. Use the extension built from the same preview checkout when connecting to the upgraded router; installing an older published extension does not upgrade its authentication behavior.
+Use the router and extension from the same current source checkout. Keep your application key for chat and the separate administrator credential for owner controls. See [Context synchronization](../documentation/context-sync.md) for the coordinated upgrade and verification steps.
 
-## Install the preview
+## Install from source
 
 You need VS Code 1.104 or later and the GitHub Copilot Chat extension for the model picker. Start the router first using [Setup](../documentation/setup.md).
 
@@ -15,11 +15,13 @@ From this checkout:
 ```bash
 cd vscode-extension
 npm ci
+npm run check
+npm test
 npm run compile
 npm run package
 ```
 
-In VS Code, run **Extensions: Install from VSIX…** and choose the generated file. For a published release, use the [Marketplace listing](https://marketplace.visualstudio.com/items?itemName=MohammedShafiq.hermes-router) or [GitHub releases](https://github.com/Shaf2665/Hermes-router/releases); check that release's migration notes before mixing versions.
+In VS Code, run **Extensions: Install from VSIX…**, choose `hermes-router-0.9.8.vsix`, then run **Developer: Reload Window**. For a published release, use the [Marketplace listing](https://marketplace.visualstudio.com/items?itemName=MohammedShafiq.hermes-router) or [GitHub releases](https://github.com/Shaf2665/Hermes-router/releases); check that release's migration notes before mixing versions.
 
 ## Connect chat with an application key
 
@@ -33,9 +35,23 @@ In VS Code Settings, search for `hermesRouter`:
 | `hermesRouter.apiKey` | The application key, for chat/inference only. Keep your existing setting when upgrading. |
 | `hermesRouter.hrPath` | `hr`, or the path to the Bash CLI for Linux/macOS/WSL host controls. |
 | `hermesRouter.dockerContainer` | Optional container name for controls through the host's Docker CLI. |
-| `hermesRouter.refreshSeconds` | Status refresh interval; default 10 seconds. |
+| `hermesRouter.refreshSeconds` | Context limits and status refresh interval; default 10 seconds, minimum 3. Each new chat request also checks context settings. |
 
-Open Copilot Chat, open its model picker, and select **hermes-router**. Text streams through your configured providers. Tool calling in agent mode requires a configured model with confirmed tool support; provider prices and limits still apply.
+Before opening the model picker, confirm model capacities as described below. Open Copilot Chat, open its model picker, and select **hermes-router**. Text streams through your configured providers. Tool calling in agent mode requires a compatible configured model; provider prices and limits still apply.
+
+## Context synchronization (0.9.8+)
+
+Think of the dashboard as the control knob and the extension as its display. In the browser dashboard, open **Settings → Context length** and choose **Minimum model context**. The extension reads the effective input/output limits using its application key, refreshes them every 10 seconds by default, and checks again before each chat request. No administrator credential is needed for that read.
+
+Open **Confirm model capacities** if discovery has not supplied both limits. Select the model, enter its provider-documented **Total context tokens** and **Maximum output tokens**, then click **Save confirmed limits**. Use the limits for your actual provider/account; selecting 256K cannot enlarge a smaller model. Unknown capacities are excluded from extension discovery, even in Auto mode.
+
+The selected minimum filters eligible models and sets the extension's target budget. **Auto** uses confirmed model capacities. Hermes reserves room for output and uses the lowest safe input/output budgets across the caller's eligible models. Provider ceilings can therefore make the displayed total smaller than the selected minimum.
+
+For one model with a confirmed 512,000-token context and at least 8,192 output tokens, choosing **256K** advertises **247,808 input + 8,192 output = 256,000 total**. With **Auto**, that model advertises **503,808 input + 8,192 output**.
+
+Saves apply to new requests without restarting Hermes. A conversation that still fits a reduced limit can continue; an oversized conversation must be shortened. A change between the final check and sending returns a retry error. Existing admitted responses keep their settings. Token counting uses a conservative UTF-8 byte estimate, including tools, so usable text may be smaller than a provider-specific tokenizer would allow.
+
+See [Context synchronization](../documentation/context-sync.md) for API details, a compatibility table, and a step-by-step verification.
 
 ## Optional administrator controls
 
@@ -62,7 +78,7 @@ Provider credentials, model overrides, key rotation, optional features, applicat
 
 With a router in Docker, set `hermesRouter.dockerContainer` to its container name. **Restart Router** then runs `docker restart <container>` on the host. Doctor and Codex import require the `:cli` image and the host Docker CLI. Updating an image requires pulling/rebuilding and recreating the container; the extension reports this instead of running an in-container update.
 
-The browser/remote restart endpoint only reports success on an installation with a supported restart helper. Native Windows and a minimal Docker image can return **409** with a remedy; a container restart policy does not make a missing helper supported. Use `docker restart <container>` on the host, or stop the native Windows router and rerun `start.ps1` in PowerShell. See [Setup](../documentation/setup.md) for the preview's persistent Compose configuration and native Windows installation.
+The browser/remote restart endpoint only reports success on an installation with a supported restart helper. Native Windows and a minimal Docker image can return **409** with a remedy; a container restart policy does not make a missing helper supported. Use `docker restart <container>` on the host, or stop the native Windows router and rerun `start.ps1` in PowerShell. See [Setup](../documentation/setup.md) for the persistent Compose configuration and native Windows installation.
 
 Native Windows supports browser configuration and chat. The extension's local `hr` controls still require Linux/macOS/WSL, or Docker controls through the host Docker CLI. A remote owner credential does not grant SSH or host command access.
 
@@ -71,7 +87,10 @@ Native Windows supports browser configuration and chat. The extension's local `h
 - **Chat returns 401:** check `hermesRouter.apiKey` is a live application key for this router. A revoked key fails new requests immediately.
 - **Owner panel returns 401/403 or asks for a credential:** run **Set Administrator Credential** and use `ADMIN_API_KEY`. Changing the application key will not grant owner access.
 - **Router unreachable:** check `baseUrl`, the running process and `/health`. A live process can still have no usable provider; verify a real request from Connect.
-- **Model missing from Copilot's picker:** check VS Code/Copilot Chat requirements and reload the editor after installing the preview VSIX.
+- **Still shows about 40K:** check that the installed Hermes extension is 0.9.8, reload after installation, and verify the router URL points to the upgraded instance. The published 0.9.7 build does not synchronize context limits.
+- **Router update required / client-config returns 404:** update the router as well as the extension; a container restart alone does not replace its image.
+- **Model missing from Copilot's picker:** check VS Code/Copilot Chat requirements, the application key's scope, and confirmed context/output limits in the browser dashboard. At least one eligible model must fit the minimum; lower the minimum or add a compatible model if necessary.
+- **Dashboard stuck on “Loading…”:** reload after installing the current VSIX, which retains the published 0.9.7 dashboard fix. Owner status still requires **Set Administrator Credential**.
 - **`hr` not found:** use the documented native Windows start/stop commands, WSL, or configure Docker controls. Browser configuration and inference do not require `hr` on the editor's host.
 - **Restart rejected:** follow the returned remedy. Success is only reported after a successful API response; a network failure is not treated as a completed restart.
 

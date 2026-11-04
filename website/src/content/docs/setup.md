@@ -4,16 +4,22 @@ description: Install Hermes Router on Windows, Windows Server, or Linux, with or
 ---
 # Set up Hermes locally or on a server
 
-These instructions apply to the **foundation preview in this source checkout**. The public `main` branch and previously published Docker images may still contain the earlier version. Use the tested preview source/archive supplied with this change; do not mix its dashboard or Python modules with an older install.
+These instructions apply to the **current `main` source checkout**. Published Docker images and extension packages may lag behind source changes. Update the router's dashboard and Python modules together; do not copy individual new files into an older install.
 
-Get the preview from GitHub into a new directory:
+Get the current source from GitHub into a new directory:
 
 ```bash
-git clone --branch codex/hermes-upgrade-design --single-branch https://github.com/Shaf2665/Hermes-router.git Hermes-router-preview
-cd Hermes-router-preview
+git clone --branch main --single-branch https://github.com/Shaf2665/Hermes-router.git Hermes-router
+cd Hermes-router
 ```
 
-Without Git, download the [preview source ZIP](https://github.com/Shaf2665/Hermes-router/archive/refs/heads/codex/hermes-upgrade-design.zip) and extract it. Run the platform instructions below from that extracted folder. This branch contains the foundation changes; it has not been merged into `main`.
+Without Git, download the [main source ZIP](https://github.com/Shaf2665/Hermes-router/archive/refs/heads/main.zip) and extract it. Run the platform instructions below from that folder.
+
+For dashboard-to-extension context sync, use the router from this source and build
+**extension 0.9.8** as described in [VS Code Extension](/vscode-extension/).
+Confirm your model capacities after upgrading, then verify synchronization using
+the [context guide](/context-sync/). Published 0.9.7 fixes dashboard loading but
+does not contain context sync; restarting an old container does not install new code.
 
 Hermes runs the API and dashboard together. The Vercel website is documentation, not your private router. You need Python 3.10+ for a native installation, or Docker with Compose. You also need one provider account/key or a running local model. Provider usage may cost money; Hermes does not supply a subscription.
 
@@ -28,7 +34,10 @@ The images use Linux containers. Docker Desktop is [not supported on Windows Ser
 
 ## Published packages (2026-11-03)
 
-Docker Hub provides `shafiq735/hermes-router:providers-20261103` and `:providers-20261103-cli`, for Linux AMD64 and ARM64. The `latest` and `cli` tags track this release. Use a dated tag for reproducible installs.
+The earlier `shafiq735/hermes-router:providers-20261103` and `:providers-20261103-cli`
+images are for Linux AMD64 and ARM64. These dated images predate context sync.
+Use the source-based Docker setup below for this feature; moving `latest` and `cli`
+tags are not a guarantee that a specific source change is included.
 
 For a fresh install without building source, run this single command in PowerShell or Bash:
 
@@ -42,7 +51,7 @@ Use `providers-20261103-cli` instead if you need `docker exec hermes-router hr s
 docker exec hermes-router python -c "from pathlib import Path; print(next(x.split('=',1)[1] for x in Path('/app/data/.env').read_text().splitlines() if x.startswith('ADMIN_API_KEY=')))"
 ```
 
-The matching [VS Code 0.9.6 VSIX](https://github.com/Shaf2665/Hermes-router/releases/download/vscode-v0.9.6/hermes-router-0.9.6.vsix) can be installed using **Extensions: Install from VSIX…**. Use extension version 0.9.6 or newer for the administrator command.
+The published [VS Code 0.9.7 VSIX](https://github.com/Shaf2665/Hermes-router/releases/download/vscode-v0.9.7/hermes-router-0.9.7.vsix) includes administrator controls and the dashboard-loading fix. For context sync, build 0.9.8 from this checkout and install it using **Extensions: Install from VSIX…**.
 
 Before upgrading an existing container, back up its configuration and mounted data. Pulling an image does not upgrade a running container: recreate it with the same volume, environment variables, ports and restart policy. Old installs that stored `.env` or `auth.json` only inside `/app` must copy them into the mounted data directory before recreation. Keep application keys for inference; retrieve the separate administrator key for dashboard access. See the backup section below.
 
@@ -50,7 +59,7 @@ Before upgrading an existing container, back up its configuration and mounted da
 
 ### Windows (PowerShell)
 
-Install Python 3.10+ with its PATH option enabled. Extract the preview archive to a folder you can write to, then open PowerShell there. For example:
+Install Python 3.10+ with its PATH option enabled. Extract the source archive to a folder you can write to, then open PowerShell there. For example:
 
 ```powershell
 cd D:\Hermes-router
@@ -89,7 +98,7 @@ For a native installation that should survive reboot, follow the Linux systemd o
 
 ### Docker on your computer
 
-Start Docker Desktop (or Docker Engine), then run from the preview source folder:
+Start Docker Desktop (or Docker Engine), then run from the source folder:
 
 ```bash
 docker compose up -d --build
@@ -154,20 +163,18 @@ Inside Docker, `127.0.0.1` means the container. Docker Desktop can use `http://h
 
 The simplest server path uses Docker Compose and SSH access. Install Docker Engine and the Compose plugin using [Docker's instructions for your distribution](https://docs.docker.com/engine/install/); for Ubuntu use the [official Ubuntu guide](https://docs.docker.com/engine/install/ubuntu/).
 
-Transfer the preview source archive from your computer using `scp`, or use a published tested release checkout once available. For example, when the supplied archive is named `hermes-foundation.zip`:
+For a first install, connect by SSH and clone `main` into a new directory:
 
 ```bash
-scp hermes-foundation.zip USER@SERVER:~/
 ssh USER@SERVER
-mkdir -p ~/hermes-router-preview
-unzip ~/hermes-foundation.zip -d ~/hermes-router-preview
-cd ~/hermes-router-preview
+git clone --branch main --single-branch https://github.com/Shaf2665/Hermes-router.git ~/hermes-router
+cd ~/hermes-router
 docker compose up -d --build
 docker compose ps
 curl --fail http://127.0.0.1:8319/health
 ```
 
-Replace `USER` and `SERVER` with your SSH account and server address. Use a new directory for a first install. The `unzip` utility must be installed. Docker commands require an account authorized to use the daemon; follow your server's administration policy rather than changing socket permissions.
+Replace `USER` and `SERVER` with your SSH account and server address. Git must be installed; alternatively transfer and extract the main source ZIP. For an existing installation, use the backup/update section below. Docker commands require an account authorized to use the daemon; follow your server's administration policy rather than changing socket permissions.
 
 On your **own computer**, open an SSH tunnel:
 
@@ -181,10 +188,10 @@ This needs no public router port or domain. `restart: unless-stopped` restarts t
 
 ### Linux directly (without Docker)
 
-Transfer and extract the same archive to a permanent directory owned by the account that will run Hermes. Use a Python 3.10+ installation with its `venv` module and Bash; on Ubuntu/Debian, install the `python3-venv` package if creating the environment fails.
+Clone or extract the same current source to a permanent directory owned by the account that will run Hermes, such as `~/hermes-router`. Use a Python 3.10+ installation with its `venv` module and Bash; on Ubuntu/Debian, install the `python3-venv` package if creating the environment fails.
 
 ```bash
-cd ~/hermes-router-preview
+cd ~/hermes-router
 bash install.sh
 ./hermes-router start
 ```
@@ -265,6 +272,11 @@ For dashboard-managed Docker instances, the launcher uses the named `<container-
 
 For native installs, stop Hermes and back up `.env`, `auth.json`, `usage.db`, `instances.json`, and optional `cache.db`/`router_state.json` where present. Run the installer again after updating source, then restart. Existing settings are preserved.
 
+For context sync, keep the persisted environment file containing `ROUTER_CONTEXT_CONFIG`.
+If the server has custom changes, preserve and reconcile them before applying `main`.
+Build/install the matching extension and follow [Verify after upgrading](/context-sync/#verify-after-upgrading).
+The merge, router deployment, VSIX installation, and package publication are separate steps.
+
 Lost admin credential: retrieve `ADMIN_API_KEY` from the local environment file using filesystem/SSH access. To rotate it, replace its value with a new strong random value and restart. If the value is supplied by a service/container environment variable, rotate that source too. Never reset all client keys merely to recover dashboard access.
 
 Application key revoked or replaced: create a new key through the authenticated dashboard and update that client. Revocation rejects new requests immediately; an already admitted response may finish. Use the usage screen to distinguish current, estimated and reported amounts.
@@ -283,4 +295,4 @@ Application key revoked or replaced: create a new key through the authenticated 
 | Remote dashboard works, client cannot connect | Use the server's HTTPS address or the client's own SSH tunnel; `localhost` always means the machine running that client. |
 | Restart is unsupported in the dashboard | Restart using `start.ps1`, the service manager or `docker compose restart` on the host. |
 
-The broader OmniRoute parity work remains staged. This preview does not claim support for every provider, Responses/Gemini/media endpoint, memory engine or agent protocol in that roadmap.
+The broader OmniRoute parity work remains staged. This source does not claim support for every provider, Responses/Gemini/media endpoint, memory engine or agent protocol in that roadmap.
