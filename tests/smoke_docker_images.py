@@ -18,6 +18,8 @@ class Upstream(BaseHTTPRequestHandler):
     def log_message(self,*args): pass
     def do_POST(self):
         body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        if body['model']=='custom-smoke': assert self.headers.get('Authorization')=='Bearer replacement-key'
+        if body['model']=='local-smoke': assert self.headers.get('Authorization') is None
         payload=json.dumps({'model':body['model'],'choices':[{'message':{'role':'assistant','content':'OK'},'finish_reason':'stop'}],'usage':{'prompt_tokens':1,'completion_tokens':1}}).encode()
         self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(payload)));self.end_headers();self.wfile.write(payload)
 upstream=ThreadingHTTPServer(('127.0.0.1',18320),Upstream)
@@ -70,6 +72,8 @@ if attempt == 0:
     expected='model-a'
 else:
     expected='model-b'
+scoped=requests.post(base+'/v1/config/proxy-keys',headers=owner,json={'name':'kimi-smoke','allowed_providers':['kimi']}).json()['key']
+headers={'Authorization':'Bearer '+scoped}
 body={'model':'hermes-router','messages':[{'role':'user','content':'test live model'}],'max_tokens':8}
 answer=requests.post(base+'/v1/chat/completions',headers=headers,json=body).json()
 assert answer['model']==expected,answer
@@ -77,8 +81,20 @@ changed=requests.post(base+'/v1/config/model/kimi',headers=owner,json={'model':'
 assert changed.status_code==200 and changed.json()['restart_required'] is False
 assert requests.post(base+'/v1/chat/completions',headers=headers,json=body).json()['model']=='model-b'
 assert Path('/proc/1/stat').read_text().split()[21]==started
+for provider,model in [('custom_smoke','custom-smoke'),('local','local-smoke')]:
+    config={'label':provider,'base_url':'http://127.0.0.1:18320/v1','model':model,'key':'replacement-key' if provider=='custom_smoke' else ''}
+    if attempt==0:
+        saved=requests.post(base+'/v1/config/custom-providers/'+provider,headers=owner,json=config)
+        assert saved.status_code==200 and saved.json()['restart_required'] is False
+    else:
+        saved=requests.get(base+'/v1/config/providers',headers=owner).json()
+        assert saved['configured_models'][provider]==model
+    appkey=requests.post(base+'/v1/config/proxy-keys',headers=owner,json={'name':'custom-smoke','allowed_providers':[provider]}).json()['key']
+    response=requests.post(base+'/v1/chat/completions',headers={'Authorization':'Bearer '+appkey},json={'model':'hermes-router','messages':[{'role':'user','content':'custom smoke'}],'max_tokens':8})
+    assert response.status_code==200 and response.json()['model']==model
+assert Path('/proc/1/stat').read_text().split()[21]==started
 upstream.shutdown()
-print('health/dashboard/auth/live provider/model/rotation/settings/persistence/durable usage OK')
+print('health/dashboard/auth/live provider/custom/local/model/rotation/settings/persistence/durable usage OK')
 '''
 try:
     docker('volume','create',volume)

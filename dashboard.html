@@ -6,6 +6,7 @@
 <title>Hermes Router — Dashboard</title>
 <style>
 [hidden]{display:none!important}
+#cfg-custom-name-row{display:grid;gap:8px}
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
   --bg:#0f1117;--surface:#181c27;--surface2:#1e2333;--border:#2a3050;
@@ -438,7 +439,7 @@ pre{padding:18px;background:var(--surface2);border:1px solid var(--border);borde
 <section class="page" id="page-providers"><div class="page-heading"><h2>Providers</h2><p>One connection for all your AI models.</p></div>
         <div class="provider-workspace">
           <div class="panel provider-setup-panel">
-            <div class="panel-header"><div><h3 class="panel-title">Connect a provider</h3><p class="panel-description">Bring your API key. We’ll take care of the address.</p></div><span class="subtle-label">Simple setup</span></div>
+            <div class="panel-header"><div><h3 class="panel-title">Connect a provider</h3><p class="panel-description">Choose a service or connect your own model server.</p></div><span class="subtle-label">Simple setup</span></div>
             <div class="config-form provider-setup-form">
               <div class="setup-field-group"><div class="setup-field-title"><span>1</span><label for="cfg-key-provider">Choose a provider</label></div>
               <div class="row">
@@ -447,11 +448,12 @@ pre{padding:18px;background:var(--surface2);border:1px solid var(--border);borde
               <p id="cfg-provider-access" class="field-hint"></p>
               <a id="cfg-provider-key-link" target="_blank" rel="noopener noreferrer">Get API key ↗</a>
               <p id="cfg-provider-note" class="field-hint"></p>
-              <label for="cfg-provider-url">Preset base URL</label>
+              <div id="cfg-custom-name-row" hidden><label for="cfg-custom-name">Provider name</label><input id="cfg-custom-name" maxlength="80" placeholder="My model server"></div>
+              <label for="cfg-provider-url" id="cfg-provider-url-label">Preset base URL</label>
               <input id="cfg-provider-url" readonly>
               </div><div class="setup-field-group"><div class="setup-field-title"><span>2</span><label for="cfg-key-value">Add your API key</label></div>
               <input id="cfg-key-value" type="password" placeholder="paste provider API key" autocomplete="off">
-              <p class="field-hint">Stored on your router. Never saved in your browser.</p></div><div class="setup-field-group"><div class="setup-field-title"><span>3</span><strong>Choose your models</strong></div>
+              <p class="field-hint" id="cfg-provider-key-help">Stored on your router. Never saved in your browser.</p><label id="cfg-no-key-row" class="model-choice" hidden><input type="checkbox" id="cfg-no-key"> No API key (local or unauthenticated server)</label></div><div class="setup-field-group"><div class="setup-field-title"><span>3</span><strong>Choose your models</strong></div>
               <button class="btn" onclick="runAction(this,()=>loadProviderModels())">Refresh model list</button>
               <p class="field-hint" id="cfg-provider-model-status" role="status"></p>
               <div id="cfg-provider-models" style="max-height:220px;overflow:auto"></div>
@@ -470,7 +472,7 @@ pre{padding:18px;background:var(--surface2);border:1px solid var(--border);borde
             <p>Add the providers you use, then connect your coding tools with a single Hermes application key.</p>
             <div class="guide-note"><strong>A key for each purpose</strong><p>Provider keys connect Hermes to AI services. Application keys connect your tools to Hermes.</p></div>
             <div class="guide-note"><strong>Stay in control</strong><p>Only the models you select are saved. Free tiers and usage limits depend on the provider.</p></div>
-            <div class="guide-next"><strong>After you save</strong><p>Restart to apply your models, then test a request in Connect.</p><button class="btn" onclick="showPage('connect')">Connect a tool</button></div>
+            <div class="guide-next"><strong>After you save</strong><p>Changes apply immediately. Test a request in Connect.</p><button class="btn" onclick="showPage('connect')">Connect a tool</button></div>
             <details class="rotation-settings"><summary>Key rotation settings</summary>            <div class="config-form">
               <label>Key rotation</label>
               <select id="cfg-rotation-value">
@@ -1817,6 +1819,18 @@ function onKeyProviderChange() {
     document.getElementById('cfg-provider-custom-models').value = '';
     document.getElementById('cfg-key-msg').textContent = '';
     if (!preset) return;
+    const editable = !!preset.editable;
+    document.getElementById('cfg-custom-name-row').hidden = provider !== 'custom';
+    document.getElementById('cfg-custom-name').value = '';
+    document.getElementById('cfg-provider-url').readOnly = !editable;
+    document.getElementById('cfg-provider-url-label').textContent = editable ? 'Base URL' : 'Preset base URL';
+    document.getElementById('cfg-provider-url').placeholder = 'https://your-server.example/v1';
+    document.getElementById('cfg-provider-key-link').hidden = editable;
+    document.getElementById('cfg-no-key-row').hidden = !editable;
+    document.getElementById('cfg-no-key').checked = false;
+    document.getElementById('cfg-provider-key-help').textContent = editable
+        ? (preset.has_key ? 'Leave blank to keep the saved key at the same address. Paste a key to replace it.' : 'Optional for local servers. Keys are stored only on your router.')
+        : 'Stored on your router. Never saved in your browser.';
     document.getElementById('cfg-provider-access').textContent = preset.access;
     document.getElementById('cfg-provider-note').textContent = preset.note;
     document.getElementById('cfg-provider-url').value = preset.base_url;
@@ -1834,7 +1848,7 @@ async function loadProviderModels() {
     try {
         const response = await adminFetch('/v1/config/providers/' + encodeURIComponent(provider) + '/models', {
             method: 'POST', headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({key:document.getElementById('cfg-key-value').value.trim()})
+            body: JSON.stringify({key:document.getElementById('cfg-key-value').value.trim(), base_url:document.getElementById('cfg-provider-url').value.trim(), clear_key:document.getElementById('cfg-no-key').checked})
         });
         const data = await response.json();
         if (generation !== providerSelectionGeneration || session !== sessionGeneration || !authenticated) return;
@@ -1849,7 +1863,8 @@ async function loadProviderModels() {
 async function addKey() {
     const provider = document.getElementById('cfg-key-provider').value;
     const key = document.getElementById('cfg-key-value').value.trim();
-    if (!key) {
+    const editable = !!configProviders?.presets?.[provider]?.editable;
+    if (!key && !editable) {
         setMsg('cfg-key-msg', 'Enter a key first.', false);
         return;
     }
@@ -1858,12 +1873,25 @@ async function addKey() {
         setMsg('cfg-key-msg', 'Select at least one model or enter valid model IDs.', false);
         return;
     }
+    let target = provider;
+    const body = {key, model: models.join(',')};
+    if (editable) {
+        body.label = provider === 'custom' ? document.getElementById('cfg-custom-name').value.trim() : configProviders.presets[provider].label;
+        if (provider === 'custom') {
+            const slug = body.label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0,48);
+            if (!slug) { setMsg('cfg-key-msg', 'Enter a provider name using letters or numbers.', false); return; }
+            target = 'custom_' + slug;
+            body.create = true;
+        }
+        body.base_url = document.getElementById('cfg-provider-url').value.trim();
+        body.clear_key = document.getElementById('cfg-no-key').checked;
+    }
     const generation = providerSelectionGeneration, session = sessionGeneration;
     try {
-        const r = await adminFetch('/v1/config/keys/'  + encodeURIComponent(provider), {
+        const r = await adminFetch((editable ? '/v1/config/custom-providers/' : '/v1/config/keys/') + encodeURIComponent(target), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ key, model: models.join(',') }),
+            body: JSON.stringify(body),
         });
         const d = await r.json();
         if (!r.ok) {
@@ -1875,7 +1903,13 @@ async function addKey() {
         if (generation !== providerSelectionGeneration) return;
         document.getElementById('cfg-key-value').value = '';
         configProviders.configured_models[provider] = models.join(',');
-        setMsg('cfg-key-msg', `Saved — ${provider}: ${models.length} model(s), ${d.total_keys} key(s). ${d.restart_required ? "Restart Hermes to apply." : "Applied immediately. Provider checks run in the background."}`, true);
+        if (editable) {
+            await loadConfigProviders();
+            if (generation !== providerSelectionGeneration || session !== sessionGeneration || !authenticated) return;
+            document.getElementById('cfg-key-provider').value = target;
+            onKeyProviderChange();
+        }
+        setMsg('cfg-key-msg', `Saved — ${editable ? body.label : provider}: ${models.length} model(s), ${d.total_keys} key(s). ${d.restart_required ? "Restart Hermes to apply." : "Applied immediately. Provider checks run in the background."}`, true);
         await refresh();
     }
     catch (e) {

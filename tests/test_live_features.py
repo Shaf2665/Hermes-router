@@ -78,9 +78,8 @@ def test_persistent_toggle_preserves_warm_cache_and_can_reopen(client):
 
 def test_discovery_runs_when_enabled_without_restart(client, monkeypatch):
     done = threading.Event()
-    provider = {'name': 'fake'}
+    provider = {'name': 'fake', 'keys': ['fake-key']}
     monkeypatch.setattr(router, 'PROVIDERS', [provider])
-    monkeypatch.setattr(router.pool, 'first_key', lambda name: 'fake-key')
     monkeypatch.setattr(router, '_refresh_discovered_models', lambda *args: done.set())
     assert client.post('/v1/config/features/model_discovery', headers=ADMIN, json={'enabled': True}).status_code == 200
     assert done.wait(2)

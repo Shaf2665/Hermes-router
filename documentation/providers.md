@@ -14,6 +14,37 @@ Dashboard provider keys and model selections apply immediately, including model 
 Active responses finish normally. Background capability checks may use a small amount of
 provider quota. File-based CLI or environment changes still require a restart.
 
+## Custom providers and local models
+
+Select **Custom provider** for an OpenAI-compatible chat service, or **Local model
+(Ollama / LM Studio)** for a model server you run yourself.
+
+1. Give a new custom provider a name. Each saved name appears in the provider list.
+2. Enter its base URL, including the API path (usually `/v1`).
+3. Paste its API key, or leave it empty for a server that needs no authentication.
+4. Click **Refresh model list**, select models, or type their IDs manually.
+5. Click **Save provider**, then test in **Connect**. Changes apply immediately.
+
+Select a saved entry to edit its address, key or models. A blank key keeps the saved
+key at the same address. Paste a replacement to change it; choose **No API key** to
+clear it. Changing the address requires entering its key again or choosing no key.
+
+Local defaults are `http://localhost:11434/v1` for Ollama and
+`http://localhost:1234/v1` for LM Studio. Start that server and make a model available
+there first. Hermes connects to it; it does not download or run models. See
+[Ollama compatibility](https://github.com/ollama/ollama/blob/main/docs/api/openai-compatibility.mdx)
+and [LM Studio compatibility](https://lmstudio.ai/docs/developer/openai-compat).
+
+**The address is resolved by Hermes, not your browser.** Native Hermes on the same
+PC can use localhost. Docker needs an address reachable from its container. Hermes
+on InstaBox cannot use your PC's localhost: use a private network or authenticated
+reachable endpoint, or run the model server alongside Hermes.
+
+These entries support OpenAI-compatible chat and model-list endpoints. Native-only
+APIs and custom authentication headers are not supported by this form. Keys and
+settings are saved together in the protected `auth.json` volume. Raw saved keys are
+never returned by the dashboard API.
+
 ## Add a provider from the dashboard
 
 Open **Providers**, choose a provider, click **Get API key**, sign in on the provider’s

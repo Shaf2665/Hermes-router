@@ -502,7 +502,39 @@ def _provider_models(provider: dict) -> list[str]:
 
 # ── Provider definitions ───────────────────────────────────────────────────────
 
-def _build_providers(auth_keys=None, model_overrides=None) -> list[dict]:
+def _validated_model(value):
+    if not isinstance(value, str) or len(value) > 8192:
+        raise ValueError("model must be text (up to 8192 characters)")
+    models = list(dict.fromkeys(m.strip() for m in value.split(",") if m.strip()))
+    if not models or any(not re.fullmatch(r"[A-Za-z0-9@+._\-:/]+", m) for m in models):
+        raise ValueError("Enter one or more valid model IDs")
+    return ",".join(models)
+
+
+def _validated_provider_url(value):
+    if not isinstance(value, str) or len(value) > 2048 or any(c.isspace() or ord(c) < 32 for c in value) or "\\" in value:
+        raise ValueError("Enter an HTTP or HTTPS base URL")
+    parsed = urlparse(value)
+    if (parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username is not None
+            or parsed.password is not None or parsed.query or parsed.fragment or parsed.params):
+        raise ValueError("Use an HTTP or HTTPS URL without credentials, query or fragment")
+    try:
+        parsed.port
+    except ValueError:
+        raise ValueError("Invalid server port")
+    return value.rstrip("/")
+
+
+def _custom_provider_configs():
+    try:
+        doc = json.loads(AUTH_FILE.read_text()) if AUTH_FILE.exists() else {}
+        configs = doc.get("custom_providers", {})
+        return configs if isinstance(configs, dict) else {}
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def _build_providers(auth_keys=None, model_overrides=None, custom_configs=None) -> list[dict]:
     env = dict(os.environ)
     for name, value in (model_overrides or {}).items():
         if value is None:
@@ -721,6 +753,21 @@ def _build_providers(auth_keys=None, model_overrides=None) -> list[dict]:
         if keys:
             providers.append({"name": name, "base_url": PROVIDER_PRESETS[name]["base_url"],
                               "model": env.get(name.upper() + "_MODEL", default), "keys": keys})
+
+    configs = _custom_provider_configs() if custom_configs is None else custom_configs
+    for name, config in configs.items():
+        try:
+            url = _validated_provider_url(config["base_url"])
+            model = _validated_model(config["model"])
+            key = config.get("api_key", "")
+            if not isinstance(key, str):
+                continue
+            providers = [p for p in providers if p["name"] != name]
+            providers.append({"name": name, "base_url": url, "model": model,
+                              "keys": [key or "local"], "custom": True,
+                              "headers": {} if key else {"Authorization": None}})
+        except (ValueError, KeyError, TypeError):
+            log.warning("Skipping invalid custom provider configuration")
 
     if not providers:
         log.warning("No providers configured — set GEMINI_API_KEYS, OPENROUTER_API_KEYS, etc. in .env")
@@ -1714,6 +1761,8 @@ def _discover_models(provider: dict, key: str, free_only: bool = False) -> list[
 
 
 def _provider_model_discovery_enabled(provider: dict) -> bool:
+    if provider.get("custom"):
+        return False
     name = provider["name"].upper()
     val = os.environ.get(f"{name}_AUTO_DISCOVER_MODELS")
     if val is None:
@@ -1778,7 +1827,7 @@ def _probe_anthropic(provider: dict, key: str) -> tuple:
     body = {"model": provider["model"], "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1}
     t0 = time.time()
     try:
-        r = _HTTP.post(url, headers=hdrs, json=body, timeout=12)
+        r = _HTTP.post(url, headers=hdrs, json=body, timeout=12, allow_redirects=not provider.get("custom", False))
         latency = (time.time() - t0) * 1000
         if r.status_code == 200:
             return True, latency, provider["model"], "ok"
@@ -1813,7 +1862,7 @@ def _probe_provider(provider: dict, key: str, repair=True) -> tuple:
             "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1}
     t0 = time.time()
     try:
-        r = _HTTP.post(url, headers=hdrs, json=body, timeout=12)
+        r = _HTTP.post(url, headers=hdrs, json=body, timeout=12, allow_redirects=not provider.get("custom", False))
         latency = (time.time() - t0) * 1000
         if r.status_code == 200:
             return True, latency, provider["model"], "ok"
@@ -1821,7 +1870,7 @@ def _probe_provider(provider: dict, key: str, repair=True) -> tuple:
             return False, latency, provider["model"], "rate_limited"
         if r.status_code in (401, 403):
             return False, latency, provider["model"], "auth"
-        if repair and r.status_code in (400, 404) and provider["name"] not in ADDITIONAL_DEFAULTS:
+        if repair and not provider.get("custom") and r.status_code in (400, 404) and provider["name"] not in ADDITIONAL_DEFAULTS:
             # Providers that list paid models alongside free ones — never let
             # auto-discovery silently pick something that costs credits.
             alt = _discover_best_model(provider["base_url"], key, provider.get("headers", {}),
@@ -1829,7 +1878,7 @@ def _probe_provider(provider: dict, key: str, repair=True) -> tuple:
             if alt:
                 body["model"] = alt
                 t0 = time.time()
-                r2 = _HTTP.post(url, headers=hdrs, json=body, timeout=12)
+                r2 = _HTTP.post(url, headers=hdrs, json=body, timeout=12, allow_redirects=not provider.get("custom", False))
                 if r2.status_code == 200:
                     return True, (time.time() - t0) * 1000, alt, "ok"
         return False, (time.time() - t0) * 1000, provider["model"], "http"
@@ -1870,7 +1919,7 @@ def _probe_tools(provider: dict, key: str, model: str) -> bool | None:
     got_response = False
     for choice in ("required", "auto"):
         try:
-            r = _HTTP.post(url, headers=hdrs, json={**base, "tool_choice": choice}, timeout=12)
+            r = _HTTP.post(url, headers=hdrs, json={**base, "tool_choice": choice}, timeout=12, allow_redirects=not provider.get("custom", False))
         except Exception:
             continue   # network hiccup on this attempt — still try the other tool_choice
         if r.status_code != 200:
@@ -1902,7 +1951,7 @@ def _probe_reasoning(provider: dict, key: str, model: str) -> bool:
     body = {"model": model, "max_tokens": 24,
             "messages": [{"role": "user", "content": "Reply with just the word: ready"}]}
     try:
-        r = _HTTP.post(url, headers=hdrs, json=body, timeout=12)
+        r = _HTTP.post(url, headers=hdrs, json=body, timeout=12, allow_redirects=not provider.get("custom", False))
         if r.status_code != 200:
             return False
         choice = (r.json().get("choices") or [{}])[0]
@@ -2141,7 +2190,7 @@ def _initialize_ratings(providers: list, pool_ref):
     }
     for p in providers:
         name  = p["name"]
-        key   = pool_ref.first_key(name)
+        key   = p["keys"][0] if p.get("keys") else None
         if not key:
             new_state[name] = {"rating": _rate_model(p["model"]), "model": p["model"],
                                 "available": False, "latency_ms": 0, "overridden": False}
@@ -2246,7 +2295,7 @@ class CredentialPool:
             }
             log.info(f"  {p['name']}: {len(p['keys'])} key(s) × {len(self.pools[p['name']])} model(s) loaded")
 
-    def get_key(self, provider_name: str, model: str) -> str | None:
+    def get_key(self, provider_name: str, model: str, allowed_keys=None) -> str | None:
         """Return a ready key for (provider, model) per the active mode, or None."""
         with self.lock:
             pool = self.pools.get(provider_name, {}).get(model, deque())
@@ -2255,7 +2304,7 @@ class CredentialPool:
                 # Stay on the current key until it cools; only advance past cooling ones.
                 for _ in range(len(pool)):
                     entry = pool[0]
-                    if entry["cool_until"] <= now:
+                    if entry["cool_until"] <= now and (allowed_keys is None or entry["key"] in allowed_keys):
                         self.key_requests[(provider_name, entry["key"])] += 1
                         return entry["key"]      # do NOT rotate — keep draining this key
                     pool.rotate(-1)
@@ -2264,7 +2313,7 @@ class CredentialPool:
             for _ in range(len(pool)):
                 entry = pool[0]
                 pool.rotate(-1)
-                if entry["cool_until"] <= now:
+                if entry["cool_until"] <= now and (allowed_keys is None or entry["key"] in allowed_keys):
                     self.key_requests[(provider_name, entry["key"])] += 1
                     return entry["key"]
             return None
@@ -3808,7 +3857,7 @@ def forward(provider: dict, key: str, payload: dict, streaming: bool,
         hdrs = {"x-api-key": key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"}
         try:
             return _HTTP.post("https://api.anthropic.com/v1/messages",
-                              headers=hdrs, json=body, stream=streaming, timeout=_upstream_timeout())
+                              headers=hdrs, json=body, stream=streaming, timeout=_upstream_timeout(), allow_redirects=not provider.get("custom", False))
         except requests.exceptions.RequestException as e:
             log.error(f"  Network error → anthropic: {e}")
             return None
@@ -3871,7 +3920,7 @@ def forward(provider: dict, key: str, payload: dict, streaming: bool,
 
     url = provider["base_url"].rstrip("/") + "/chat/completions"
     try:
-        return _HTTP.post(url, headers=headers, json=body, stream=streaming, timeout=_upstream_timeout())
+        return _HTTP.post(url, headers=headers, json=body, stream=streaming, timeout=_upstream_timeout(), allow_redirects=not provider.get("custom", False))
     except requests.exceptions.RequestException as e:
         log.error(f"  Network error → {provider['name']}: {e}")
         return None
@@ -3918,7 +3967,7 @@ def _embed_text(text: str):
             if time.monotonic() >= _req_ctx.deadline:
                 break
             em = provider["embed_model"]
-            key = pool.get_key(provider["name"], em)
+            key = pool.get_key(provider["name"], em, provider.get("keys"))
             if not key:
                 continue
             resp = None
@@ -3954,7 +4003,7 @@ def forward_embeddings(provider: dict, key: str, payload: dict) -> requests.Resp
     body["model"] = provider["embed_model"]   # always the provider's real embed model
     url = provider["base_url"].rstrip("/") + "/embeddings"
     try:
-        return _HTTP.post(url, headers=headers, json=body, timeout=_upstream_timeout())
+        return _HTTP.post(url, headers=headers, json=body, timeout=_upstream_timeout(), allow_redirects=not provider.get("custom", False))
     except requests.exceptions.RequestException as e:
         log.error(f"  Network error → {provider['name']} embeddings: {e}")
         return None
@@ -4414,11 +4463,11 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
 
         if not _budget_candidate_allowed(provider, model, payload):
             continue
-        attempts = pool.key_count(name, model) or 1
+        attempts = len(provider.get("keys", [])) or pool.key_count(name, model) or 1
         for _ in range(attempts):
             if time.monotonic() >= _req_ctx.deadline:
                 return ("error", {"error": {"message": "Router request deadline exceeded", "type": "router_timeout"}}, 504)
-            key = pool.get_key(name, model)
+            key = pool.get_key(name, model, provider.get("keys"))
             if not key:
                 break   # all keys for this (provider, model) are cooling → next candidate
 
@@ -4775,9 +4824,9 @@ def embeddings():
             continue
 
         em = provider["embed_model"]
-        attempts = pool.key_count(name, em) or 1
+        attempts = len(provider.get("keys", [])) or pool.key_count(name, em) or 1
         for _ in range(attempts):
-            key = pool.get_key(name, em)
+            key = pool.get_key(name, em, provider.get("keys"))
             if not key:
                 log.warning(f"All {name} keys cooling — skipping provider")
                 break
@@ -4927,6 +4976,49 @@ def _features_snapshot() -> dict:
 # nothing here is a new mechanism, just an HTTP front-end for the same files.
 # Provider keys, models, rotation and feature toggles apply live after saving.
 
+@app.route("/v1/config/custom-providers/<provider>", methods=["POST"])
+@_locked_access
+def config_custom_provider(provider):
+    err = _admin_check()
+    if err:
+        return err
+    if provider != "local" and not re.fullmatch(r"custom_[a-z0-9][a-z0-9_-]{0,47}", provider):
+        return jsonify({"error": {"message": "Use a custom provider name with letters, numbers, hyphens or underscores"}}), 400
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": {"message": "Expected an object"}}), 400
+    try:
+        url = _validated_provider_url(body.get("base_url"))
+        model = _validated_model(body.get("model"))
+        key = body.get("key", "")
+        label = body.get("label", provider)
+        clear = body.get("clear_key", False)
+        if (not isinstance(key, str) or len(key) > 16384 or any(ord(c) < 32 or ord(c) > 126 for c in key)
+                or not isinstance(label, str) or not 1 <= len(label.strip()) <= 80 or not isinstance(clear, bool)):
+            raise ValueError("Invalid provider name or API key")
+        doc = _read_auth_doc()
+        configs = doc.setdefault("custom_providers", {})
+        if body.get("create") and provider in configs:
+            return jsonify({"error": {"message": "That provider already exists. Select it from the list to edit it."}}), 409
+        old = configs.get(provider, {})
+        key = key.strip()
+        if not key and not clear:
+            if old.get("api_key") and url != old.get("base_url"):
+                raise ValueError("Paste the key for the new address, or select No API key")
+            key = old.get("api_key", "")
+        if clear:
+            key = ""
+        configs[provider] = {"label": label.strip(), "base_url": url, "model": model, "api_key": key}
+        candidate = next(p for p in _build_providers(custom_configs=configs) if p["name"] == provider)
+        _atomic_write_text(AUTH_FILE, json.dumps(doc, indent=2) + "\n")
+    except ValueError as error:
+        return jsonify({"error": {"message": str(error)}}), 400
+    except OSError:
+        return jsonify({"error": {"message": "Could not save provider. Check file permissions and retry."}}), 500
+    _apply_live_provider(provider, candidate, _AUTH_KEYS, {})
+    return jsonify({"provider": provider, "total_keys": int(bool(key)), "restart_required": False})
+
+
 @app.route("/v1/config/providers")
 def config_providers():
     """List of providers the dashboard can build add-key / set-model forms for,
@@ -4934,13 +5026,26 @@ def config_providers():
     err = _admin_check()
     if err:
         return err
+    configs = _custom_provider_configs()
+    local = next((p for p in PROVIDERS if p["name"] == "local"), {})
+    editable = {"custom": {"label": "Custom provider", "base_url": "", "model": ""},
+                "local": {"label": "Local model (Ollama / LM Studio)",
+                          "base_url": local.get("base_url", "http://localhost:11434/v1"),
+                          "model": ",".join(_provider_models(local)) if local else ""}, **configs}
+    presets = dict(PROVIDER_PRESETS)
+    for name, config in editable.items():
+        presets[name] = {"label": config["label"], "base_url": config["base_url"],
+                         "models": config["model"].split(",") if config["model"] else [],
+                         "access": "Your server" if name == "local" else "OpenAI-compatible",
+                         "note": "Ollama: http://localhost:11434/v1. LM Studio: http://localhost:1234/v1. Address must be reachable from Hermes. Localhost means the machine or container running Hermes, not your browser's computer." if name == "local" else "Use an OpenAI-compatible chat API. Enter its base URL and choose your models.",
+                         "key_url": "", "editable": True, "has_key": bool(config.get("api_key"))}
     return jsonify({
-        "key_settable": KEY_SETTABLE_PROVIDERS,
-        "model_settable": list(PROVIDER_MODEL_ENV.keys()),
+        "key_settable": [*KEY_SETTABLE_PROVIDERS, *editable],
+        "model_settable": [p for p in PROVIDER_MODEL_ENV if p not in configs],
         "defaults": PROVIDER_MODEL_DEFAULT,
-        "presets": PROVIDER_PRESETS,
-        "configured_models": {p: _env_read_line(env) or os.environ.get(env, "")
-                              for p, env in PROVIDER_MODEL_ENV.items()},
+        "presets": presets,
+        "configured_models": {**{p: _env_read_line(env) or os.environ.get(env, "")
+                              for p, env in PROVIDER_MODEL_ENV.items()}, **{p: c["model"] for p, c in editable.items()}},
         # Live key count per currently-configured provider, e.g. {"gemini": 6} —
         # informational context for the Access Keys page's provider picker, not
         # an enforced quota split (see monitoring docs on provider scoping).
@@ -4956,7 +5061,8 @@ def config_provider_models(provider):
     if err:
         return err
     preset = PROVIDER_PRESETS.get(provider)
-    if not preset:
+    editable = provider in ("custom", "local") or provider in _custom_provider_configs()
+    if not preset and not editable:
         return jsonify({"error": {"message": "Unknown provider"}}), 404
     body = request.get_json(silent=True)
     if not isinstance(body, dict):
@@ -4965,16 +5071,25 @@ def config_provider_models(provider):
     if not isinstance(key, str) or len(key) > 16384 or any(c in key for c in "\r\n"):
         return jsonify({"error": {"message": "Invalid API key"}}), 400
     key = key.strip()
-    if not key:
+    if editable:
+        try:
+            url = _validated_provider_url(body.get("base_url"))
+        except ValueError as error:
+            return jsonify({"error": {"message": str(error)}}), 400
+        saved = _custom_provider_configs().get(provider, {})
+        if not key and not body.get("clear_key") and url == saved.get("base_url"):
+            key = saved.get("api_key", "")
+        preset = {"base_url": url}
+    if not key and not editable:
         keys = _keys_for_instance_copy(provider)
         key = keys[0] if keys else ""
-    if not key:
+    if not key and not editable:
         return jsonify({"error": {"message": "Paste an API key first"}}), 400
-    headers = {"Authorization": "Bearer " + key}
+    headers = {"Authorization": "Bearer " + key} if key else {}
     if provider == "anthropic":
         headers = {"x-api-key": key, "anthropic-version": "2023-06-01"}
     try:
-        # Fixed public preset host; reject redirects so a key never follows one.
+        # Reject redirects so a key never follows an address change.
         with _HTTP.get(preset["base_url"].rstrip("/") + "/models", headers=headers,
                        timeout=(3, 8), allow_redirects=False, stream=True) as response:
             if response.status_code != 200:
@@ -5006,14 +5121,6 @@ def config_provider_models(provider):
         # Do not return upstream bodies or exception text: either may echo secrets.
         return jsonify({"error": {"message": "Could not load the provider catalog. Use the suggestions or enter a model ID."}}), 502
 
-
-def _validated_model(value):
-    if not isinstance(value, str) or len(value) > 8192:
-        raise ValueError("model must be text (up to 8192 characters)")
-    models = list(dict.fromkeys(m.strip() for m in value.split(",") if m.strip()))
-    if not models or any(not re.fullmatch(r"[A-Za-z0-9@+._\-:/]+", m) for m in models):
-        raise ValueError("Enter one or more valid model IDs")
-    return ",".join(models)
 
 
 def _refresh_provider_capabilities(provider):
@@ -5113,6 +5220,8 @@ def config_model(provider):
     err = _admin_check()
     if err:
         return err
+    if provider in _custom_provider_configs():
+        return jsonify({"error": {"message": "Change this provider's models in the provider setup form"}}), 400
     env_var = PROVIDER_MODEL_ENV.get(provider)
     if not env_var:
         return jsonify({"error": {"message": f"unknown provider: {provider}",
@@ -5140,7 +5249,7 @@ def _refresh_live_models():
     for provider in PROVIDERS:
         if not AUTO_DISCOVER_MODELS:
             break
-        key = pool.first_key(provider["name"])
+        key = provider["keys"][0] if provider.get("keys") else None
         if key:
             try:
                 _refresh_discovered_models(provider, key, pool)
@@ -5295,7 +5404,7 @@ def _parse_allowed_providers(body: dict) -> tuple[dict, str | None]:
     val = [] if body["allowed_providers"] is None else body["allowed_providers"]
     if not isinstance(val, list) or not all(isinstance(x, str) for x in val):
         return {}, "'allowed_providers' must be a list of provider names"
-    known = set(PROVIDER_MODEL_ENV.keys())
+    known = set(PROVIDER_MODEL_ENV) | set(_custom_provider_configs())
     unknown = [x for x in val if x not in known]
     if unknown:
         return {}, f"unknown provider(s): {', '.join(unknown)}"
@@ -5574,7 +5683,8 @@ def status():
         for name, model_pools in pool.pools.items():
             # Retired buckets remain for active requests; report the current model.
             primary = next((p["model"] for p in PROVIDERS if p["name"] == name), None)
-            entries = model_pools.get(primary, []) if primary else []
+            active_keys = next((p["keys"] for p in PROVIDERS if p["name"] == name), [])
+            entries = [e for e in model_pools.get(primary, []) if e["key"] in active_keys] if primary else []
             keys[name] = [
                 {
                     "key_tail": e["key"][-6:],

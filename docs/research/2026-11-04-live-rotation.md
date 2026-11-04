@@ -1,5 +1,8 @@
 # Live key rotation mode
 
+Deployment follow-up: the [custom-provider release](2026-11-04-custom-providers.md)
+subsequently deployed this change to InstaBox and verified live rotation there.
+
 Changing rotation mode in Providers now saves the setting and updates the running
 credential pool under its existing lock. The next key selection uses the new mode.
 Pool position, cooldowns, usage counters and active requests are preserved. Settings

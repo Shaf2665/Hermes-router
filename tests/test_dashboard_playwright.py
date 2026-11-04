@@ -30,6 +30,7 @@ def _free_port():
 def stream_release():
     release = threading.Event()
     release.started = threading.Event()
+    release.requests = []
     yield release
     release.set()
 
@@ -44,6 +45,7 @@ def router_server(tmp_path, stream_release):
             self._send({"data": [{"id": "test-local"}]})
 
         def do_POST(self):
+            stream_release.requests.append(self.headers.get('Authorization'))
             data = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
             if data.get('stream'):
                 self.send_response(200)
@@ -462,3 +464,38 @@ def test_model_change_keeps_active_stream_and_new_requests_use_new_model(router_
     after = requests.post(router_server+'/v1/chat/completions', headers=headers, json=body).json()
     assert after['model'] == 'changed-local'
     assert requests.get(router_server+'/v1/usage',headers=owner).json()['uptime_s'] >= uptime
+
+
+def test_custom_and_local_provider_setup_live(router_server, page, stream_release):
+    login(page, router_server)
+    page.get_by_role('button', name='Providers', exact=True).click()
+    config = page.request.get(router_server+'/v1/config/providers').json()
+    address = config['presets']['local']['base_url']
+    page.locator('#cfg-key-provider').select_option('custom')
+    page.locator('#cfg-custom-name').fill('My server')
+    page.locator('#cfg-provider-url').fill(address)
+    page.locator('#cfg-key-value').fill('first-secret')
+    page.get_by_role('button', name='Refresh model list', exact=True).click()
+    expect(page.locator('#cfg-provider-model-status')).to_contain_text('1 models')
+    page.locator('#cfg-provider-models input').first.check()
+    page.get_by_role('button', name='Save provider', exact=True).click()
+    expect(page.locator('#cfg-key-msg')).to_contain_text('Applied immediately')
+    expect(page.locator('#cfg-key-provider')).to_have_value('custom_my_server')
+    expect(page.locator('#cfg-key-value')).to_have_value('')
+    expect(page.locator('#restart-banner')).not_to_be_visible()
+    page.locator('#cfg-key-value').fill('replacement-secret')
+    page.get_by_role('button', name='Save provider', exact=True).click()
+    expect(page.locator('#cfg-key-value')).to_have_value('')
+    key = page.request.post(router_server+'/v1/config/proxy-keys', headers={'Authorization':'Bearer '+ADMIN_KEY}, data={'name':'custom-client', 'allowed_providers':['custom_my_server']}).json()['key']
+    result = page.request.post(router_server+'/v1/chat/completions', headers={'Authorization':'Bearer '+key}, data={'model':'hermes-router', 'messages':[{'role':'user','content':'custom request'}], 'max_tokens':8})
+    assert result.status == 200 and result.json()['model'] == 'test-local'
+    assert stream_release.requests[-1] == 'Bearer replacement-secret'
+    page.locator('#cfg-key-provider').select_option('local')
+    expect(page.locator('#cfg-provider-url')).to_have_value(address)
+    page.get_by_role('button', name='Save provider', exact=True).click()
+    expect(page.locator('#cfg-key-msg')).to_contain_text('Applied immediately')
+    localkey = page.request.post(router_server+'/v1/config/proxy-keys', headers={'Authorization':'Bearer '+ADMIN_KEY}, data={'name':'local-client', 'allowed_providers':['local']}).json()['key']
+    result = page.request.post(router_server+'/v1/chat/completions', headers={'Authorization':'Bearer '+localkey}, data={'model':'hermes-router', 'messages':[{'role':'user','content':'local request'}], 'max_tokens':8})
+    assert result.status == 200
+    assert stream_release.requests[-1] is None
+    assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')

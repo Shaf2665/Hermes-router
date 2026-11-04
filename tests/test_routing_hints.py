@@ -9,7 +9,7 @@ class _Pool:
     def key_count(self, _provider, _model):
         return 1
 
-    def get_key(self, _provider, _model):
+    def get_key(self, _provider, _model, allowed_keys=None):
         return "provider-key"
 
     def mark_key_down(self, *_args, **_kwargs):

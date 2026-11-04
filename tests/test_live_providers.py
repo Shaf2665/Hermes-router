@@ -135,3 +135,71 @@ def test_rotation_failed_save_and_application_access_leave_runtime_unchanged(cli
     result = client.post('/v1/config/rotation', headers=ADMIN, json=body)
     assert result.status_code == 500
     assert router.ROTATION_MODE == router.pool.mode == 'round-robin'
+
+
+def test_custom_provider_edits_are_live_persistent_and_keep_keys_private(client):
+    path = '/v1/config/custom-providers/custom_lab'
+    body = {'label': 'Lab', 'base_url': 'http://localhost:1234/v1/', 'model': 'model-a', 'key': 'secret-first'}
+    assert client.post(path, headers=ADMIN, json=body).json['restart_required'] is False
+    old = next(p for p in router.PROVIDERS if p['name'] == 'custom_lab')
+    assert old['base_url'] == 'http://localhost:1234/v1'
+    body.update(base_url='http://localhost:1235/v1', key='secret-second')
+    assert client.post(path, headers=ADMIN, json=body).status_code == 200
+    current = next(p for p in router.PROVIDERS if p['name'] == 'custom_lab')
+    assert current['keys'] == ['secret-second'] and old['keys'] == ['secret-first']
+    assert router.pool.get_key('custom_lab', 'model-a', current['keys']) == 'secret-second'
+    assert router.pool.get_key('custom_lab', 'model-a', old['keys']) == 'secret-first'
+    assert next(p for p in router._build_providers() if p['name'] == 'custom_lab')['keys'] == ['secret-second']
+    visible = client.get('/v1/config/providers', headers=ADMIN)
+    assert 'secret-first' not in visible.text and 'secret-second' not in visible.text
+    assert visible.json['presets']['custom_lab']['has_key'] is True
+    assert client.get('/v1/status', headers=ADMIN).json['providers']['custom_lab']['keys'][0]['key_tail'] == 'second'
+    assert router._parse_allowed_providers({'allowed_providers': ['custom_lab']})[1] is None
+    assert client.post(path, headers=ADMIN, json={**body, 'key': '', 'model': 'model-b'}).status_code == 200
+    assert router._custom_provider_configs()['custom_lab']['api_key'] == 'secret-second'
+    changed_url = {**body, 'key': '', 'base_url': 'http://other-server/v1'}
+    assert client.post(path, headers=ADMIN, json=changed_url).status_code == 400
+    assert client.post(path, headers=ADMIN, json={**body, 'create': True}).status_code == 409
+    assert client.post(path, headers=ADMIN, json={**changed_url, 'clear_key': True}).status_code == 200
+    assert router._custom_provider_configs()['custom_lab']['api_key'] == ''
+
+
+def test_local_provider_without_key_and_save_failure(client, monkeypatch):
+    path = '/v1/config/custom-providers/local'
+    body = {'label': 'Local model', 'base_url': 'http://localhost:11434/v1', 'model': 'local-chat'}
+    assert client.post(path, headers={'Authorization': 'Bearer sk-test'}, json=body).status_code == 401
+    result = client.post(path, headers=ADMIN, json=body)
+    assert result.status_code == 200 and result.json['total_keys'] == 0
+    old = router.PROVIDERS[0]
+    assert old['name'] == 'local' and old['headers']['Authorization'] is None
+    assert next(p for p in router._build_providers() if p['name'] == 'local')['model'] == 'local-chat'
+    def fail(*args): raise OSError('read-only')
+    monkeypatch.setattr(router, '_atomic_write_text', fail)
+    result = client.post(path, headers=ADMIN, json={**body, 'model': 'changed'})
+    assert result.status_code == 500 and router.PROVIDERS[0] is old
+
+
+@pytest.mark.parametrize('url', ['file:///etc/passwd', 'https://user:secret@host/v1', 'https://host/v1?key=secret', 'https://host/#frag', 'http://host:99999/v1', 'http://host/\\path', 'https://ho st/v1', None])
+def test_custom_provider_rejects_invalid_urls(client, url):
+    result = client.post('/v1/config/custom-providers/custom_test', headers=ADMIN,
+                         json={'label':'Test', 'base_url':url, 'key':'secret', 'model':'test'})
+    assert result.status_code == 400 and router.PROVIDERS == []
+    assert not router.AUTH_FILE.exists()
+
+
+def test_custom_catalog_does_not_send_saved_key_to_a_new_address(client, monkeypatch):
+    body = {'label':'Lab', 'base_url':'http://localhost:1234/v1', 'model':'model', 'key':'secret'}
+    client.post('/v1/config/custom-providers/custom_lab', headers=ADMIN, json=body)
+    calls = []
+    class Response:
+        status_code = 200
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def iter_content(self, size): yield b'{"data":[{"id":"local-model"}]}'
+    monkeypatch.setattr(router._HTTP, 'get', lambda url, **kw: calls.append((url, kw)) or Response())
+    for url in ['http://localhost:1234/v1', 'http://localhost:1235/v1']:
+        result = client.post('/v1/config/providers/custom_lab/models', headers=ADMIN, json={'base_url':url})
+        assert result.json['models'] == ['local-model']
+    assert calls[0][1]['headers']['Authorization'] == 'Bearer secret'
+    assert calls[1][1]['headers'] == {}
+    assert all(call[1]['allow_redirects'] is False for call in calls)
