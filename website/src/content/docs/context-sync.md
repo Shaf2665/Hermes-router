@@ -74,10 +74,15 @@ proxies, similarly named models, account rate limits, or special batch betas.
 | --- | ---: | ---: | --- |
 | Anthropic / `claude-sonnet-5-5` | 1,000,000 | 128,000 | [Sonnet 5.5](https://platform.claude.com/docs/en/models/sonnet-5-5/overview) |
 | Groq / `qwen/qwen3.8-27b` | 131,072 | 16,384 | [Groq Qwen 3.8 27B](https://console.groq.com/docs/model/qwen/qwen3.8-27b) |
+| OpenRouter / `nvidia/nemotron-3-ultra-550b-a55b:free` | 1,000,000 | 65,536 | [OpenRouter Nemotron 3 Ultra (free)](https://openrouter.ai/nvidia/nemotron-3-ultra-550b-a55b:free) |
 
 With a **256K** minimum, Claude is eligible and Groq Qwen is excluded, including
 failover. To allow both, choose **128K** or lower. Keep the provider's real capacity
 in **Confirm model capacities**; do not enter the selected minimum as its capacity.
+At **1M**, Claude and the listed OpenRouter endpoint can qualify once both limits
+are known; Groq Qwen cannot. A green provider status means keys are ready, not that
+every model qualifies for every request. Hermes selects one eligible model and
+tries another on supported failures; it does not send every prompt to all providers.
 The synchronized client still reserves at most 8,192 tokens for output; a model's
 maximum output capacity is a ceiling, not the reply budget of every request.
 

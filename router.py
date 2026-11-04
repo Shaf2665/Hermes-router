@@ -3074,11 +3074,38 @@ def _to_anthropic_body(payload: dict, model: str) -> dict:
     for msg in payload.get("messages", []):
         role = msg.get("role", "")
         content = _openai_content_to_anthropic(msg.get("content", ""))
-        if role == "system":
+        if role in ("system", "developer"):
             # System content is always plain text in Anthropic's API
             text = " ".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text") if isinstance(content, list) else content
             system_parts.append(text)
         else:
+            if role == "tool":
+                if not msg.get("tool_call_id"):
+                    raise ValueError("Tool results require tool_call_id")
+                role = "user"
+                content = [{"type": "tool_result", "tool_use_id": msg["tool_call_id"],
+                            "content": content}]
+            elif role == "assistant" and msg.get("tool_calls"):
+                if not isinstance(msg["tool_calls"], list):
+                    raise ValueError("tool_calls must be an array")
+                content = list(content) if isinstance(content, list) else (
+                    [{"type": "text", "text": content}] if content else [])
+                for call in msg["tool_calls"]:
+                    if not isinstance(call, dict) or not isinstance(call.get("function"), dict):
+                        raise ValueError("Tool calls require a function object")
+                    fn = call.get("function") or {}
+                    if call.get("type", "function") != "function" or not call.get("id") or not fn.get("name"):
+                        raise ValueError("Tool calls require a function name and id")
+                    args = fn.get("arguments", "{}")
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args)
+                        except (ValueError, TypeError):
+                            raise ValueError("Tool arguments must be a JSON object") from None
+                    if not isinstance(args, dict):
+                        raise ValueError("Tool arguments must be a JSON object")
+                    content.append({"type": "tool_use", "id": call["id"],
+                                    "name": fn["name"], "input": args})
             # Merge consecutive same-role messages (Anthropic requires alternating roles)
             if messages and messages[-1]["role"] == role:
                 messages[-1]["content"] = _merge_anthropic_content(
@@ -3106,6 +3133,36 @@ def _to_anthropic_body(payload: dict, model: str) -> dict:
         body["stream"] = True
     if payload.get("temperature") is not None:
         body["temperature"] = payload["temperature"]
+    if payload.get("tools"):
+        if not isinstance(payload["tools"], list):
+            raise ValueError("tools must be an array")
+        tools = []
+        for tool in payload["tools"]:
+            if not isinstance(tool, dict) or not isinstance(tool.get("function"), dict):
+                raise ValueError("Tools require a function object")
+            fn = tool.get("function") or {}
+            if tool.get("type") != "function" or not fn.get("name"):
+                raise ValueError("Anthropic requires function tool definitions")
+            native = {"name": fn["name"], "input_schema": fn.get("parameters") or {
+                "type": "object", "properties": {}}}
+            if not isinstance(native["input_schema"], dict):
+                raise ValueError("Tool parameters must be a JSON schema object")
+            if fn.get("description") is not None:
+                native["description"] = fn["description"]
+            if "strict" in fn:
+                native["strict"] = fn["strict"]
+            tools.append(native)
+        body["tools"] = tools
+        choice = payload.get("tool_choice", "auto")
+        if choice in (None, "auto", "none", "required"):
+            native_choice = {"type": "any" if choice == "required" else (choice or "auto")}
+        elif isinstance(choice, dict) and choice.get("type") == "function" and isinstance(choice.get("function"), dict) and choice["function"].get("name"):
+            native_choice = {"type": "tool", "name": choice["function"]["name"]}
+        else:
+            raise ValueError("Unsupported tool_choice")
+        if payload.get("parallel_tool_calls") is False and native_choice["type"] != "none":
+            native_choice["disable_parallel_tool_use"] = True
+        body["tool_choice"] = native_choice
     stop = payload.get("stop")
     if stop:
         body["stop_sequences"] = stop if isinstance(stop, list) else [stop]
@@ -3118,7 +3175,14 @@ def _from_anthropic_response(data: dict) -> dict:
         b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"
     )
     stop_reason = data.get("stop_reason", "end_turn")
-    finish_reason = "stop" if stop_reason in ("end_turn", "stop_sequence") else "length"
+    finish_reason = _anthropic_finish_reason(stop_reason)
+    message = {"role": "assistant", "content": content}
+    calls = [{"id": b["id"], "type": "function",
+              "function": {"name": b["name"], "arguments": json.dumps(b.get("input", {}))}}
+             for b in data.get("content", []) if b.get("type") == "tool_use"]
+    if calls:
+        message["tool_calls"] = calls
+        message["content"] = content or None
     usage = data.get("usage", {})
     prompt_tokens = usage.get("input_tokens", 0)
     completion_tokens = usage.get("output_tokens", 0)
@@ -3129,7 +3193,7 @@ def _from_anthropic_response(data: dict) -> dict:
         "model":   data.get("model", ""),
         "choices": [{
             "index":         0,
-            "message":       {"role": "assistant", "content": content},
+            "message":       message,
             "finish_reason": finish_reason,
         }],
         "usage": {
@@ -3147,70 +3211,105 @@ def _from_anthropic_response(data: dict) -> dict:
     return out
 
 
+def _anthropic_finish_reason(reason):
+    return {"tool_use": "tool_calls", "max_tokens": "length",
+            "refusal": "content_filter"}.get(reason, "stop")
+
+
 def _anthropic_streaming_generator(resp: requests.Response):
-    """Translate Anthropic SSE stream to OpenAI SSE format token-by-token."""
-    msg_id       = f"chatcmpl-{int(time.time())}"
-    model        = ""
-    created      = int(time.time())
+    """Translate native text and structured tool events without interpreting text."""
+    msg_id = f"chatcmpl-{int(time.time())}"
+    model = ""
+    created = int(time.time())
     finish_reason = "stop"
-    first_chunk  = True
     usage = {}
+    tools = {}  # Anthropic content index -> contiguous OpenAI tool index/state
 
-    buf = b""
-    for raw_chunk in resp.iter_content(chunk_size=None):
-        buf += raw_chunk
-        while b"\n" in buf:
-            line_bytes, buf = buf.split(b"\n", 1)
-            line = line_bytes.decode("utf-8", errors="replace").strip()
-            if not line.startswith("data: "):
-                continue
-            data_str = line[6:]
-            try:
-                event = json.loads(data_str)
-            except json.JSONDecodeError:
-                continue
+    def chunk(delta, finish=None):
+        return ("data: " + json.dumps({
+            "id": msg_id, "object": "chat.completion.chunk", "created": created,
+            "model": model, "choices": [{"index": 0, "delta": delta,
+                                          "finish_reason": finish}]
+        }) + "\n\n").encode()
 
-            etype = event.get("type")
+    def lines():
+        # Keep chunk_size=None for low-latency token delivery, and decode only
+        # complete lines so a network split cannot corrupt UTF-8 or tool JSON.
+        pending = b""
+        for raw in resp.iter_content(chunk_size=None):
+            pending += raw
+            while b"\n" in pending:
+                line, pending = pending.split(b"\n", 1)
+                yield line
+        if pending:
+            yield pending
 
-            if etype == "message_start":
-                msg    = event.get("message", {})
-                msg_id = msg.get("id", msg_id)
-                model  = msg.get("model", "")
-                usage.update(msg.get("usage") or {})
-                # Emit role chunk
-                chunk = {"id": msg_id, "object": "chat.completion.chunk", "created": created,
-                         "model": model,
-                         "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""},
-                                      "finish_reason": None}]}
-                yield ("data: " + json.dumps(chunk) + "\n\n").encode()
-                first_chunk = False
-
-            elif etype == "content_block_delta":
-                delta = event.get("delta", {})
-                if delta.get("type") == "text_delta":
-                    text  = delta.get("text", "")
-                    chunk = {"id": msg_id, "object": "chat.completion.chunk", "created": created,
-                             "model": model,
-                             "choices": [{"index": 0, "delta": {"content": text},
-                                          "finish_reason": None}]}
-                    yield ("data: " + json.dumps(chunk) + "\n\n").encode()
-
-            elif etype == "message_delta":
-                usage.update(event.get("usage") or {})
-                sr = event.get("delta", {}).get("stop_reason", "end_turn")
-                finish_reason = "stop" if sr in ("end_turn", "stop_sequence") else "length"
-
-            elif etype == "message_stop":
-                chunk = {"id": msg_id, "object": "chat.completion.chunk", "created": created,
-                         "model": model,
-                         "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}]}
-                yield ("data: " + json.dumps(chunk) + "\n\n").encode()
-                if usage:
-                    normalized = {"prompt_tokens": usage.get("input_tokens", 0),
-                                  "completion_tokens": usage.get("output_tokens", 0)}
-                    normalized["total_tokens"] = sum(normalized.values())
-                    yield ("data: " + json.dumps({"choices": [], "usage": normalized}) + "\n\n").encode()
-                yield b"data: [DONE]\n\n"
+    for raw in lines():
+        line = raw.decode("utf-8", errors="replace").strip()
+        if not line.startswith("data:"):
+            continue
+        try:
+            event = json.loads(line[5:].strip())
+        except (ValueError, TypeError):
+            continue
+        etype = event.get("type")
+        index = event.get("index")
+        if etype == "message_start":
+            msg = event.get("message", {})
+            msg_id = msg.get("id", msg_id)
+            model = msg.get("model", "")
+            usage.update(msg.get("usage") or {})
+            yield chunk({"role": "assistant", "content": ""})
+        elif etype == "content_block_start":
+            block = event.get("content_block", {})
+            if block.get("type") == "tool_use":
+                tool_index = len(tools)
+                tools[index] = {"index": tool_index, "input": block.get("input", {}),
+                                "has_delta": False}
+                yield chunk({"tool_calls": [{"index": tool_index, "id": block["id"],
+                    "type": "function", "function": {"name": block["name"], "arguments": ""}}]})
+            elif block.get("type") == "text" and block.get("text"):
+                yield chunk({"content": block["text"]})
+        elif etype == "content_block_delta":
+            delta = event.get("delta", {})
+            if delta.get("type") == "text_delta":
+                yield chunk({"content": delta.get("text", "")})
+            elif delta.get("type") == "input_json_delta" and index in tools:
+                partial = delta.get("partial_json", "")
+                if partial:
+                    tools[index]["has_delta"] = True
+                    yield chunk({"tool_calls": [{"index": tools[index]["index"],
+                                                 "function": {"arguments": partial}}]})
+        elif etype == "content_block_stop" and index in tools:
+            tool = tools[index]
+            if not tool["has_delta"]:
+                # Zero-argument calls may have no deltas; some compatible
+                # gateways instead put the complete object in the start event.
+                yield chunk({"tool_calls": [{"index": tool["index"],
+                    "function": {"arguments": json.dumps(tool["input"])}}]})
+        elif etype == "message_delta":
+            usage.update(event.get("usage") or {})
+            reason = event.get("delta", {}).get("stop_reason")
+            if reason:
+                finish_reason = _anthropic_finish_reason(reason)
+        elif etype == "error":
+            yield b'data: {"error":{"type":"upstream_error","message":"Anthropic stream failed"}}\n\n'
+            yield b"data: [DONE]\n\n"
+            return
+        elif etype == "message_stop":
+            yield chunk({}, finish_reason)
+            if usage:
+                normalized = {"prompt_tokens": usage.get("input_tokens", 0),
+                              "completion_tokens": usage.get("output_tokens", 0)}
+                normalized["total_tokens"] = sum(normalized.values())
+                for key in ("cache_read_input_tokens", "cache_creation_input_tokens"):
+                    if usage.get(key):
+                        normalized[key] = usage[key]
+                yield ("data: " + json.dumps({"choices": [], "usage": normalized}) + "\n\n").encode()
+            yield b"data: [DONE]\n\n"
+            return
+    yield b'data: {"error":{"type":"upstream_error","message":"Anthropic stream ended before completion"}}\n\n'
+    yield b"data: [DONE]\n\n"
 
 
 # ── Anthropic INBOUND translation (accept the Anthropic SDK's /v1/messages) ───
@@ -4540,7 +4639,10 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
             log.info(f"→ Trying {name}/{model} ...{key[-6:]}")
             _req_ctx.attempts += 1
             t0   = time.time()
-            resp = forward(provider, key, payload, streaming, model)
+            try:
+                resp = forward(provider, key, payload, streaming, model)
+            except ValueError as exc:
+                return ("error", {"error": {"message": str(exc), "type": "invalid_request_error"}}, 400)
             elapsed = time.time() - t0
 
             if resp is None:
