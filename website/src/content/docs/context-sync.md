@@ -4,28 +4,33 @@ description: Keep VS Code context limits in sync with dashboard settings, with m
 ---
 # Dashboard and extension context synchronization
 
-Extension 0.9.8 replaces the fixed 32,000-input/8,192-output declaration with
+Extension 0.9.10 replaces the fixed 32,000-input/8,192-output declaration with
 metadata from `GET /v1/client-config`. Upgrade the router and extension together.
 Older routers return an explicit update-needed error; they are not silently
 treated as supporting 256K. Preserve any local server changes when deploying it.
 
-The published 0.9.7 VSIX is a separate dashboard-loading fix; it does not contain
-this feature. Version 0.9.8 in this source checkout includes that fix and context
-synchronization. A GitHub merge alone does not deploy a router, rebuild an image,
+Marketplace 0.9.9 follows the dashboard through the legacy `/v1/models`
+`context_window` field. Its default `hermesRouter.contextWindow: 0` follows the
+server, but a failed lookup (including HTTP 401) silently falls back to 40,192
+tokens when no earlier budget is available. Marketplace 0.9.8 only had manual
+client budgets. These published builds are different from the earlier source-only
+0.9.8 package; source 0.9.10 removes that version collision and includes
+authenticated context diagnostics. A GitHub merge alone does not deploy a router, rebuild an image,
 or install/publish an extension.
 
 | Router | Extension | Result |
 | --- | --- | --- |
-| Current source with `/v1/client-config` | 0.9.8 from this source | Context limits synchronize when eligible models have confirmed capacities. |
+| Current source with `/v1/client-config` | 0.9.10 from this source | Context limits synchronize when eligible models have confirmed capacities. |
+| Router exposing `context_window` in `/v1/models` | Marketplace 0.9.9 | Polls with an application key; failed reads silently retain/fall back to the old budget. |
 | Current source | Published 0.9.7 or earlier | The old fixed client limit remains; upgrade the extension. |
-| Older router without `/v1/client-config` | 0.9.8 | Explicit router-update error; no guessed fallback capacity. |
+| Older router without `/v1/client-config` | 0.9.10 | Explicit router-update error; no guessed fallback capacity. |
 
 ## Operator setup
 
 1. Update the router from this source, preserving `.env`, provider credentials and
-   mounted data; follow [Setup → Backup, update and recover](/setup/#4-backup-update-and-recover).
+   mounted data; follow [Setup → Backup, update and recover](setup.md#4-backup-update-and-recover).
    Rebuild/recreate a source-based Docker installation; restarting an old container
-   does not update its code. Install/build extension 0.9.8 from `vscode-extension`
+   does not update its code. Install/build extension 0.9.10 from `vscode-extension`
    (`npm ci`, `npm run check`, `npm test`, `npm run compile`, `npm run package`).
    Install the generated VSIX and run **Developer: Reload Window** once.
 2. In **Settings → Context length**, inspect **Confirm model capacities**.
@@ -43,6 +48,42 @@ or install/publish an extension.
 5. The extension polls at `hermesRouter.refreshSeconds` (default 10 seconds),
    checks on connection/key changes, and rechecks before every request. VS Code's
    model-change event refreshes the picker without an editor restart.
+
+## A 40K fallback is not proof of the provider limit
+
+For Marketplace 0.9.9, check the HTTP status of `/v1/models` before changing model
+capacities. Repeated 401 responses mean the application key is missing, invalid,
+or revoked. A successful browser dashboard sign-in does not authenticate the
+extension: the browser uses an administrator session.
+
+In dashboard **Connect**, copy an active application key into the VS Code user
+setting `hermesRouter.apiKey`. Do not put an administrator key there, paste secrets
+into issue reports, or save them in a shared workspace. Set
+`hermesRouter.contextWindow` to 0 for the legacy extension and refresh/reselect the
+model. Source 0.9.10 uses the server budget directly and provides **Hermes Router:
+Check Context Sync**; its output shows the target and effective limits, or an
+explicit error. It does not print the application key.
+
+## Verified capacities for the configured models
+
+Checked against official provider documentation on 2026-11-04. These values apply
+to the named models on their direct provider endpoints, not arbitrary compatible
+proxies, similarly named models, account rate limits, or special batch betas.
+
+| Provider / model | Total context tokens | Maximum output tokens | Official documentation |
+| --- | ---: | ---: | --- |
+| Anthropic / `claude-sonnet-5-5` | 1,000,000 | 128,000 | [Sonnet 5.5](https://platform.claude.com/docs/en/models/sonnet-5-5/overview) |
+| Groq / `qwen/qwen3.8-27b` | 131,072 | 16,384 | [Groq Qwen 3.8 27B](https://console.groq.com/docs/model/qwen/qwen3.8-27b) |
+
+With a **256K** minimum, Claude is eligible and Groq Qwen is excluded, including
+failover. To allow both, choose **128K** or lower. Keep the provider's real capacity
+in **Confirm model capacities**; do not enter the selected minimum as its capacity.
+The synchronized client still reserves at most 8,192 tokens for output; a model's
+maximum output capacity is a ceiling, not the reply budget of every request.
+
+**Use discovered limits** removes the saved manual override. It does not consult
+provider documentation or fetch new metadata. If discovery has no complete limits,
+the model becomes unknown again; leave the documented override saved in that case.
 
 ## Verify after upgrading
 

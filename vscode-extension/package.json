@@ -2,7 +2,7 @@
   "name": "hermes-router",
   "displayName": "hermes-router",
   "description": "Control panel for hermes-router \u2014 monitor provider health and manage your multi-provider AI router from VS Code.",
-  "version": "0.9.8",
+  "version": "0.9.10",
   "publisher": "MohammedShafiq",
   "license": "MIT",
   "icon": "icon.png",
@@ -88,6 +88,10 @@
       {
         "command": "hermesRouter.setAdminCredential",
         "title": "Hermes Router: Set Administrator Credential"
+      },
+      {
+        "command": "hermesRouter.checkContextSync",
+        "title": "Hermes Router: Check Context Sync"
       }
     ],
     "menus": {

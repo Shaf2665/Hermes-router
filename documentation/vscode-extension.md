@@ -1,6 +1,6 @@
 # VS Code Extension
 
-Context synchronization is available in **extension 0.9.8 from this source checkout**, paired with the matching router. The published [0.9.7 VSIX](https://github.com/Shaf2665/Hermes-router/releases/download/vscode-v0.9.7/hermes-router-0.9.7.vsix) fixes dashboard loading but does not include context synchronization. Build 0.9.8 below; merging source does not update an installed extension or publish a new package.
+Context synchronization in this source checkout is **extension 0.9.10**, paired with the matching router. Marketplace 0.9.9 uses a separate legacy sync path and can display a 40K fallback when its application-key lookup fails. Do not downgrade to the Marketplace 0.9.8 build. Build/install the source VSIX below for explicit sync diagnostics; a GitHub merge does not publish or install an extension.
 
 The Hermes Router extension connects Copilot Chat to your provider pool and offers optional owner controls: provider status, remote restart and the browser dashboard. Hermes routes model requests and tool calls; Copilot owns terminal commands, file edits and MCP tools.
 
@@ -21,7 +21,7 @@ npm run compile
 npm run package
 ```
 
-In VS Code, run **Extensions: Install from VSIX…**, choose `hermes-router-0.9.8.vsix`, then run **Developer: Reload Window**. For a published release, use the [Marketplace listing](https://marketplace.visualstudio.com/items?itemName=MohammedShafiq.hermes-router) or [GitHub releases](https://github.com/Shaf2665/Hermes-router/releases); check that release's migration notes before mixing versions.
+In VS Code, run **Extensions: Install from VSIX…**, choose `hermes-router-0.9.10.vsix`, then run **Developer: Reload Window**. For a published release, use the [Marketplace listing](https://marketplace.visualstudio.com/items?itemName=MohammedShafiq.hermes-router) or [GitHub releases](https://github.com/Shaf2665/Hermes-router/releases); check that release's migration notes before mixing versions.
 
 ## Connect chat with an application key
 
@@ -39,7 +39,7 @@ In VS Code Settings, search for `hermesRouter`:
 
 Before opening the model picker, confirm model capacities as described below. Open Copilot Chat, open its model picker, and select **hermes-router**. Text streams through your configured providers. Tool calling in agent mode requires a compatible configured model; provider prices and limits still apply.
 
-## Context synchronization (0.9.8+)
+## Context synchronization (0.9.10+)
 
 Think of the dashboard as the control knob and the extension as its display. In the browser dashboard, open **Settings → Context length** and choose **Minimum model context**. The extension reads the effective input/output limits using its application key, refreshes them every 10 seconds by default, and checks again before each chat request. No administrator credential is needed for that read.
 
@@ -87,7 +87,7 @@ Native Windows supports browser configuration and chat. The extension's local `h
 - **Chat returns 401:** check `hermesRouter.apiKey` is a live application key for this router. A revoked key fails new requests immediately.
 - **Owner panel returns 401/403 or asks for a credential:** run **Set Administrator Credential** and use `ADMIN_API_KEY`. Changing the application key will not grant owner access.
 - **Router unreachable:** check `baseUrl`, the running process and `/health`. A live process can still have no usable provider; verify a real request from Connect.
-- **Still shows about 40K:** check that the installed Hermes extension is 0.9.8, reload after installation, and verify the router URL points to the upgraded instance. The published 0.9.7 build does not synchronize context limits.
+- **Still shows about 40K in Marketplace 0.9.9:** check `hermesRouter.apiKey` is an active application key from dashboard **Connect**, not the dashboard administrator key. HTTP 401 on `/v1/models` triggers its silent fallback. Keep `hermesRouter.contextWindow` at 0. Source 0.9.10 reports sync failures instead of inventing a budget; run **Hermes Router: Check Context Sync** to see the connected URL, actual limits, or error.
 - **Router update required / client-config returns 404:** update the router as well as the extension; a container restart alone does not replace its image.
 - **Model missing from Copilot's picker:** check VS Code/Copilot Chat requirements, the application key's scope, and confirmed context/output limits in the browser dashboard. At least one eligible model must fit the minimum; lower the minimum or add a compatible model if necessary.
 - **Dashboard stuck on “Loading…”:** reload after installing the current VSIX, which retains the published 0.9.7 dashboard fix. Owner status still requires **Set Administrator Credential**.

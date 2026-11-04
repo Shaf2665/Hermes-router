@@ -90,7 +90,7 @@ subscription) logins are stored separately under `codex_accounts` (via
 
 In **Settings → Context length**, choose **Auto** or a minimum model context.
 The minimum excludes smaller or unknown-capacity models and sets extension
-0.9.8's target budget. Auto uses confirmed capacities for extension discovery;
+0.9.10's target budget. Auto uses confirmed capacities for extension discovery;
 other clients retain legacy Auto routing when capacities are unknown.
 
 If discovery does not provide both context and output limits, enter the actual

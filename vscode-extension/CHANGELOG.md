@@ -1,12 +1,23 @@
 # Changelog
 
-## 0.9.8
+## 0.9.10
 
+- Add **Check Context Sync** with the connected URL, effective budget, and actionable authentication errors. Never silently advertise a 40K fallback.
 - Requires the matching router from current source; preserves the published 0.9.7 dashboard-loading fix.
 - Read context and output limits from the router instead of advertising a fixed 40K window.
 - Refresh the model picker on settings changes, reconnects and router/key changes; recheck before every chat request.
 - Send the settings revision and output budget with requests; reject stale or oversized requests before inference.
 - Require the matching router context-sync API and confirmed model capacities. Application keys handle sync; administrator credentials stay separate.
+
+## 0.9.9 (Marketplace)
+
+- Follow the dashboard's legacy `/v1/models` context window by default.
+- Retain the old 40K fallback when a lookup fails; 0.9.10 replaces this behavior with explicit errors.
+
+## 0.9.8 (Marketplace)
+
+- Configure the client context and output budget manually.
+- The earlier source-only context-sync package reused this version; use 0.9.10 for the new client-config protocol.
 
 ## 0.9.7
 
