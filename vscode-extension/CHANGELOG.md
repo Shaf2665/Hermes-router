@@ -1,11 +1,19 @@
 # Changelog
 
-## 0.9.7
+## 0.9.8
 
+- Requires the matching router from current source; preserves the published 0.9.7 dashboard-loading fix.
 - Read context and output limits from the router instead of advertising a fixed 40K window.
 - Refresh the model picker on settings changes, reconnects and router/key changes; recheck before every chat request.
 - Send the settings revision and output budget with requests; reject stale or oversized requests before inference.
 - Require the matching router context-sync API and confirmed model capacities. Application keys handle sync; administrator credentials stay separate.
+
+## 0.9.7
+
+- Fix the dashboard remaining on “Loading…” because a generated button broke the webview's JavaScript.
+- Use delegated button actions and restrict the commands accepted from the dashboard.
+- Correct administrator-access error messages: keep the application API key for chat and use **Set Administrator Credential** for the owner panel and remote restart.
+- Add regression coverage for local/remote rendering, dashboard actions and missing administrator credentials.
 
 ## 0.9.6
 

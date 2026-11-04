@@ -2,7 +2,7 @@
   "name": "hermes-router",
   "displayName": "hermes-router",
   "description": "Control panel for hermes-router \u2014 monitor provider health and manage your multi-provider AI router from VS Code.",
-  "version": "0.9.7",
+  "version": "0.9.8",
   "publisher": "MohammedShafiq",
   "license": "MIT",
   "icon": "icon.png",

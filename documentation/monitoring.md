@@ -31,12 +31,15 @@ The following capabilities remain available within those pages:
 - **Models** — override a provider's model(s), and a capability table (rating, tool support,
   reasoning) for every configured model
 - **Add-ons** — toggle optional features on/off, plus live cache stats
+- **Context length** — choose a minimum context and confirm actual model capacities;
+  extension 0.9.8 refreshes its limits automatically. See [Context synchronization](context-sync.md).
 - **Request Log** — the last requests (endpoint, provider, model, latency, complexity score,
   cascade count, tokens, status), filterable by status and endpoint
 
-Every write (add a key, change a model, toggle an add-on, mint/revoke an access key) shows a
-"Restart Required" banner — click it to restart the router in place; the page reconnects
-automatically once it's back.
+Context settings and application-key changes apply to new requests immediately.
+For changes that show a **Restart Required** banner, use the supported restart
+action or restart the hosting process as described in [Setup](setup.md).
+Restarting signs browser sessions out and may interrupt in-flight requests.
 
 It's pure HTML/JS (no framework, no external CDN) and reads/writes only the router's own
 `/v1/*` endpoints — so it adds essentially no memory or CPU to the router itself.

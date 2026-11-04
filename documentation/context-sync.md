@@ -1,16 +1,29 @@
 # Dashboard and extension context synchronization
 
-Extension 0.9.7 replaces the fixed 32,000-input/8,192-output declaration with
+Extension 0.9.8 replaces the fixed 32,000-input/8,192-output declaration with
 metadata from `GET /v1/client-config`. Upgrade the router and extension together.
 Older routers return an explicit update-needed error; they are not silently
-treated as supporting 256K. This change is based on GitHub main; do not overwrite
-uncommitted server changes when deploying it.
+treated as supporting 256K. Preserve any local server changes when deploying it.
+
+The published 0.9.7 VSIX is a separate dashboard-loading fix; it does not contain
+this feature. Version 0.9.8 in this source checkout includes that fix and context
+synchronization. A GitHub merge alone does not deploy a router, rebuild an image,
+or install/publish an extension.
+
+| Router | Extension | Result |
+| --- | --- | --- |
+| Current source with `/v1/client-config` | 0.9.8 from this source | Context limits synchronize when eligible models have confirmed capacities. |
+| Current source | Published 0.9.7 or earlier | The old fixed client limit remains; upgrade the extension. |
+| Older router without `/v1/client-config` | 0.9.8 | Explicit router-update error; no guessed fallback capacity. |
 
 ## Operator setup
 
 1. Update the router from this source, preserving `.env`, provider credentials and
-   mounted data. Install/build extension 0.9.7 (`npm ci`, `npm run check`,
-   `npm test`, `npm run compile`, `npm run package`).
+   mounted data; follow [Setup → Backup, update and recover](setup.md#4-backup-update-and-recover).
+   Rebuild/recreate a source-based Docker installation; restarting an old container
+   does not update its code. Install/build extension 0.9.8 from `vscode-extension`
+   (`npm ci`, `npm run check`, `npm test`, `npm run compile`, `npm run package`).
+   Install the generated VSIX and run **Developer: Reload Window** once.
 2. In **Settings → Context length**, inspect **Confirm model capacities**.
    Use actual provider/account documentation for total context and maximum output.
    Model names alone are not evidence of capacity. Metadata already returned by
@@ -26,6 +39,26 @@ uncommitted server changes when deploying it.
 5. The extension polls at `hermesRouter.refreshSeconds` (default 10 seconds),
    checks on connection/key changes, and rechecks before every request. VS Code's
    model-change event refreshes the picker without an editor restart.
+
+## Verify after upgrading
+
+1. Check `/health` and sign into the same router URL that VS Code uses.
+2. Confirm that the application key can read `GET /v1/client-config`. It should
+   return a model with positive input/output limits, not `model: null`.
+3. Select **128K**, then **256K**, then **Auto**. Use a model whose confirmed
+   capacity supports those choices. Wait for the configured refresh interval
+   after each save and inspect Copilot's model details. Provider ceilings may
+   reduce the displayed total; see the example below.
+4. Send a short message after each change to verify the next request. These are
+   real inference requests and may consume provider quota or incur a charge.
+5. Reduce the limit with a conversation open. A request that fits uses the new
+   budget; an oversized one is rejected with guidance to shorten it. Do not
+   expect Hermes to truncate conversation history or recover text already
+   compacted by the editor.
+
+This synchronizes **context metadata and request budgets**. Other router settings,
+such as caching and key rotation, remain server-side behavior; the extension does
+not mirror every dashboard control as a VS Code setting.
 
 ## Meaning of the limits
 
