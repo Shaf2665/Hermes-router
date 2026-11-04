@@ -408,7 +408,7 @@ def test_feature_toggle_feedback_recovers(router_server, page, outcome):
 
     page.route('**/v1/config/features/model_discovery', save)
     # Saving must finish even when a separate dashboard refresh is slow.
-    page.evaluate('refresh = () => new Promise(() => {})')
+    page.evaluate('() => { refresh = () => new Promise(() => {}); }')
     if outcome == 'missing-message':
         page.locator('#settings-save-msg').evaluate('(el) => el.remove()')
     switch.click()
