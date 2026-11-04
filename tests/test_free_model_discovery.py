@@ -139,3 +139,31 @@ def test_catalog_failure_preserves_models_and_worker_continues(isolated, monkeyp
 def test_invalid_discovery_options_never_save_key(isolated, body):
     assert isolated.post('/v1/config/keys/openrouter',headers=ADMIN,json={'key':'secret',**body}).status_code == 400
     assert not router.AUTH_FILE.exists()
+
+
+def test_automatic_provider_is_rediscovered_after_restart(isolated, monkeypatch, tmp_path):
+    monkeypatch.setattr(router, 'STATE_FILE', tmp_path / 'state.json')
+    selected = {'qwen/test:free': row('qwen/test:free', supported_parameters=['tools'])}
+    calls = []
+    monkeypatch.setattr(router, '_read_free_catalog', lambda *a: calls.append(a) or selected)
+    monkeypatch.setattr(router, '_probe_provider', lambda *a: pytest.fail('Discovery must not probe inference'))
+    response = isolated.post('/v1/config/keys/openrouter', headers=ADMIN,
+                             json={'key': 'secret', 'discover_free': True})
+    assert response.status_code == 200
+    router._discovery_worker()
+    assert router.PROVIDERS[0]['models'] == ['qwen/test:free']
+    assert router._env_read_line('OPENROUTER_MODEL') == ''
+
+    # Recreate startup's provider/pool state from the saved configuration, not
+    # from the live catalog, which is intentionally not persisted as manual IDs.
+    restarted = router._build_providers()
+    provider = next(p for p in restarted if p['name'] == 'openrouter')
+    restarted_pool = router.CredentialPool(restarted)
+    assert provider['models'] == []
+    assert restarted_pool.first_key('openrouter') is None
+    calls.clear()
+    router._initialize_ratings(restarted, restarted_pool)
+    assert len(calls) == 1
+    assert provider['models'] == ['qwen/test:free']
+    assert restarted_pool.get_key('openrouter', 'qwen/test:free') == 'secret'
+    assert router._provider_state['openrouter']['available'] is True
