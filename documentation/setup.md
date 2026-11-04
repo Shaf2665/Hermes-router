@@ -12,7 +12,7 @@ cd Hermes-router
 Without Git, download the [main source ZIP](https://github.com/Shaf2665/Hermes-router/archive/refs/heads/main.zip) and extract it. Run the platform instructions below from that folder.
 
 For dashboard-to-extension context sync, use the router from this source and build
-**extension 0.9.8** as described in [VS Code Extension](vscode-extension.md).
+**extension 0.9.10** as described in [VS Code Extension](vscode-extension.md).
 Confirm your model capacities after upgrading, then verify synchronization using
 the [context guide](context-sync.md). Published 0.9.7 fixes dashboard loading but
 does not contain context sync; restarting an old container does not install new code.
@@ -47,7 +47,7 @@ Use `providers-20261103-cli` instead if you need `docker exec hermes-router hr s
 docker exec hermes-router python -c "from pathlib import Path; print(next(x.split('=',1)[1] for x in Path('/app/data/.env').read_text().splitlines() if x.startswith('ADMIN_API_KEY=')))"
 ```
 
-The published [VS Code 0.9.7 VSIX](https://github.com/Shaf2665/Hermes-router/releases/download/vscode-v0.9.7/hermes-router-0.9.7.vsix) includes administrator controls and the dashboard-loading fix. For context sync, build 0.9.8 from this checkout and install it using **Extensions: Install from VSIX…**.
+The published [VS Code 0.9.7 VSIX](https://github.com/Shaf2665/Hermes-router/releases/download/vscode-v0.9.7/hermes-router-0.9.7.vsix) includes administrator controls and the dashboard-loading fix. For context sync, build 0.9.10 from this checkout and install it using **Extensions: Install from VSIX…**.
 
 Before upgrading an existing container, back up its configuration and mounted data. Pulling an image does not upgrade a running container: recreate it with the same volume, environment variables, ports and restart policy. Old installs that stored `.env` or `auth.json` only inside `/app` must copy them into the mounted data directory before recreation. Keep application keys for inference; retrieve the separate administrator key for dashboard access. See the backup section below.
 

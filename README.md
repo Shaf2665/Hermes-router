@@ -111,14 +111,14 @@ system-wide — `install.sh` only symlinks the `hr` command onto your PATH.
 
 ## Setup
 
-**Context sync:** this source includes extension **0.9.8** and its matching router API.
+**Context sync:** this source includes extension **0.9.10** and its matching router API.
 Changing **Settings → Context length** updates the extension's effective limits
 every 10 seconds by default, with another check before each chat request. Confirm
 actual model capacities first; a larger setting cannot enlarge a provider's model.
 See [Context synchronization](documentation/context-sync.md) for setup and examples.
 
 The published [0.9.7 VSIX](https://github.com/Shaf2665/Hermes-router/releases/download/vscode-v0.9.7/hermes-router-0.9.7.vsix)
-fixes dashboard loading but does not include context sync. Build and install 0.9.8
+fixes dashboard loading but does not include context sync. Build and install 0.9.10
 from this checkout and update the router together; merging source does not update
 your running server or installed extension.
 

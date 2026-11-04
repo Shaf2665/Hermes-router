@@ -32,7 +32,7 @@ The following capabilities remain available within those pages:
   reasoning) for every configured model
 - **Add-ons** — toggle optional features on/off, plus live cache stats
 - **Context length** — choose a minimum context and confirm actual model capacities;
-  extension 0.9.8 refreshes its limits automatically. See [Context synchronization](context-sync.md).
+  extension 0.9.10 refreshes its limits automatically. See [Context synchronization](context-sync.md).
 - **Request Log** — the last requests (endpoint, provider, model, latency, complexity score,
   cascade count, tokens, status), filterable by status and endpoint
 
