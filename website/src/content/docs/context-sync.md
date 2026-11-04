@@ -28,7 +28,7 @@ or install/publish an extension.
 ## Operator setup
 
 1. Update the router from this source, preserving `.env`, provider credentials and
-   mounted data; follow [Setup → Backup, update and recover](setup.md#4-backup-update-and-recover).
+   mounted data; follow [Setup → Backup, update and recover](/setup/#4-backup-update-and-recover).
    Rebuild/recreate a source-based Docker installation; restarting an old container
    does not update its code. Install/build extension 0.9.10 from `vscode-extension`
    (`npm ci`, `npm run check`, `npm test`, `npm run compile`, `npm run package`).
