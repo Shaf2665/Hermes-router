@@ -2,6 +2,7 @@
 .env
 auth.json
 instances.json
+model-policy.json
 
 # Runtime state (probe results / ratings cache) — regenerated on start
 router_state.json

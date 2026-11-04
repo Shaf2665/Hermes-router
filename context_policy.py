@@ -92,5 +92,5 @@ def client_config(model_id, config, candidates):
         for c in candidates)}
     result["revision"] = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     if model is None:
-        result["reason"] = "No eligible model has confirmed context/output limits. Check Settings > Context length."
+        result["reason"] = "No enabled, eligible model has confirmed context/output limits. Check Providers and Settings > Context length."
     return result

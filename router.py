@@ -116,6 +116,40 @@ _ACCESS_LOCK = threading.RLock()
 ROUTER_MODEL      = os.environ.get("ROUTER_MODEL_ID", "hermes-router")
 _CONTEXT_CONFIG = context_policy.validate_config(json.loads(os.environ.get("ROUTER_CONTEXT_CONFIG", "{}")))
 _DISCOVERED_CONTEXT_LIMITS = {}
+MODEL_POLICY_FILE = Path(os.environ.get("ROUTER_MODEL_POLICY_FILE") or
+                         str(Path(os.environ.get("HR_ENV_FILE", ".env")).with_name("model-policy.json")))
+
+
+def _load_disabled_models(path):
+    if not path.exists():
+        return frozenset()
+    doc = json.loads(path.read_text())
+    if not isinstance(doc, dict) or set(doc) != {"disabled_models"}:
+        raise ValueError("Invalid model routing policy")
+    entries = doc["disabled_models"]
+    if not isinstance(entries, list) or len(entries) > 10000:
+        raise ValueError("Invalid model routing policy")
+    for pair in entries:
+        if (not isinstance(pair, list) or len(pair) != 2 or
+                any(not isinstance(s, str) or not s or len(s) > 512 or
+                    any(ord(c) < 32 for c in s) for s in pair)):
+            raise ValueError("Invalid model routing policy")
+    return frozenset(tuple(pair) for pair in entries)
+
+
+# Immutable snapshots let concurrent request threads see a complete policy.
+# Invalid persisted policy fails startup rather than silently enabling models.
+_DISABLED_MODELS = _load_disabled_models(MODEL_POLICY_FILE)
+
+
+def _model_enabled(provider, model):
+    return (provider, model) not in _DISABLED_MODELS
+
+
+def _model_policy_revision(policy=None):
+    return hashlib.sha256(json.dumps(sorted(_DISABLED_MODELS if policy is None else policy)).encode()).hexdigest()
+
+
 CACHE_TTL         = int(os.environ.get("CACHE_TTL_SECONDS", 300))   # 0 = disabled
 CACHE_MAX_SIZE    = int(os.environ.get("CACHE_MAX_SIZE", 100))
 # Persistent cache: mirror the in-memory response/semantic cache to a SQLite file
@@ -501,6 +535,16 @@ def _provider_models(provider: dict) -> list[str]:
         return [m for m in (provider.get("models") or []) if m]
     m = provider.get("model") or ""
     return [m] if m else []
+
+
+def _registered_models(provider):
+    """Keep disabled models visible and their credentials available for re-enable."""
+    return list(dict.fromkeys(_provider_models(provider) +
+                             ([provider["embed_model"]] if provider.get("embed_model") else [])))
+
+
+def _enabled_provider_models(provider):
+    return [m for m in _provider_models(provider) if _model_enabled(provider["name"], m)]
 
 
 # ── Provider definitions ───────────────────────────────────────────────────────
@@ -1800,6 +1844,8 @@ def _probe_provider(provider: dict, key: str) -> tuple:
     past the probe window, so a read-timeout counts as available rather than
     wrongly dropping a working provider to the back of its rating tier. Only a
     connection failure (host unreachable) counts as down."""
+    if not _model_enabled(provider["name"], provider["model"]):
+        return False, 0, provider["model"], "disabled"
     if provider.get("protocol") == "anthropic":
         return _probe_anthropic(provider, key)
     if provider.get("protocol") == "codex":
@@ -1829,7 +1875,7 @@ def _probe_provider(provider: dict, key: str) -> tuple:
             # auto-discovery silently pick something that costs credits.
             alt = _discover_best_model(provider["base_url"], key, provider.get("headers", {}),
                                        free_only=provider["name"] in _FREE_ONLY_DISCOVERY)
-            if alt:
+            if alt and _model_enabled(provider["name"], alt):
                 body["model"] = alt
                 t0 = time.time()
                 r2 = _HTTP.post(url, headers=hdrs, json=body, timeout=12)
@@ -1872,6 +1918,8 @@ def _probe_tools(provider: dict, key: str, model: str) -> bool | None:
             "messages": [{"role": "user", "content": "What is the weather in Paris? Use the get_weather tool."}]}
     got_response = False
     for choice in ("required", "auto"):
+        if not _model_enabled(provider["name"], model):
+            return None
         try:
             r = _HTTP.post(url, headers=hdrs, json={**base, "tool_choice": choice}, timeout=12)
         except Exception:
@@ -1895,6 +1943,8 @@ def _probe_reasoning(provider: dict, key: str, model: str) -> bool:
     small budget and a trivial prompt: a reasoning model exposes a reasoning field
     or burns the whole budget thinking (empty content, truncated), while a normal
     model just answers. Anthropic's thinking is opt-in, so it's treated as normal."""
+    if not _model_enabled(provider["name"], model):
+        return False
     if provider.get("protocol") == "anthropic":
         return False
     if provider.get("protocol") == "codex":
@@ -2039,7 +2089,7 @@ def _get_smart_ordered(providers: list, complexity: int, est_tokens: int = 0,
     rotated = providers[offset:] + providers[:offset]
     candidates = [{"provider": p, "model": m, "list_index": i}
                   for p in rotated
-                  for i, m in enumerate(_provider_models(p))]
+                  for i, m in enumerate(_provider_models(p)) if _model_enabled(p["name"], m)]
     return sorted(candidates, key=_key)
 
 
@@ -2177,7 +2227,7 @@ def _initialize_ratings(providers: list, pool_ref):
                      f"reasoning={'yes' if caps['reasoning'] else 'no'}")
         # Provider-level fields mirror the primary model's caps (back-compat).
         prim = new_model_state[(name, actual)]
-        available = ok or probe_status in ("rate_limited", "http", "timeout")
+        available = ok or probe_status in ("rate_limited", "http", "timeout", "disabled")
         log.info(f"[ratings]   {name}: {'✓' if available else '✗'} model={actual} {latency:.0f}ms "
                  f"status={probe_status}")
         new_state[name] = {"rating": prim["rating"], "model": actual, "available": available,
@@ -2214,7 +2264,8 @@ def _initialize_providers(providers, pool_ref):
 
 def _readiness():
     state = _INITIALIZATION_STATE["state"]
-    available = sum(bool(_provider_state.get(p["name"], {}).get("available")) for p in PROVIDERS)
+    available = sum(bool(_provider_state.get(p["name"], {}).get("available"))
+                    and bool(_enabled_provider_models(p)) for p in PROVIDERS)
     return {"state": state if state != "ready" or available else "unavailable",
             "configured_providers": len(PROVIDERS), "available_providers": available}
 
@@ -3987,6 +4038,7 @@ def _embed_ordered() -> list[dict]:
         scope = None
         models = None
     embed_providers = [p for p in PROVIDERS if p.get("embed_model")
+                       and _model_enabled(p["name"], p["embed_model"])
                        and (scope is None or p["name"] in scope)
                        and (models is None or p["embed_model"] in models)]
     return sorted(embed_providers, key=lambda p: (1 if stats.breaker_open(p["name"]) else 0,
@@ -4007,6 +4059,8 @@ def _embed_text(text: str):
     _req_ctx.deadline = min(original or float("inf"), time.monotonic() + SEMANTIC_EMBED_TIMEOUT)
     try:
         for provider in _embed_ordered():
+            if not _model_enabled(provider["name"], provider["embed_model"]):
+                continue
             if time.monotonic() >= _req_ctx.deadline:
                 break
             em = provider["embed_model"]
@@ -4186,7 +4240,8 @@ def _cache_ns() -> str:
     scope = _caller_scope()
     models = _caller_models()
     policy = json.dumps([sorted(scope) if scope is not None else None,
-                         sorted(models) if models is not None else None])
+                         sorted(models) if models is not None else None,
+                         _model_policy_revision()])
     return hashlib.sha256((token + policy).encode()).hexdigest()
 
 
@@ -4338,7 +4393,7 @@ def models():
     data = [{"id": ROUTER_MODEL, "object": "model", "owned_by": "hermes-router"}]
     # Advertise the fast/conversation profile only when a local model is configured,
     # since that's what it routes short turns to.
-    if any(p["name"] == "local" for p in PROVIDERS):
+    if any(p["name"] == "local" and _enabled_provider_models(p) for p in PROVIDERS):
         data.append({"id": f"{ROUTER_MODEL}:fast", "object": "model", "owned_by": "hermes-router"})
     return jsonify({"object": "list", "data": data})
 
@@ -4361,7 +4416,7 @@ def _context_candidates(config):
             continue
         if providers is not None and provider["name"] not in providers:
             continue
-        for model in _provider_models(provider):
+        for model in _enabled_provider_models(provider):
             if models is not None and model not in models:
                 continue
             if not _model_supports_tools(provider["name"], model):
@@ -4497,6 +4552,10 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
         ns += ":client:" + g.context_client_revision
     # A response cached under an old policy cannot satisfy a new policy.
     ns += ":context:" + hashlib.sha256(json.dumps(context_config, sort_keys=True).encode()).hexdigest()
+    # Retain this exact snapshot: even an A→B→A edit must not cache a response
+    # routed through the temporary pool under the original pool's namespace.
+    model_policy = _DISABLED_MODELS
+    ns += ":models:" + _model_policy_revision(model_policy)
 
     # Cache check (non-streaming only): exact match first (cheap), then optional
     # semantic match. query_emb is reused to store the response so future similar
@@ -4585,7 +4644,7 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
         name     = provider["name"]
         model    = cand["model"]
 
-        if name in skip_providers:
+        if name in skip_providers or not _model_enabled(name, model):
             continue
 
         if context_pool is not None and (name, model) not in context_pool:
@@ -4635,6 +4694,10 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
             continue
         attempts = pool.key_count(name, model) or 1
         for _ in range(attempts):
+            # A switch changed during a previous upstream attempt also applies
+            # to retries/failover from this already-running request.
+            if not _model_enabled(name, model):
+                break
             if time.monotonic() >= _req_ctx.deadline:
                 return ("error", {"error": {"message": "Router request deadline exceeded", "type": "router_timeout"}}, 504)
             key = pool.get_key(name, model)
@@ -4749,7 +4812,7 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
                         pool.mark_rate_limited(name, key, model, retry_after=30)
                         break
                     _add_provider_tokens(name, data, model)
-                    if not tool_loop:
+                    if not tool_loop and _DISABLED_MODELS is model_policy:
                         cache.set(payload, data, ns, query_emb)
                     _session_affinity_set(session_affinity_id, name, model)
                     stats.record_success(name, elapsed)
@@ -4804,7 +4867,7 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
                     if not is_anthropic:
                         _strip_response(data)
                     _add_provider_tokens(name, data, model)
-                    if not tool_loop:
+                    if not tool_loop and _DISABLED_MODELS is model_policy:
                         cache.set(payload, data, ns, query_emb)
                     _session_affinity_set(session_affinity_id, name, model)
                     stats.record_success(name, elapsed)
@@ -4821,6 +4884,9 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
 
     if time.monotonic() >= _req_ctx.deadline:
         return ("error", {"error": {"message": "Router request deadline exceeded", "type": "router_timeout"}}, 504)
+    if PROVIDERS and not any(_enabled_provider_models(p) for p in PROVIDERS):
+        return ("error", {"error": {"message": "All chat models are disabled. Enable a model in Providers.",
+                                    "type": "router_error", "code": "models_disabled"}}, 503)
     return ("error", {"error": {"message": "All providers exhausted", "type": "router_error"}}, 503)
 
 
@@ -4942,6 +5008,7 @@ def anthropic_messages():
 
 @app.route("/v1/embeddings", methods=["POST"])
 def embeddings():
+    model_policy = _DISABLED_MODELS
     _req_ctx.deadline = time.monotonic() + REQUEST_TIMEOUT
     err = _auth_check()
     if err:
@@ -5002,6 +5069,8 @@ def embeddings():
         em = provider["embed_model"]
         attempts = pool.key_count(name, em) or 1
         for _ in range(attempts):
+            if not _model_enabled(name, em):
+                break
             key = pool.get_key(name, em)
             if not key:
                 log.warning(f"All {name} keys cooling — skipping provider")
@@ -5049,7 +5118,8 @@ def embeddings():
                 resp.close()
             _settle_request_usage(getattr(g, "usage_reservation", None), data.get("usage"), em)
             _add_provider_tokens(name, data)
-            cache.set(payload, data, ns)
+            if _DISABLED_MODELS is model_policy:
+                cache.set(payload, data, ns)
             request_log.append({
                 "ts":         time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "endpoint":   "embeddings",
@@ -5231,6 +5301,43 @@ def config_provider_models(provider):
     except (requests.RequestException, ValueError, TypeError, AttributeError):
         # Do not return upstream bodies or exception text: either may echo secrets.
         return jsonify({"error": {"message": "Could not load the provider catalog. Use the suggestions or enter a model ID."}}), 502
+
+
+@app.route("/v1/config/models/enabled", methods=["POST"])
+@_locked_access
+def config_model_enabled():
+    """Persist one model switch and publish it live; never restart the router."""
+    global _DISABLED_MODELS
+    err = _admin_check()
+    if err:
+        return err
+    body = request.get_json(silent=True)
+    if (not isinstance(body, dict) or set(body) != {"provider", "model", "enabled"}
+            or not isinstance(body["provider"], str) or not isinstance(body["model"], str)
+            or any(not body[k] or len(body[k]) > 512 or any(ord(c) < 32 for c in body[k])
+                   for k in ("provider", "model"))
+            or type(body["enabled"]) is not bool):
+        return jsonify({"error": {"message": "Supply provider, model and a boolean enabled"}}), 400
+    provider = next((p for p in PROVIDERS if p["name"] == body["provider"]), None)
+    if provider is None or body["model"] not in _registered_models(provider):
+        return jsonify({"error": {"message": "Unknown registered provider/model"}}), 404
+    disabled = set(_DISABLED_MODELS)
+    identity = (provider["name"], body["model"])
+    if body["enabled"]:
+        disabled.discard(identity)
+    else:
+        disabled.add(identity)
+    if len(disabled) > 10000:
+        return jsonify({"error": {"message": "Model routing policy is full"}}), 400
+    if disabled != _DISABLED_MODELS:
+        try:
+            _atomic_write_text(MODEL_POLICY_FILE,
+                               json.dumps({"disabled_models": sorted(disabled)}) + "\n")
+        except OSError:
+            log.error("Could not save model routing policy")
+            return jsonify({"error": {"message": "Could not save model switch. Routing is unchanged."}}), 503
+        _DISABLED_MODELS = frozenset(disabled)
+    return jsonify({**body, "restart_required": False, "routing_revision": _model_policy_revision()})
 
 
 @app.route("/v1/config/keys/<provider>", methods=["POST"])
@@ -5675,6 +5782,9 @@ def status():
     provider_stats = {}
     for p in PROVIDERS:
         entry = {
+            "model_states": [{"model": m, "enabled": _model_enabled(p["name"], m),
+                              "kind": "chat" if m in _provider_models(p) else "embeddings"}
+                             for m in _registered_models(p)],
             "keys":  keys.get(p["name"], []),
             "stats": stats.summary(p["name"]),
             "breaker": stats.breaker_status(p["name"]),

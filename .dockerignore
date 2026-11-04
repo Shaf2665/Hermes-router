@@ -11,6 +11,7 @@
 !.env.example
 auth.json
 instances.json
+model-policy.json
 router_state.json
 cache.db
 usage.db
