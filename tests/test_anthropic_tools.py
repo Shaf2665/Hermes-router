@@ -206,3 +206,60 @@ def test_invalid_tool_history_returns_400_without_network_call(monkeypatch):
     assert response.get_json()["error"]["type"] == "invalid_request_error"
     assert "secret-invalid-json" not in response.get_data(as_text=True)
     post.assert_not_called()
+
+
+@pytest.mark.parametrize("ending", ["error", "eof", "success"])
+@pytest.mark.parametrize("partial_output", [False, True])
+def test_stream_wrapper_accounts_for_native_failures_and_cleans_up(
+        monkeypatch, ending, partial_output):
+    events = [{"type": "message_start", "message": {"usage": {"input_tokens": 3}}}]
+    if partial_output:
+        events.append({"type": "content_block_delta", "delta": {
+            "type": "text_delta", "text": "Partial answer"}})
+    if ending == "error":
+        events.append({"type": "error", "error": {"message": "overloaded"}})
+    elif ending == "success":
+        events.extend([
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn"},
+             "usage": {"output_tokens": 2}},
+            {"type": "message_stop"},
+        ])
+    response = Mock()
+    response.iter_content.return_value = iter([
+        b"".join(("data: " + json.dumps(event) + "\n\n").encode() for event in events)])
+    stats = Mock()
+    tokens = Mock()
+    settle = Mock()
+    monkeypatch.setattr(router, "stats", stats)
+    monkeypatch.setattr(router, "_add_provider_tokens", tokens)
+    monkeypatch.setattr(router, "_settle_request_usage", settle)
+    router._req_ctx.deadline = time.monotonic() + 30
+    with router.app.test_request_context():
+        from flask import g
+        g.usage_reservation = "reservation"
+        wrapped = router._streaming_with_usage(router._with_cleanup(
+            response, router._anthropic_streaming_generator(response)), "anthropic", "claude-test")
+        wire = b"".join(wrapped)
+        wrapped.close()
+    assert wire.endswith(b"data: [DONE]\n\n")
+    response.close.assert_called_once()
+    settle.assert_called_once()
+    if ending != "success":
+        assert b'"upstream_error"' in wire
+        stats.record_success.assert_not_called()
+        stats.record_error.assert_called_once_with("anthropic")
+        stats.record_health.assert_called_once_with("anthropic", False)
+        assert settle.call_args.kwargs["failed"] is (not partial_output)
+        tokens.assert_not_called()
+    else:
+        assert b'"upstream_error"' not in wire
+        assert settle.call_args.kwargs["failed"] is False
+        tokens.assert_called_once_with("anthropic", {"usage": {
+            "prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}}, "claude-test")
+        if partial_output:
+            stats.record_success.assert_called_once()
+            stats.record_health.assert_called_once_with("anthropic", True)
+            stats.record_error.assert_not_called()
+        else:
+            stats.record_success.assert_not_called()
+            stats.record_error.assert_called_once_with("anthropic")
