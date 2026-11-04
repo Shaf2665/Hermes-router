@@ -1,6 +1,7 @@
 """Real-browser dashboard checks; all inference stays on a local mock provider."""
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -386,3 +387,38 @@ def test_process_alive_does_not_claim_provider_ready(router_server, page):
     expect(page.locator("#plain-state")).to_contain_text("not ready")
     expect(page.locator("#plain-title")).to_contain_text("No provider is ready")
     expect(page.locator("#plain-message")).to_contain_text("Check provider credentials")
+
+
+@pytest.mark.parametrize('outcome', ['saved', 'rejected', 'network', 'missing-message'])
+def test_feature_toggle_feedback_recovers(router_server, page, outcome):
+    login(page, router_server)
+    page.get_by_role('button', name='Settings', exact=True).click()
+    switch = page.locator('#addon-model_discovery')
+    expect(switch).to_be_visible()
+    calls = []
+
+    def save(route):
+        calls.append(route.request.post_data_json)
+        if outcome == 'network':
+            route.abort()
+        elif outcome == 'rejected':
+            route.fulfill(status=503, json={'error': {'message': HOSTILE}})
+        else:
+            route.fulfill(json={'enabled': True, 'restart_required': False})
+
+    page.route('**/v1/config/features/model_discovery', save)
+    # Saving must finish even when a separate dashboard refresh is slow.
+    page.evaluate('refresh = () => new Promise(() => {})')
+    if outcome == 'missing-message':
+        page.locator('#settings-save-msg').evaluate('(el) => el.remove()')
+    switch.click()
+    expect(switch).to_be_enabled()
+    expect(switch).not_to_have_class(re.compile(r'.*\bbusy\b.*'))
+    assert calls == [{'enabled': True}]
+    if outcome == 'saved':
+        expect(page.locator('#settings-save-msg')).to_contain_text('Saved and applied')
+        expect(page.locator('#restart-banner')).not_to_be_visible()
+    elif outcome in ('network', 'rejected'):
+        expect(page.locator('#settings-save-msg')).to_contain_text('Could not confirm')
+        assert page.locator('#settings-save-msg img').count() == 0
+        assert page.evaluate('window.hermesXss || false') is False

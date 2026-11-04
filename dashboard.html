@@ -564,7 +564,8 @@ body{font-size:16px;line-height:1.5}button,input,select,textarea{font-family:inh
         </div>
         <div class="panel">
           <div class="panel-header"><span class="panel-title">Feature Add-ons</span></div>
-          <div class="addon-grid" id="addon-grid"></div>
+          <div id="settings-save-msg" class="config-msg" role="status" aria-live="polite"></div>
+          <div class="addon-grid" id="addon-grid" data-feedback="ready"></div>
         </div>
 
         <div class="panel">
@@ -1760,26 +1761,29 @@ async function toggleAddon(name, enable) {
     if (card)
         card.classList.add('busy');
     try {
+        setMsg('settings-save-msg', 'Saving your change…', true);
         const r = await adminFetch('/v1/config/features/' + encodeURIComponent(name), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ enabled: enable }),
         });
         const d = await r.json();
-        if (!r.ok) {
-            alert(apiError(d) || 'Failed to toggle ' + name);
-            return;
-        }
-        showRestartBanner();
-        await refresh();
+        if (!r.ok)
+            throw new Error(apiError(d) || 'Failed to toggle ' + name);
+        if (d.restart_required) showRestartBanner();
+        setMsg('settings-save-msg', d.restart_required
+            ? 'Saved. Restart the router to apply this setting.'
+            : 'Saved and applied.', true);
     }
     catch (e) {
-        alert('Network error: ' + e.message);
+        setMsg('settings-save-msg', 'Could not confirm the save. ' + e.message + ' Refresh to check the current setting.', false);
     }
     finally {
         if (card)
             card.classList.remove('busy');
     }
+    // A slow status panel must not hold the save indicator open.
+    void refresh();
 }
 // ── config: providers / add key / model ──────────────────────────────────────
 let configProviders = null, configPromise = null;
@@ -1864,6 +1868,7 @@ function onModelProviderChange() {
 }
 function setMsg(id, text, ok) {
     const el = document.getElementById(id);
+    if (!el) return;
     el.textContent = text;
     el.className = 'config-msg ' + (ok ? 'ok' : 'err');
 }
