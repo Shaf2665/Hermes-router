@@ -25,16 +25,18 @@ export function activate(context: vscode.ExtensionContext) {
     return new RouterClient(cfg.get<string>("baseUrl", "http://localhost:8319"), credential);
   };
   const dashboard = new DashboardProvider(makeAdminClient);
+  const modelProvider = new HermesChatModelProvider(makeClient);
 
   context.subscriptions.push(
     out,
     statusBar,
+    modelProvider,
     vscode.window.registerWebviewViewProvider(DashboardProvider.viewType, dashboard),
     // Register hermes-router as a Language Model provider so it shows up in
     // Copilot Chat's model picker and any vscode.lm consumer can select it.
     vscode.lm.registerLanguageModelChatProvider(
       "hermes-router",
-      new HermesChatModelProvider(makeClient)
+      modelProvider
     )
   );
 
@@ -47,6 +49,9 @@ export function activate(context: vscode.ExtensionContext) {
   const refresh = async () => {
     if (refreshing) return;
     refreshing = true;
+    const sync = modelProvider.refreshConfiguration().catch((error) => {
+      out.appendLine("Context sync: " + (error?.message || "unavailable"));
+    });
     try {
       const status = await dashboard.refresh();
       if (status) {
@@ -61,7 +66,7 @@ export function activate(context: vscode.ExtensionContext) {
       } catch (e: any) {
         statusBar.setUnreachable(e?.message || "no response");
       }
-    } finally { refreshing = false; }
+    } finally { await sync; refreshing = false; }
   };
 
   // ── Commands ─────────────────────────────────────────────────────────────────
@@ -169,6 +174,10 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("hermesRouter")) {
+        if (e.affectsConfiguration("hermesRouter.baseUrl") || e.affectsConfiguration("hermesRouter.apiKey")) {
+          modelProvider.invalidate();
+          void modelProvider.refreshConfiguration().catch(error => out.appendLine("Context sync: " + error.message));
+        }
         startTimer();
         void refresh();
       }

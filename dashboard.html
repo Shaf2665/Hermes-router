@@ -529,6 +529,27 @@ body{font-size:16px;line-height:1.5}button,input,select,textarea{font-family:inh
       </section>
 <section class="page" id="page-settings"><div class="page-heading"><h2>Settings</h2><p>Optional features, instances and application access.</p></div><div class="config-form"><label for="theme">Appearance</label><select id="theme" onchange="document.documentElement.dataset.theme=this.value"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
         <div class="panel">
+          <div class="panel-header"><span class="panel-title">Context length</span></div>
+          <div class="panel-body pad config-form">
+            <label for="context-window">Minimum model context</label>
+            <select id="context-window" onchange="saveContextWindow()" disabled>
+              <option value="0">Auto</option><option value="16000">16K</option><option value="32000">32K</option>
+              <option value="64000">64K</option><option value="128000">128K</option><option value="256000">256K</option>
+              <option value="512000">512K</option><option value="1000000">1M</option><option value="2000000">2M</option>
+            </select>
+            <p class="muted">New requests use models with at least this capacity. Updated extensions use it as their context budget target. Auto uses confirmed model limits. Smaller provider limits can reduce the usable budget.</p>
+            <div class="config-msg" id="context-msg" role="status"></div>
+            <details><summary>Confirm model capacities</summary>
+              <p class="muted">Use the provider's documented limits for your account. Unknown capacities cannot be advertised to the extension. Selecting a larger minimum does not enlarge a model.</p>
+              <label for="context-model">Model</label><select id="context-model" onchange="contextModelDirty=false; fillContextModel()"></select>
+              <label for="context-capacity">Total context tokens</label><input id="context-capacity" type="number" min="2" max="16000000" step="1" oninput="contextModelDirty=true">
+              <label for="context-output">Maximum output tokens</label><input id="context-output" type="number" min="1" max="16000000" step="1" oninput="contextModelDirty=true">
+              <div class="row"><button class="btn primary" id="context-confirm" onclick="saveContextModel(false)">Save confirmed limits</button>
+                <button class="btn" id="context-reset" onclick="saveContextModel(true)">Use discovered limits</button></div>
+            </details>
+          </div>
+        </div>
+        <div class="panel">
           <div class="panel-header"><span class="panel-title">Feature Add-ons</span></div>
           <div class="addon-grid" id="addon-grid"></div>
         </div>
@@ -1091,6 +1112,7 @@ function renderAll() {
     renderLogs();
     renderCache();
     renderAddons();
+    renderContextSettings();
     renderKeys();
     renderAccessKeys();
     renderModelCaps();
@@ -1611,6 +1633,62 @@ function renderAddons() {
     </button>
   `;
     }).join('');
+}
+// Context limits are owned by the router; all saves go through its admin boundary.
+let contextSaving = false, contextModelDirty = false;
+function renderContextSettings() {
+    if (contextSaving || !Number.isSafeInteger(statusData?.context_window)) return;
+    const select = document.getElementById('context-window');
+    select.disabled = false;
+    select.querySelector('[data-custom]')?.remove();
+    if (![...select.options].some(o => Number(o.value) === statusData.context_window)) {
+        const option = new Option(statusData.context_window.toLocaleString() + ' tokens', String(statusData.context_window));
+        option.dataset.custom = 'true'; select.add(option);
+    }
+    select.value = String(statusData.context_window);
+    const models = document.getElementById('context-model'), old = models.value;
+    models.replaceChildren(...(statusData.context_models || []).map(m => new Option(m.provider + ' / ' + m.model + (m.limits ? '' : ' — capacity unknown'), m.id)));
+    if ([...models.options].some(o => o.value === old)) models.value = old;
+    if (!contextModelDirty) fillContextModel();
+}
+function fillContextModel() {
+    const id = document.getElementById('context-model').value;
+    const model = (statusData?.context_models || []).find(m => m.id === id);
+    document.getElementById('context-capacity').value = model?.limits?.context_window || '';
+    document.getElementById('context-output').value = model?.limits?.max_output_tokens || '';
+}
+async function saveContextWindow() {
+    await saveContextSettings({ context_window: Number(document.getElementById('context-window').value) });
+}
+async function saveContextModel(reset) {
+    const id = document.getElementById('context-model').value;
+    if (!id) return;
+    await saveContextSettings({ model_limits: { [id]: reset ? null : {
+        context_window: Number(document.getElementById('context-capacity').value),
+        max_output_tokens: Number(document.getElementById('context-output').value),
+    } } });
+}
+async function saveContextSettings(body) {
+    if (contextSaving) return;
+    contextSaving = true;
+    const controls = ['context-window','context-model','context-capacity','context-output','context-confirm','context-reset'];
+    controls.forEach(id => document.getElementById(id).disabled = true);
+    setMsg('context-msg', 'Saving context settings…', true);
+    try {
+        const r = await adminFetch('/v1/config/context', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const data = await r.json();
+        if (!r.ok) throw new Error(apiError(data) || 'Could not save context settings.');
+        statusData.context_window = data.context_window;
+        contextModelDirty = false;
+        setMsg('context-msg', 'Saved. New requests use these settings; updated extensions synchronize automatically.', true);
+        await refresh();
+    } catch (error) {
+        setMsg('context-msg', error.message, false);
+    } finally {
+        contextSaving = false;
+        controls.forEach(id => document.getElementById(id).disabled = false);
+        renderContextSettings();
+    }
 }
 // ── config: add-ons toggle ───────────────────────────────────────────────────
 async function toggleAddon(name, enable) {

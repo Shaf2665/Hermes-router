@@ -66,6 +66,16 @@ The browser/remote restart endpoint only reports success on an installation with
 
 Native Windows supports browser configuration and chat. The extension's local `hr` controls still require Linux/macOS/WSL, or Docker controls through the host Docker CLI. A remote owner credential does not grant SSH or host command access.
 
+## Context synchronization (0.9.7+)
+
+The model picker reads its input/output limits from the connected router using your application key. Changes in **Settings → Context length** refresh automatically (10 seconds by default), and each new request checks again. No administrator credential is needed for synchronization.
+
+Upgrade the router and extension together. If provider discovery has not supplied context and output limits, confirm the documented capacities under **Settings → Context length → Confirm model capacities**. Unknown capacities are not advertised as a 40K or 256K model. Auto uses confirmed capacities; a selected minimum filters the provider pool and sets the client budget target. Provider ceilings and output reservation can reduce usable input.
+
+If settings shrink while a conversation is open, retry after the model refreshes; a large conversation may need to be shortened. Nothing is silently truncated or sent with old limits. Token accounting uses a conservative UTF-8 byte estimate, so usable text may be smaller than a provider-specific tokenizer would allow.
+
+See [Context synchronization](../documentation/context-sync.md) for rollout, API fields, safety checks and tests.
+
 ## Troubleshooting
 
 - **Chat returns 401:** check `hermesRouter.apiKey` is a live application key for this router. A revoked key fails new requests immediately.

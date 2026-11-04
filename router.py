@@ -30,6 +30,7 @@ from collections import deque, OrderedDict, defaultdict
 from flask import Flask, request, jsonify, Response, stream_with_context, redirect, g, has_request_context
 from urllib.parse import urlparse, urlunparse
 from provider_catalog import PROVIDER_PRESETS, ADDITIONAL_DEFAULTS
+import context_policy
 
 import requests
 
@@ -113,6 +114,8 @@ if ADMIN_API_KEY in PROXY_API_KEYS:
     raise ValueError("ADMIN_API_KEY must differ from application keys")
 _ACCESS_LOCK = threading.RLock()
 ROUTER_MODEL      = os.environ.get("ROUTER_MODEL_ID", "hermes-router")
+_CONTEXT_CONFIG = context_policy.validate_config(json.loads(os.environ.get("ROUTER_CONTEXT_CONFIG", "{}")))
+_DISCOVERED_CONTEXT_LIMITS = {}
 CACHE_TTL         = int(os.environ.get("CACHE_TTL_SECONDS", 300))   # 0 = disabled
 CACHE_MAX_SIZE    = int(os.environ.get("CACHE_MAX_SIZE", 100))
 # Persistent cache: mirror the in-memory response/semantic cache to a SQLite file
@@ -1702,6 +1705,9 @@ def _discover_models(provider: dict, key: str, free_only: bool = False) -> list[
                 if provider["name"] == "gemini" and normalized.startswith("models/"):
                     normalized = normalized[len("models/"):]
                 models.append(normalized)
+                limits = context_policy.discovered_limits(item)
+                if limits:
+                    _DISCOVERED_CONTEXT_LIMITS[(provider["name"], normalized)] = limits
         if free_only:
             models = [m for m in models if _is_free_model_id(m)]
         models = list(dict.fromkeys(models))
@@ -2078,6 +2084,7 @@ def _resolve_caps(p: dict, key: str, model: str, ok: bool) -> dict:
         "supports_tools": supports_tools,
         "tools_confirmed": tools_confirmed,
         "reasoning": reasoning,
+        **_DISCOVERED_CONTEXT_LIMITS.get((name, model), {}),
     }
 
 
@@ -4229,6 +4236,108 @@ def models():
     return jsonify({"object": "list", "data": data})
 
 
+def _context_limits(provider, model, config):
+    explicit = config["model_limits"].get(provider["name"] + "::" + model)
+    if explicit:
+        return explicit
+    return (_DISCOVERED_CONTEXT_LIMITS.get((provider["name"], model))
+            or context_policy.discovered_limits(_model_caps(provider["name"], model)))
+
+
+def _context_candidates(config):
+    providers, models = _caller_scope(), _caller_models()
+    result = []
+    for provider in PROVIDERS:
+        if providers is not None and provider["name"] not in providers:
+            continue
+        for model in _provider_models(provider):
+            if models is not None and model not in models:
+                continue
+            if not _model_supports_tools(provider["name"], model):
+                continue
+            budget = context_policy.candidate_budget(
+                _context_limits(provider, model, config), config["context_window"], provider)
+            if budget:
+                result.append({"provider": provider, "model": model, "budget": budget})
+    return result
+
+
+def _client_context(config):
+    return context_policy.client_config(ROUTER_MODEL, config, _context_candidates(config))
+
+
+@app.route("/v1/client-config")
+def client_configuration():
+    err = _auth_check()
+    if err:
+        return err
+    response = jsonify(_client_context(_CONTEXT_CONFIG))
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def _check_client_context(payload):
+    # Immutable request snapshot: a settings edit affects the next request,
+    # never halfway through an existing request's failover chain.
+    g.context_config = _CONTEXT_CONFIG
+    revision = request.headers.get("X-Hermes-Config-Revision")
+    if revision is None:
+        return None
+    config = _client_context(g.context_config)
+    if revision != config["revision"]:
+        return jsonify({"error": {"code": "client_config_changed", "message":
+            "Router context settings changed. Refresh model information and retry."}}), 409
+    model = config["model"]
+    if model is None:
+        return jsonify({"error": {"code": "context_unavailable", "message": config["reason"]}}), 503
+    # Conservative across tokenizers, including tool schemas and arguments.
+    content = {k: payload[k] for k in ("messages", "tools") if k in payload}
+    input_bound = len(json.dumps(content, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    output = payload.get("max_tokens")
+    if type(output) is not int or not 0 < output <= model["max_output_tokens"]:
+        return jsonify({"error": {"code": "context_output_limit", "message": "Invalid client output budget"}}), 400
+    if input_bound > model["max_input_tokens"]:
+        return jsonify({"error": {"code": "context_input_limit", "message":
+            "Conversation exceeds the current router input budget. Start a shorter conversation."}}), 400
+    g.context_client_pool = {(c["provider"]["name"], c["model"]) for c in _context_candidates(g.context_config)}
+    return None
+
+
+@app.route("/v1/config/context", methods=["POST"])
+@_locked_access
+def config_context():
+    global _CONTEXT_CONFIG
+    err = _admin_check()
+    if err:
+        return err
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or not body or set(body) - {"context_window", "model_limits"}:
+        return jsonify({"error": {"message": "Supply context_window and/or model_limits"}}), 400
+    try:
+        merged = {"context_window": body.get("context_window", _CONTEXT_CONFIG["context_window"]),
+                  "model_limits": dict(_CONTEXT_CONFIG["model_limits"])}
+        patch = body.get("model_limits", {})
+        if not isinstance(patch, dict):
+            raise ValueError("model_limits must be an object")
+        known = {p["name"] + "::" + m for p in PROVIDERS for m in _provider_models(p)}
+        for key, value in patch.items():
+            if key not in known and not (value is None and key in merged["model_limits"]):
+                raise ValueError("unknown provider/model")
+            if value is None:
+                merged["model_limits"].pop(key, None)
+            else:
+                merged["model_limits"][key] = value
+        clean = context_policy.validate_config(merged)
+    except ValueError as exc:
+        return jsonify({"error": {"message": str(exc)}}), 400
+    # One atomic persisted value for the minimum and all confirmed capacities.
+    encoded = json.dumps(clean, separators=(",", ":"))
+    _env_write_line("ROUTER_CONTEXT_CONFIG", encoded)
+    os.environ["ROUTER_CONTEXT_CONFIG"] = encoded
+    _CONTEXT_CONFIG = clean
+    return jsonify({"context_window": clean["context_window"], "restart_required": False})
+
+
 def _route_completion(payload: dict, streaming: bool, ns: str = ""):
     """Core routing + failover pipeline, shared by /v1/chat/completions and the
     Anthropic-compatible /v1/messages. Takes an OpenAI-format payload and returns
@@ -4265,6 +4374,11 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
         payload = {**payload, "model": ROUTER_MODEL}
 
     messages = payload.get("messages", [])
+
+    context_config = getattr(g, "context_config", _CONTEXT_CONFIG) if has_request_context() else _CONTEXT_CONFIG
+    context_pool = getattr(g, "context_client_pool", None) if has_request_context() else None
+    # A response cached under an old policy cannot satisfy a new policy.
+    ns += ":context:" + hashlib.sha256(json.dumps(context_config, sort_keys=True).encode()).hexdigest()
 
     # Cache check (non-streaming only): exact match first (cheap), then optional
     # semantic match. query_emb is reused to store the response so future similar
@@ -4355,6 +4469,19 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
 
         if name in skip_providers:
             continue
+
+        if context_pool is not None and (name, model) not in context_pool:
+            continue
+        limits = _context_limits(provider, model, context_config)
+        if context_config["context_window"]:
+            if limits is None or limits["context_window"] < context_config["context_window"]:
+                continue
+        if limits:
+            requested_output = payload.get("max_tokens", payload.get("max_completion_tokens", 0))
+            if type(requested_output) is not int or requested_output < 0:
+                continue
+            if requested_output > limits["max_output_tokens"] or est_tokens + requested_output > limits["context_window"]:
+                continue
 
         # Caller's access key is scoped to specific providers — skip anything else.
         if caller_providers is not None and name not in caller_providers:
@@ -4625,6 +4752,9 @@ def chat():
         return jsonify({"error": {"message": "request body must be a JSON object",
                                   "type": "invalid_request_error"}}), 400
 
+    context_error = _check_client_context(payload)
+    if context_error:
+        return context_error
     token  = _caller_token()
     gate   = _admit_request(token)
     if gate:
@@ -5463,6 +5593,12 @@ def status():
 
     return jsonify({
         "providers": provider_stats,
+        "context_window": _CONTEXT_CONFIG["context_window"],
+        "context_models": [
+            {"id": p["name"] + "::" + m, "provider": p["name"], "model": m,
+             "limits": _context_limits(p, m, _CONTEXT_CONFIG),
+             "overridden": p["name"] + "::" + m in _CONTEXT_CONFIG["model_limits"]}
+            for p in PROVIDERS for m in _provider_models(p)],
         "readiness": _readiness(),
         "cache": {
             "enabled":    CACHE_TTL > 0,

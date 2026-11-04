@@ -1,6 +1,7 @@
 import * as http from "http";
 import * as https from "https";
 import { URL } from "url";
+import { ClientConfiguration, parseClientConfiguration } from "./contextConfig";
 
 export interface ProviderStatus {
   available?: boolean;
@@ -48,7 +49,13 @@ function request(
       { method, headers, timeout: timeoutMs },
       (res) => {
         let data = "";
-        res.on("data", (c) => (data += c));
+        res.on("data", (c) => {
+          data += c;
+          if (Buffer.byteLength(data) > 2 * 1024 * 1024) {
+            req.destroy(new Error("router response too large"));
+          }
+        });
+        res.on("error", reject);
         res.on("end", () => resolve({ code: res.statusCode || 0, body: data }));
       }
     );
@@ -70,6 +77,11 @@ function post(urlStr: string, headers: Record<string, string>, body?: string, ti
 export class RouterClient {
   constructor(private baseUrl: string, private apiKey: string) {}
 
+  /** Compare connections without exposing credentials in logs or settings. */
+  sameConnection(other: RouterClient): boolean {
+    return this.base() === other.base() && this.apiKey === other.apiKey;
+  }
+
   private base(): string {
     // Every SDK example shows base_url = http://host:8319/v1, so that's what people
     // paste here — then we'd request /v1/v1/status and 404 on everything. Strip it.
@@ -89,6 +101,16 @@ export class RouterClient {
       throw new Error(`health HTTP ${code}`);
     }
     return JSON.parse(body) as Health;
+  }
+
+  async getClientConfiguration(): Promise<ClientConfiguration> {
+    const { code, body } = await get(`${this.base()}/v1/client-config`, {
+      Authorization: `Bearer ${this.apiKey}`, "Cache-Control": "no-cache",
+    });
+    if (code === 401 || code === 403) throw new Error("Context sync unauthorized — check hermesRouter.apiKey.");
+    if (code === 404) throw new Error("This router needs the context-sync update. Update the router before using this extension.");
+    if (code !== 200) throw new Error(`Context sync HTTP ${code}. Retry when the router is available.`);
+    return parseClientConfiguration(JSON.parse(body));
   }
 
   async getStatus(): Promise<RouterStatus> {
@@ -131,7 +153,7 @@ export class RouterClient {
         return reject(new Error(`bad URL: ${this.base()}`));
       }
       const lib = url.protocol === "https:" ? https : http;
-      const body: any = { model: "hermes-router", messages: opts.messages, stream: true };
+      const body: any = { model: opts.model, messages: opts.messages, stream: true, max_tokens: opts.maxOutputTokens };
       if (opts.tools && opts.tools.length) {
         body.tools = opts.tools;
         body.tool_choice = opts.toolChoice || "auto";
@@ -164,6 +186,7 @@ export class RouterClient {
             "Content-Type": "application/json",
             "Content-Length": Buffer.byteLength(payload),
             Authorization: `Bearer ${this.apiKey}`,
+            "X-Hermes-Config-Revision": opts.configRevision,
           },
           timeout: 120_000,
         },
@@ -250,6 +273,9 @@ export interface ToolDef {
 }
 
 export interface StreamOpts {
+  model: string;
+  maxOutputTokens: number;
+  configRevision: string;
   messages: ChatMessage[];
   tools?: ToolDef[];
   toolChoice?: "auto" | "required";

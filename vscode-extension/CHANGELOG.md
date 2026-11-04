@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.7
+
+- Read context and output limits from the router instead of advertising a fixed 40K window.
+- Refresh the model picker on settings changes, reconnects and router/key changes; recheck before every chat request.
+- Send the settings revision and output budget with requests; reject stale or oversized requests before inference.
+- Require the matching router context-sync API and confirmed model capacities. Application keys handle sync; administrator credentials stay separate.
+
 ## 0.9.6
 
 - Store administrator credentials separately in VS Code SecretStorage, scoped to the router URL.

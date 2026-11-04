@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { RouterClient, ChatMessage, ToolDef } from "./client";
+import { ClientConfiguration } from "./contextConfig";
 
 /**
  * Registers hermes-router as a VS Code Language Model provider, so it appears in
@@ -8,23 +9,73 @@ import { RouterClient, ChatMessage, ToolDef } from "./client";
  * tool calling for agent mode.
  */
 export class HermesChatModelProvider implements vscode.LanguageModelChatProvider {
+  private changed = new vscode.EventEmitter<void>();
+  readonly onDidChangeLanguageModelChatInformation = this.changed.event;
+  private configuration?: ClientConfiguration;
+  private pending?: { client: RouterClient; promise: Promise<ClientConfiguration> };
+  private generation = 0;
+  private disposed = false;
+
   constructor(private getClient: () => RouterClient) {}
+
+  dispose(): void {
+    this.disposed = true;
+    this.generation++;
+    this.changed.dispose();
+  }
+
+  invalidate(): void {
+    this.generation++;
+    this.pending = undefined;
+    this.configuration = undefined;
+    this.changed.fire();
+  }
+
+  async refreshConfiguration(): Promise<ClientConfiguration> {
+    if (this.disposed) throw new Error("Hermes provider is disposed.");
+    const client = this.getClient();
+    if (this.pending?.client.sameConnection(client)) return this.pending.promise;
+    const generation = ++this.generation;
+    const current = () => !this.disposed && generation === this.generation && this.getClient().sameConnection(client);
+    const promise = (async () => {
+      try {
+        const next = await client.getClientConfiguration();
+        if (!current()) throw new Error("Router connection changed. Retry with the current router.");
+        const changed = next.revision !== this.configuration?.revision;
+        this.configuration = next;
+        if (changed) this.changed.fire();
+        return next;
+      } catch (error) {
+        if (current() && this.configuration) {
+          this.configuration = undefined;
+          this.changed.fire();
+        }
+        throw error;
+      } finally {
+        if (generation === this.generation) this.pending = undefined;
+      }
+    })();
+    this.pending = { client, promise };
+    return promise;
+  }
 
   async provideLanguageModelChatInformation(
     _options: vscode.PrepareLanguageModelChatModelOptions,
     _token: vscode.CancellationToken
   ): Promise<vscode.LanguageModelChatInformation[]> {
-    return [
-      {
-        id: "hermes-router",
-        name: "hermes-router (provider pool)",
-        family: "hermes-router",
-        version: "1.0.0",
-        maxInputTokens: 32000,
-        maxOutputTokens: 8192,
-        capabilities: { toolCalling: true, imageInput: false },
-      },
-    ];
+    const config = await this.refreshConfiguration();
+    if (_token.isCancellationRequested || !config.model) return [];
+    const m = config.model;
+    return [{
+      id: m.id,
+      name: "hermes-router (provider pool)",
+      family: "hermes-router",
+      version: "1.0.0",
+      maxInputTokens: m.max_input_tokens,
+      maxOutputTokens: m.max_output_tokens,
+      tooltip: "Context limits synchronized with the router. Token counting uses a conservative UTF-8 byte estimate.",
+      capabilities: { toolCalling: m.capabilities.tool_calling, imageInput: m.capabilities.image_input },
+    }];
   }
 
   async provideLanguageModelChatResponse(
@@ -34,6 +85,16 @@ export class HermesChatModelProvider implements vscode.LanguageModelChatProvider
     progress: vscode.Progress<vscode.LanguageModelResponsePart>,
     token: vscode.CancellationToken
   ): Promise<void> {
+    if (token.isCancellationRequested) return;
+    const client = this.getClient();
+    const config = await this.refreshConfiguration();
+    if (token.isCancellationRequested) return;
+    if (!this.getClient().sameConnection(client)) throw new Error("Router connection changed. Retry.");
+    const model = config.model;
+    if (!model) throw new Error(config.reason || "No eligible models have confirmed context limits.");
+    if (_model.id !== model.id) throw new Error("Router model changed. Select the refreshed model and retry.");
+    // The host may still hold old metadata for this conversation. Always use
+    // fresh budgets below; a smaller limit only blocks a request that no longer fits.
     const oai: ChatMessage[] = messages.flatMap(toOpenAIMessages);
 
     let tools: ToolDef[] | undefined;
@@ -50,15 +111,30 @@ export class HermesChatModelProvider implements vscode.LanguageModelChatProvider
       toolChoice = options.toolMode === vscode.LanguageModelChatToolMode.Required ? "required" : "auto";
     }
 
-    await this.getClient().streamChat({
-      messages: oai,
-      tools,
-      toolChoice,
-      onText: (delta) => progress.report(new vscode.LanguageModelTextPart(delta)),
-      onToolCall: (callId, name, input) =>
-        progress.report(new vscode.LanguageModelToolCallPart(callId, name, input)),
-      onAbort: (cancel) => token.onCancellationRequested(() => cancel()),
-    });
+    const input = { messages: oai, ...(tools ? { tools } : {}) };
+    if (Buffer.byteLength(JSON.stringify(input), "utf8") > model.max_input_tokens) {
+      throw new Error("Conversation exceeds the current router input budget. Start a shorter conversation.");
+    }
+    let cancellation: vscode.Disposable | undefined;
+    try {
+      await client.streamChat({
+        model: model.id,
+        maxOutputTokens: model.max_output_tokens,
+        configRevision: config.revision,
+        messages: oai,
+        tools,
+        toolChoice,
+        onText: (delta) => progress.report(new vscode.LanguageModelTextPart(delta)),
+        onToolCall: (callId, name, input) =>
+          progress.report(new vscode.LanguageModelToolCallPart(callId, name, input)),
+        onAbort: (cancel) => {
+          cancellation = token.onCancellationRequested(cancel);
+          if (token.isCancellationRequested) cancel();
+        },
+      });
+    } finally {
+      cancellation?.dispose();
+    }
   }
 
   async provideTokenCount(
@@ -66,16 +142,11 @@ export class HermesChatModelProvider implements vscode.LanguageModelChatProvider
     text: string | vscode.LanguageModelChatRequestMessage,
     _token: vscode.CancellationToken
   ): Promise<number> {
-    const s = typeof text === "string" ? text : messageText(text);
-    return Math.ceil(s.length / 4); // cheap estimate (matches the router's char/4 fallback)
+    const s = typeof text === "string" ? text : JSON.stringify(toOpenAIMessages(text));
+    // Include Unicode, tool arguments/results and framing instead of silently
+    // undercounting them with the old characters/4 approximation.
+    return Buffer.byteLength(s, "utf8") + 32;
   }
-}
-
-/** Concatenate the text parts of a VS Code chat message. */
-function messageText(msg: vscode.LanguageModelChatRequestMessage): string {
-  return (msg.content || [])
-    .map((p: any) => (p instanceof vscode.LanguageModelTextPart ? p.value : ""))
-    .join("");
 }
 
 /** Extract plain text from a tool result's content parts. */
