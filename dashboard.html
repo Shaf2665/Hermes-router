@@ -407,13 +407,19 @@ body{font-size:16px;line-height:1.5}button,input,select,textarea{font-family:inh
               <input id="cfg-provider-url" readonly>
               <label for="cfg-key-value">2. Paste your API key</label>
               <input id="cfg-key-value" type="password" placeholder="paste provider API key" autocomplete="off">
-              <label>3. Choose models</label>
+              <label for="cfg-auto-free">3. Model selection</label>
+              <select id="cfg-auto-free" onchange="onDiscoveryModeChange()"><option value="auto">Automatically add free chat models</option><option value="manual">Choose models manually</option></select>
+              <p class="field-hint">Automatic discovery adds every confirmed free chat model from the provider catalog. Unknown prices are skipped. Existing model switches are kept.</p>
+              <label id="cfg-free-tier-label" hidden><input id="cfg-free-tier" type="checkbox" style="width:auto"> My Groq account uses the Free plan</label>
+              <p id="cfg-free-tier-note" class="field-hint" hidden>Groq does not report your billing plan in its model list. Confirm only for a Free account; Developer accounts are billed. Uncheck and save again if your plan changes.</p>
+              <div id="cfg-manual-models" hidden>
               <button class="btn" onclick="runAction(this,()=>loadProviderModels())">Refresh model list</button>
               <p class="field-hint" id="cfg-provider-model-status" role="status"></p>
               <div id="cfg-provider-models" style="max-height:220px;overflow:auto"></div>
               <label for="cfg-provider-custom-models">Other model IDs (optional, comma-separated)</label>
               <input id="cfg-provider-custom-models" placeholder="Paste a model ID if it is not listed">
               <p class="field-hint">Only selected models will be saved. A free tier does not mean every model is free. Check the provider’s prices and limits.</p>
+              </div>
               <div class="row">
                 <button class="btn primary" onclick="runAction(this,()=>addKey())">Save provider</button>
               </div>
@@ -1273,6 +1279,8 @@ function renderProviderCards() {
           onclick="setModelEnabled(${jsarg(name)},${jsarg(m.model)},${!m.enabled})"><span class="model-switch-track" aria-hidden="true"></span><span>${m.enabled ? 'On' : 'Off'}</span></button></div>`;
       }).join('')}</div>` : `<div class="provider-model" title="${attr(p.model || '')}">${esc(p.model || 'no model')}</div>`}
       <div class="provider-meta"><span>${ready} ready key${ready === 1 ? '' : 's'}</span><span>${fmt.ms(p.stats?.avg_latency_ms)}</span></div>
+      <p class="field-hint" role="status">${esc(p.discovery?.message || '')}</p>
+      <button class="btn" ${['queued','running'].includes(p.discovery?.state) ? 'disabled' : ''} onclick="discoverFreeModels(${jsarg(name)},this)">Discover free models</button>
     </div>`;
     }).join('');
 }
@@ -1885,6 +1893,23 @@ function renderProviderModelChoices(models, selected) {
     document.getElementById('cfg-provider-models').innerHTML = [...new Set([...selected, ...models])].map(model =>
         `<label style="display:flex;gap:8px;align-items:center;overflow-wrap:anywhere"><input type="checkbox" style="width:auto" value="${attr(model)}" ${selected.includes(model) ? 'checked' : ''}>${esc(model)}</label>`).join('');
 }
+function onDiscoveryModeChange() {
+    const automatic = document.getElementById('cfg-auto-free').value === 'auto';
+    const provider = document.getElementById('cfg-key-provider').value;
+    document.getElementById('cfg-manual-models').hidden = automatic;
+    const accountPlan = automatic && (configProviders?.free_tier_providers || []).includes(provider);
+    document.getElementById('cfg-free-tier-label').hidden = !accountPlan;
+    document.getElementById('cfg-free-tier-note').hidden = !accountPlan;
+}
+async function discoverFreeModels(provider, button) {
+    await runAction(button, async () => {
+        const r = await adminFetch('/v1/config/providers/' + encodeURIComponent(provider) + '/discover', {
+            method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+        const data = await r.json();
+        if (!r.ok) throw new Error(apiError(data) || 'Discovery failed.');
+        await refresh();
+    });
+}
 function onKeyProviderChange() {
     providerSelectionGeneration++;
     const provider = document.getElementById('cfg-key-provider').value;
@@ -1892,6 +1917,8 @@ function onKeyProviderChange() {
     document.getElementById('cfg-key-value').value = '';
     document.getElementById('cfg-provider-custom-models').value = '';
     document.getElementById('cfg-key-msg').textContent = '';
+    document.getElementById('cfg-free-tier').checked = configProviders?.free_tier_confirmed?.[provider] === true;
+    onDiscoveryModeChange();
     if (!preset) return;
     document.getElementById('cfg-provider-access').textContent = preset.access;
     document.getElementById('cfg-provider-note').textContent = preset.note;
@@ -1930,7 +1957,8 @@ async function addKey() {
         return;
     }
     const models = [...new Set([...selectedProviderModels(), ...document.getElementById('cfg-provider-custom-models').value.split(',').map(m=>m.trim()).filter(Boolean)])];
-    if (!models.length || models.some(m => !/^[A-Za-z0-9@+._:/-]+$/.test(m))) {
+    const automatic = document.getElementById('cfg-auto-free').value === 'auto';
+    if (!automatic && (!models.length || models.some(m => !/^[A-Za-z0-9@+._:/-]+$/.test(m)))) {
         setMsg('cfg-key-msg', 'Select at least one model or enter valid model IDs.', false);
         return;
     }
@@ -1939,7 +1967,7 @@ async function addKey() {
         const r = await adminFetch('/v1/config/keys/'  + encodeURIComponent(provider), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ key }),
+            body: JSON.stringify({ key, discover_free: automatic, ...(automatic && (configProviders?.free_tier_providers || []).includes(provider) ? {free_tier_confirmed:document.getElementById('cfg-free-tier').checked} : {}) }),
         });
         const d = await r.json();
         if (!r.ok) {
@@ -1947,8 +1975,13 @@ async function addKey() {
             return;
         }
         if (session !== sessionGeneration || !authenticated) return;
-        showRestartBanner();
+        if (d.restart_required) showRestartBanner();
         if (generation === providerSelectionGeneration) document.getElementById('cfg-key-value').value = '';
+        if (automatic) {
+            if (generation === providerSelectionGeneration) setMsg('cfg-key-msg', 'Key saved. Looking for free chat models in the background. See the provider card for the result; no restart needed.', true);
+            void refresh();
+            return;
+        }
         const modelResponse = await adminFetch('/v1/config/model/' + encodeURIComponent(provider), {
             method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({model:models.join(',')})
         });

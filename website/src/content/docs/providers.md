@@ -18,30 +18,41 @@ quality-first comparison of the exact models Hermes Router uses by default.
 
 ## Add a provider from the dashboard
 
-Open **Providers**, choose a provider, click **Get API key**, sign in on the provider’s
-website and copy your key. Paste it into Hermes, select one or more model checkboxes,
-and click **Save provider**. Restart Hermes when prompted, then use **Connect** to test.
-The base URL is already set; you do not need to type it.
+Open **Providers**, choose a provider and follow **Get API key**. Paste your key,
+leave **Automatically add free chat models** selected, and click **Save provider**.
+Hermes activates the key immediately and reads the catalog in the background.
+The provider card shows queued, running, complete or an error with a retry button.
+No router restart is needed for this automatic path or for model On/Off switches.
 
-**Refresh model list** asks that provider for its current catalog using the pasted key
-(or a saved key). It does not save the key or send a chat prompt. If the provider cannot
-list models, use the suggested models or enter model IDs separated by commas.
-The suggestions are dated snapshots, not a guarantee of availability or price.
-The live catalog may contain paid models. No model checkbox is selected for a new provider.
+Automatic discovery adds all compatible models whose catalog confirms zero pricing
+(or OpenRouter's documented `:free` variants). It excludes speech, embeddings and
+moderation models from chat routing. The old eight-model cap does not apply.
+Existing manual chat models and your On/Off choices remain. Previously discovered
+models that disappear or stop qualifying are removed on the next successful refresh.
+This refresh runs when you save a key, click **Discover free models**, enable discovery,
+or start Hermes; it is not continuous price monitoring.
 
-You can repeat this for many providers, multiple keys and multiple models. Saving an
-existing key again is safe and lets you change the selected models. Provider credentials
-and model changes still require a restart; application access keys are managed separately.
+**Groq requires an extra check:** tick **My Groq account uses the Free plan** only if
+that is your actual account plan. Its catalog does not identify billing eligibility.
+Hermes then imports only the documented Free-plan chat models, currently GPT-OSS
+120B, GPT-OSS 20B and Qwen3.8 27B (checked 2026-11-04). Uncheck and save again if your
+plan changes. Developer accounts can be billed for the same model IDs.
 
-There are **65 API-key presets** (48 additions on 2026-11-03). Access labels distinguish
-free-model offers, trial/credit allowances and paid subscriptions. For newly added
-presets, Hermes does not automatically discover or substitute unselected models by
-default. Opting into `<PROVIDER>_AUTO_DISCOVER_MODELS=1` can add paid models; leave that
-advanced setting off when you want only your selected models.
+Providers with missing prices, unsupported catalogs or no confirmed free chat models
+will say so; Hermes does not guess that they are free. Use **Choose models manually**
+to select models explicitly. **Refresh model list** can include paid models; manual
+configuration may still require a restart where the runtime reports it. Existing
+manual paid models are not converted to free models by enabling discovery.
 
-A free account does **not** make every model free. Eligibility, regional checks, credit
-expiry and billing rules belong to the provider. Confirm the current offer on its site.
-Provider startup checks can send small requests to the selected model.
+Catalog reads send no chat prompts and do not run inference probes for the imported
+models. Published tool and context metadata are used when available. Free models can
+still have quotas and limited tool support; three configured providers need not all
+be eligible for every request. No credentials are returned by the discovery endpoints.
+
+References: [OpenRouter model metadata](https://openrouter.ai/docs/guides/overview/models),
+[OpenRouter free models](https://openrouter.ai/collections/free-models),
+[Groq billing FAQ](https://console.groq.com/docs/billing-faqs), and
+[Groq Free-plan limits](https://console.groq.com/docs/rate-limits).
 
 ### Preset directory
 

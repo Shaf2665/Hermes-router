@@ -31,6 +31,7 @@ from flask import Flask, request, jsonify, Response, stream_with_context, redire
 from urllib.parse import urlparse, urlunparse
 from provider_catalog import PROVIDER_PRESETS, ADDITIONAL_DEFAULTS
 import context_policy
+import model_discovery
 
 import requests
 
@@ -162,6 +163,11 @@ FAST_ROUTE_TOKENS = int(os.environ.get("FAST_ROUTE_THRESHOLD", 0))  # 0 = disabl
 # models alongside free ones, and some expose very large catalogs.
 AUTO_DISCOVER_MODELS = os.environ.get("AUTO_DISCOVER_MODELS", "0").strip().lower() not in ("0", "", "false", "no", "off")
 AUTO_DISCOVER_MODEL_LIMIT = max(1, int(os.environ.get("AUTO_DISCOVER_MODEL_LIMIT", "8")))
+AUTO_DISCOVER_FREE_MODELS = os.environ.get("AUTO_DISCOVER_FREE_MODELS", "1").strip().lower() not in ("0", "", "false", "no", "off")
+_DISCOVERY_STATUS = {}
+_DISCOVERY_QUEUE = OrderedDict()
+_DISCOVERY_GENERATIONS = defaultdict(int)
+_DISCOVERY_WORKER_RUNNING = False
 # Semantic cache: serve a cached answer for a *similar* (not just identical) prompt,
 # by embedding prompts and comparing cosine similarity. Opt-in (needs an embedding
 # provider); falls back to exact match when off or unavailable.
@@ -772,13 +778,13 @@ def _build_providers() -> list[dict]:
     # entry is the "primary" model used for probing, rating, and status display.
     for p in providers:
         models = [m.strip() for m in str(p.get("model", "")).split(",") if m.strip()]
-        models = models or [p.get("model", "")]
         filtered = _filter_excluded(p["name"], models)
         if models and not filtered:
             log.warning(f"{p['name']}: all models excluded via "
                         f"{p['name'].upper()}_EXCLUDE_MODELS — provider has no usable models")
         p["models"] = filtered
         p["model"]  = filtered[0] if filtered else ""
+        p["_manual_models"] = list(filtered)
 
     # Per-provider "skip when the request is too big" ceiling. Some providers
     # reject large payloads outright, so trying them with a big prompt just wastes
@@ -1770,6 +1776,69 @@ def _provider_model_discovery_enabled(provider: dict) -> bool:
     return val.strip().lower() not in ("0", "", "false", "no", "off")
 
 
+def _free_discovery_enabled(provider):
+    value = os.environ.get(provider["name"].upper() + "_AUTO_DISCOVER_FREE_MODELS")
+    return AUTO_DISCOVER_FREE_MODELS if value is None else value.lower() not in ("0", "false", "no", "off", "")
+
+
+def _free_tier_confirmed(provider):
+    return os.environ.get(provider["name"].upper() + "_DISCOVERY_FREE_TIER", "0") == "1"
+
+
+def _read_free_catalog(provider, key):
+    if provider.get("protocol") in ("anthropic", "codex"):
+        return {}
+    items = model_discovery.fetch_catalog(_HTTP, provider, key)
+    return model_discovery.free_chat_models(provider["name"], items, _free_tier_confirmed(provider))
+
+
+def _publish_free_catalog(provider, selected, pool_ref):
+    """Publish a completed catalog atomically; never change model on/off choices."""
+    name = provider["name"]
+    manual = provider.get("_manual_models", _provider_models(provider))
+    manual = [m for m in manual if not model_discovery.non_chat_id(m)]
+    selected = {m: row for m, row in selected.items() if m not in _excluded_models(name)
+                and m.lower() not in _excluded_models(name)}
+    models = _filter_excluded(name, list(dict.fromkeys(manual + sorted(selected))))
+    metadata = {}
+    for model, row in selected.items():
+        limits = context_policy.discovered_limits(row) or {}
+        parameters = row.get("supported_parameters", [])
+        tools = isinstance(parameters, list) and "tools" in parameters
+        metadata[model] = {"rating": _rate_model(model), "supports_tools": tools,
+                           "tools_confirmed": tools, "reasoning": "reasoning" in parameters
+                           if isinstance(parameters, list) else False, **limits}
+    with _ACCESS_LOCK:
+        for model in models:
+            pool_ref.ensure_model(name, model, provider["keys"])
+        provider["models"] = models
+        provider["model"] = models[0] if models else ""
+        provider["_discovered_metadata"] = metadata
+        for model, caps in metadata.items():
+            _DISCOVERED_CONTEXT_LIMITS[(name, model)] = {
+                k: v for k, v in caps.items() if k in ("context_window", "max_output_tokens")}
+            # Keep previously confirmed capabilities; catalogs need no inference probes.
+            _model_state.setdefault((name, model), caps)
+        state = _provider_state.setdefault(name, {})
+        state["model"] = provider["model"]
+        if selected and "available" not in state:
+            state.update(available=True, probe_status="catalog", latency_ms=0)
+        _DISCOVERY_STATUS[name] = {"state": "complete", "free_models": len(selected),
+            "registered_models": len(models), "free_tier_confirmed": _free_tier_confirmed(provider),
+            "message": (f"Added all {len(selected)} confirmed free chat models."
+                        if selected else "No confirmed free chat models found. Account plans or prices may be unavailable; choose models manually or confirm a supported free plan."),
+            "updated_at": time.time()}
+
+
+def _refresh_free_models(provider, key, pool_ref):
+    try:
+        selected = _read_free_catalog(provider, key)
+        if _provider_model_discovery_enabled(provider):
+            _publish_free_catalog(provider, selected, pool_ref)
+    except model_discovery.CatalogError as error:
+        _DISCOVERY_STATUS[provider["name"]] = {"state": "error", "message": str(error)}
+
+
 def _refresh_discovered_models(provider: dict, key: str, pool_ref) -> None:
     """Opt-in model refresh: prune configured models not reported by /models and
     append the best discovered models up to AUTO_DISCOVER_MODEL_LIMIT.
@@ -1781,6 +1850,9 @@ def _refresh_discovered_models(provider: dict, key: str, pool_ref) -> None:
     catalogs are skipped unless a per-provider env flag explicitly enables them.
     """
     if not _provider_model_discovery_enabled(provider):
+        return
+    if _free_discovery_enabled(provider):
+        _refresh_free_models(provider, key, pool_ref)
         return
     name = provider["name"]
     if name in _MODEL_DISCOVERY_SKIP and os.environ.get(f"{name.upper()}_AUTO_DISCOVER_MODELS") is None:
@@ -2203,7 +2275,10 @@ def _initialize_ratings(providers: list, pool_ref):
                                 "available": False, "latency_ms": 0, "overridden": False}
             log.info(f"[ratings]   {name}: skipped — no usable models")
             continue
-        ok, latency, actual, probe_status = _probe_provider(p, key)
+        if p["model"] in p.get("_discovered_metadata", {}):
+            ok, latency, actual, probe_status = True, 0, p["model"], "catalog"
+        else:
+            ok, latency, actual, probe_status = _probe_provider(p, key)
         # A primary model can be rate-limited, missing tools, or otherwise rejected
         # while the provider/key is still usable for other configured models.
         # Only auth/network failures confidently make every model unusable.
@@ -2220,7 +2295,8 @@ def _initialize_ratings(providers: list, pool_ref):
         # Per-model capabilities for the whole list (primary = models[0] = actual).
         # Reuse a cached entry when present so adding one model doesn't re-probe all.
         for m in _provider_models(p) or ([actual] if actual else []):
-            caps = cached_models.get((name, m)) or _resolve_caps(p, key, m, caps_probe_ok)
+            caps = (cached_models.get((name, m)) or p.get("_discovered_metadata", {}).get(m)
+                    or _resolve_caps(p, key, m, caps_probe_ok))
             new_model_state[(name, m)] = caps
             log.info(f"[ratings]   {name}/{m}: rating={caps['rating']} "
                      f"tools={'yes' if caps['supports_tools'] else 'no'} "
@@ -2372,6 +2448,9 @@ class CredentialPool:
             prov = self.pools.setdefault(provider_name, {})
             if model not in prov:
                 prov[model] = deque({"key": k, "cool_until": 0.0} for k in keys)
+            else:
+                existing = {entry["key"] for entry in prov[model]}
+                prov[model].extend({"key": k, "cool_until": 0.0} for k in keys if k not in existing)
 
 
 pool = CredentialPool(PROVIDERS)
@@ -5215,6 +5294,120 @@ def _features_snapshot() -> dict:
 
 
 # ── Config-write endpoints (web dashboard) ──────────────────────────────────────
+def _discovery_worker():
+    global _DISCOVERY_WORKER_RUNNING
+    while True:
+        with _ACCESS_LOCK:
+            if not _DISCOVERY_QUEUE:
+                _DISCOVERY_WORKER_RUNNING = False
+                return
+            name, (generation, provider) = _DISCOVERY_QUEUE.popitem(last=False)
+            snapshot = {**provider, "keys": list(provider.get("keys", []))}
+            manual = list(provider.get("_manual_models", _provider_models(provider)))
+            confirmed = _free_tier_confirmed(provider)
+            _DISCOVERY_STATUS[name] = {"state": "running", "message": "Looking for free chat models…"}
+        # Let the startup owner publish its snapshots before live discoveries.
+        deadline = time.monotonic() + 30
+        while (_INITIALIZATION_STATE.get("state") == "initializing"
+               and time.monotonic() < deadline):
+            time.sleep(.1)
+        try:
+            if _INITIALIZATION_STATE.get("state") == "initializing":
+                raise RuntimeError("Startup still initializing")
+            selected = _read_free_catalog(snapshot, snapshot["keys"][0])
+            error = None
+        except Exception:
+            selected = None
+            error = "Could not read the provider catalog. Existing models are unchanged; retry discovery."
+        with _ACCESS_LOCK:
+            if (generation != _DISCOVERY_GENERATIONS[name]
+                    or not any(p is provider for p in PROVIDERS)
+                    or provider.get("keys") != snapshot["keys"]
+                    or provider.get("_manual_models", _provider_models(provider)) != manual
+                    or _free_tier_confirmed(provider) != confirmed
+                    or not _provider_model_discovery_enabled(provider)):
+                if generation == _DISCOVERY_GENERATIONS[name]:
+                    _DISCOVERY_STATUS[name] = {"state": "cancelled", "message": "Configuration changed. Retry discovery."}
+                continue
+            if error:
+                _DISCOVERY_STATUS[name] = {"state": "error", "message": error}
+            else:
+                try:
+                    _publish_free_catalog(provider, selected, pool)
+                except Exception:
+                    _DISCOVERY_STATUS[name] = {"state": "error", "message": "Could not apply catalog. Retry discovery."}
+
+
+@_locked_access
+def _queue_free_discovery(provider):
+    global _DISCOVERY_WORKER_RUNNING
+    name = provider["name"]
+    _DISCOVERY_GENERATIONS[name] += 1
+    _DISCOVERY_QUEUE[name] = (_DISCOVERY_GENERATIONS[name], provider)
+    _DISCOVERY_STATUS[name] = {"state": "queued", "message": "Free model discovery queued."}
+    if not _DISCOVERY_WORKER_RUNNING:
+        _DISCOVERY_WORKER_RUNNING = True
+        try:
+            threading.Thread(target=_discovery_worker, daemon=True).start()
+        except RuntimeError:
+            _DISCOVERY_WORKER_RUNNING = False
+            _DISCOVERY_STATUS[name] = {"state": "error", "message": "Could not start discovery. Retry."}
+
+
+@_locked_access
+def _activate_discovery_provider(name):
+    """Activate a saved key for discovery without rebuilding other providers."""
+    global _AUTH_KEYS
+    _AUTH_KEYS = _load_auth_json()
+    current = next((p for p in PROVIDERS if p["name"] == name), None)
+    env = PROVIDER_MODEL_ENV[name]
+    if current is None and _env_read_line(env) is None and env not in os.environ:
+        # A provider's paid default is not an explicit model selection.
+        _env_write_line(env, "")
+        os.environ[env] = ""
+    fresh = next((p for p in _build_providers() if p["name"] == name), None)
+    if fresh is None:
+        raise ValueError("Provider has no usable saved key")
+    if current is None:
+        current = fresh
+        PROVIDERS.append(current)
+    else:
+        current["keys"] = fresh["keys"]
+    for model in _registered_models(current):
+        pool.ensure_model(name, model, current["keys"])
+    return current
+
+
+@_locked_access
+def _configure_free_discovery(name, free_tier=None):
+    settings = {name.upper() + "_AUTO_DISCOVER_MODELS": "1",
+                name.upper() + "_AUTO_DISCOVER_FREE_MODELS": "1"}
+    if free_tier is not None:
+        settings[name.upper() + "_DISCOVERY_FREE_TIER"] = "1" if free_tier else "0"
+    for env, value in settings.items():
+        _env_write_line(env, value)
+        os.environ[env] = value
+
+
+@app.route("/v1/config/providers/<provider>/discover", methods=["POST"])
+@_locked_access
+def config_discover_free(provider):
+    err = _admin_check()
+    if err:
+        return err
+    current = next((p for p in PROVIDERS if p["name"] == provider and p.get("keys")), None)
+    if current is None:
+        return jsonify({"error": {"message": "Save a provider key first."}}), 404
+    body = request.get_json(silent=True)
+    if (not isinstance(body, dict) or set(body) - {"free_tier_confirmed"}
+            or ("free_tier_confirmed" in body and type(body["free_tier_confirmed"]) is not bool)
+            or (body.get("free_tier_confirmed") and provider not in model_discovery.FREE_TIER_CHAT_MODELS)):
+        return jsonify({"error": {"message": "Unsupported free-plan confirmation."}}), 400
+    _configure_free_discovery(provider, body.get("free_tier_confirmed"))
+    _queue_free_discovery(current)
+    return jsonify({"provider": provider, "discovery": "queued", "restart_required": False}), 202
+
+
 # These back the dashboard's "Add key" / "Model" / add-on toggle forms. Same
 # administrator access as /v1/status; application inference keys cannot change config.
 # Every write is a plain, auditable file edit (.env or auth.json), identical to
@@ -5235,6 +5428,9 @@ def config_providers():
         "model_settable": list(PROVIDER_MODEL_ENV.keys()),
         "defaults": PROVIDER_MODEL_DEFAULT,
         "presets": PROVIDER_PRESETS,
+        "discovery": dict(_DISCOVERY_STATUS),
+        "free_tier_providers": sorted(model_discovery.FREE_TIER_CHAT_MODELS),
+        "free_tier_confirmed": {p["name"]: _free_tier_confirmed(p) for p in PROVIDERS},
         "configured_models": {p: _env_read_line(env) or os.environ.get(env, "")
                               for p, env in PROVIDER_MODEL_ENV.items()},
         # Live key count per currently-configured provider, e.g. {"gemini": 6} —
@@ -5341,6 +5537,7 @@ def config_model_enabled():
 
 
 @app.route("/v1/config/keys/<provider>", methods=["POST"])
+@_locked_access
 def config_add_key(provider):
     """Add one API key for a provider to auth.json. Body: {"key": "..."}"""
     err = _admin_check()
@@ -5352,6 +5549,11 @@ def config_add_key(provider):
     body = request.get_json(force=True, silent=True)
     if not isinstance(body, dict):
         return jsonify({"error": {"message": "Expected an object"}}), 400
+    discover = body.get("discover_free", AUTO_DISCOVER_MODELS and AUTO_DISCOVER_FREE_MODELS)
+    free_tier = body.get("free_tier_confirmed")
+    if (type(discover) is not bool or (free_tier is not None and type(free_tier) is not bool)
+            or (free_tier and provider not in model_discovery.FREE_TIER_CHAT_MODELS)):
+        return jsonify({"error": {"message": "Invalid discovery or free-plan option."}}), 400
     key = body.get("key")
     if not isinstance(key, str):
         return jsonify({"error": {"message": "key must be text"}}), 400
@@ -5361,11 +5563,18 @@ def config_add_key(provider):
     if len(key) > 16384 or "\n" in key or "\r" in key:
         return jsonify({"error": {"message": "key must not contain newlines", "type": "invalid_request_error"}}), 400
     added, total = _auth_json_add_key(provider, key)
+    if discover:
+        _configure_free_discovery(provider, free_tier)
+        current = _activate_discovery_provider(provider)
+        _queue_free_discovery(current)
+        return jsonify({"provider": provider, "added": added, "total_keys": total,
+                        "duplicate": not added, "discovery": "queued", "restart_required": False})
     return jsonify({"provider": provider, "added": added, "total_keys": total,
                     "duplicate": not added, "restart_required": added})
 
 
 @app.route("/v1/config/model/<provider>", methods=["POST", "DELETE"])
+@_locked_access
 def config_model(provider):
     """POST {"model": "m1,m2"} to override a provider's model(s); DELETE to reset
     to the built-in default (just removes the .env override line)."""
@@ -5379,6 +5588,7 @@ def config_model(provider):
 
     if request.method == "DELETE":
         _env_write_line(env_var, None)
+        _cancel_free_discovery(provider)
         return jsonify({"provider": provider, "reset": True, "restart_required": True})
 
     body = request.get_json(force=True, silent=True)
@@ -5396,7 +5606,15 @@ def config_model(provider):
         return jsonify({"error": {"message": "model contains unsupported characters",
                                   "type": "invalid_request_error"}}), 400
     _env_write_line(env_var, model)
+    _cancel_free_discovery(provider)
     return jsonify({"provider": provider, "model": model, "restart_required": True})
+
+
+def _cancel_free_discovery(name):
+    """A pending manual edit must win over a catalog fetched earlier."""
+    _DISCOVERY_GENERATIONS[name] += 1
+    _DISCOVERY_QUEUE.pop(name, None)
+    _DISCOVERY_STATUS[name] = {"state": "cancelled", "message": "Model selection changed."}
 
 
 @app.route("/v1/config/features/<name>", methods=["POST"])
@@ -5414,9 +5632,18 @@ def config_feature(name):
         return jsonify({"error": {"message": f"'{name}' isn't a simple toggle — manage it with: {addon.get('manage', '(see docs)')}",
                                   "type": "invalid_request_error"}}), 400
 
-    body = request.get_json(force=True, silent=True) or {}
-    enabled = bool(body.get("enabled"))
+    global AUTO_DISCOVER_MODELS
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or type(body.get("enabled")) is not bool:
+        return jsonify({"error": {"message": "enabled must be true or false"}}), 400
+    enabled = body["enabled"]
     _env_write_line(addon["env"], addon["on"] if enabled else addon["off"])
+    if name == "model_discovery":
+        AUTO_DISCOVER_MODELS = enabled
+        for provider in list(PROVIDERS):
+            if _provider_model_discovery_enabled(provider) and _free_discovery_enabled(provider):
+                _queue_free_discovery(provider)
+        return jsonify({"name": name, "enabled": enabled, "restart_required": False})
     return jsonify({"name": name, "enabled": enabled, "restart_required": True})
 
 
@@ -5782,6 +6009,7 @@ def status():
     provider_stats = {}
     for p in PROVIDERS:
         entry = {
+            "discovery": _DISCOVERY_STATUS.get(p["name"]),
             "model_states": [{"model": m, "enabled": _model_enabled(p["name"], m),
                               "kind": "chat" if m in _provider_models(p) else "embeddings"}
                              for m in _registered_models(p)],
