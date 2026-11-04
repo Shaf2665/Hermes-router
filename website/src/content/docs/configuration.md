@@ -35,7 +35,7 @@ hr restart                            # apply
 | `semantic_cache` | `SEMANTIC_CACHE` | off | Also serve cached answers for *similar* prompts |
 | `persistent_cache` | `CACHE_PERSIST` | off | Mirror the cache to SQLite so it survives restarts |
 | `fast_routing` | `FAST_ROUTE_THRESHOLD` | off | Short requests prefer low-latency providers on ties |
-| `model_discovery` | `AUTO_DISCOVER_MODELS` | off | Refresh provider model lists from `/models` at startup |
+| `model_discovery` | `AUTO_DISCOVER_MODELS` | off | Refresh confirmed free chat models at startup and on demand |
 | `metrics_auth` | always enabled | on | Administrator authentication on `/metrics`; cannot be disabled |
 | `cost_currency` | `COST_FX_RATE` | off | Show a second currency (e.g. ₹) alongside USD spend |
 | `key_budgets` | `auth.json` / `PROXY_LIMIT_*` | off | Per-key RPM / daily request / token / estimated-cost ceilings — manage with `hr limit` |
@@ -125,8 +125,9 @@ Sensible defaults — most users never touch these.
 | `SEMANTIC_CACHE` | `0` | If `1`, also serve cached answers for *similar* prompts (needs an embedding provider; falls back to exact match otherwise) |
 | `SEMANTIC_CACHE_THRESHOLD` | `0.95` | Cosine-similarity cutoff for a semantic hit (`1.0` = identical; lower = looser matching) |
 | `FAST_ROUTE_THRESHOLD` | `0` | If >0, requests under this many tokens prefer low-latency providers first (`0` disables) |
-| `AUTO_DISCOVER_MODELS` | `0` | If `1`, fetch configured providers' `/models` lists at startup, prune listed models that disappeared, and append the best discovered models |
-| `AUTO_DISCOVER_MODEL_LIMIT` | `8` | Max models kept per provider when `AUTO_DISCOVER_MODELS=1` |
+| `AUTO_DISCOVER_MODELS` | `0` | If `1`, refresh provider catalogs at startup; free chat imports are the default policy |
+| `AUTO_DISCOVER_FREE_MODELS` | `1` | Add all confirmed free chat models; unknown prices are skipped |
+| `AUTO_DISCOVER_MODEL_LIMIT` | `8` | Limit for legacy discovery only (`AUTO_DISCOVER_FREE_MODELS=0`) |
 | `{PROVIDER}_EXCLUDE_MODELS` | — | Comma-separated model IDs to block for a provider (case-insensitive). Excluded models are stripped from config and discovery, e.g. `OPENROUTER_EXCLUDE_MODELS=some/model:free` |
 | `ROUTER_MODEL_ID` | `hermes-router` | The model name clients send (the router maps it to each provider's real model) |
 | `ROUTER_STATE_FILE` | `./router_state.json` | Where provider ratings/capabilities are cached between restarts (use `/tmp/...` on read-only hosts like HF Spaces) |
@@ -313,15 +314,28 @@ families, then falls back to your listed order.
 
 ### Auto model discovery
 
-Enable `AUTO_DISCOVER_MODELS=1` (or `hr features enable model_discovery`) to have the
-router query configured providers' OpenAI-compatible `/models` endpoints at startup. It
-keeps the configured models that still exist, appends the best discovered models up to
-`AUTO_DISCOVER_MODEL_LIMIT`, and updates the in-memory routing pool for that run.
+Enable `AUTO_DISCOVER_MODELS=1` to refresh eligible provider catalogs at startup.
+The dashboard automatic provider setup also enables discovery for that provider and
+runs it immediately in the background, without restarting the router.
 
-This is opt-in because some gateways expose paid or very large catalogs. Known mixed
-free/paid gateways are filtered to free model ids where possible, and very large/special
-providers such as Hugging Face are skipped unless you opt in per provider with
-`HUGGINGFACE_AUTO_DISCOVER_MODELS=1`.
+`AUTO_DISCOVER_FREE_MODELS=1` is the default discovery policy: import all confirmed
+free chat models, preserve explicit manual chat models, and keep model switches.
+`<PROVIDER>_AUTO_DISCOVER_MODELS` and `<PROVIDER>_AUTO_DISCOVER_FREE_MODELS` override
+the global choices. `GROQ_DISCOVERY_FREE_TIER=1` is an operator assertion that the
+account uses Groq's Free plan, not a detected property of its API key. See
+[Providers](/providers/#preset-directory) for setup and provider links.
+
+Unknown pricing is excluded. Reads use fixed provider endpoints, bounded time and
+size (4 MB / 5,000 models), no credential-bearing redirects and no inference probes.
+Unsupported pagination produces a visible error instead of silently importing an
+incomplete catalog. Failed reads keep the existing roster. Successful reads replace
+previous automatic additions while preserving manual chat selections and switches.
+
+For the previous bounded discovery behavior, explicitly set
+`AUTO_DISCOVER_FREE_MODELS=0`. Only that legacy mode uses
+`AUTO_DISCOVER_MODEL_LIMIT=8`; it can add paid models. Leave free mode enabled for
+conservative automatic imports. Discovery is refreshed on save, explicit refresh,
+enabling discovery and startup, rather than continuously monitoring provider prices.
 
 ### Per-provider exclude list
 

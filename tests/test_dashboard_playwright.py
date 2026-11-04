@@ -170,11 +170,13 @@ def test_provider_presets_key_link_live_models_and_multiple_selection(router_ser
     page.locator('#cfg-key-provider').select_option('kilo_gateway')
     expect(page.locator('#cfg-provider-url')).to_have_value('https://ai-gateway.kilo.ai/api/v1')
     expect(page.locator('#cfg-provider-key-link')).to_have_attribute('href', 'https://app.kilo.ai/')
+    page.locator('#cfg-auto-free').select_option('manual')
     page.locator('#cfg-key-value').fill('mock-provider-key')
     page.get_by_role('button', name='Save provider', exact=True).click()
     expect(page.locator('#cfg-key-msg')).to_contain_text('Select at least one model')
     page.route('**/v1/config/providers/kilo_gateway/models', lambda route: route.fulfill(
         json={'models': ['model-a:free', 'model-b:free'], 'notice': 'Check prices.'}))
+    page.locator('#cfg-auto-free').select_option('manual')
     page.get_by_role('button', name='Refresh model list', exact=True).click()
     expect(page.locator('#cfg-provider-model-status')).to_contain_text('2 models')
     for checkbox in page.locator('#cfg-provider-models input').all():
@@ -197,9 +199,11 @@ def test_provider_catalog_failure_keeps_suggestions(router_server, page):
     login(page, router_server)
     page.locator('[data-page="providers"]').click()
     page.locator('#cfg-key-provider').select_option('kilo_gateway')
+    page.locator('#cfg-auto-free').select_option('manual')
     page.locator('#cfg-key-value').fill('mock-provider-key')
     page.route('**/v1/config/providers/kilo_gateway/models', lambda route: route.fulfill(
         status=502, json={'error': {'message': 'Provider cannot list models'}}))
+    page.locator('#cfg-auto-free').select_option('manual')
     page.get_by_role('button', name='Refresh model list', exact=True).click()
     expect(page.locator('#cfg-provider-model-status')).to_contain_text('Provider cannot list models')
     expect(page.locator('#cfg-provider-models')).to_contain_text('kilo-auto/free')
@@ -321,6 +325,7 @@ def test_pending_provider_change_and_failed_restart_are_truthful(router_server, 
     login(page, router_server)
     page.get_by_role("button", name="Providers", exact=True).click()
     page.locator("#cfg-key-provider").select_option("openai")
+    page.locator("#cfg-auto-free").select_option("manual")
     page.locator("#cfg-key-value").fill("mock-provider-key-no-network")
     page.locator("#cfg-provider-models input").first.check()
     page.get_by_role("button", name="Save provider", exact=True).click()
@@ -422,3 +427,21 @@ def test_feature_toggle_feedback_recovers(router_server, page, outcome):
         expect(page.locator('#settings-save-msg')).to_contain_text('Could not confirm')
         assert page.locator('#settings-save-msg img').count() == 0
         assert page.evaluate('window.hermesXss || false') is False
+
+
+def test_automatic_free_discovery_save_needs_no_model_selection(router_server, page):
+    calls=[]
+    page.route('**/v1/config/keys/openrouter', lambda route: (calls.append(route.request.post_data_json), route.fulfill(json={"restart_required":False,"discovery":"queued","total_keys":1})))
+    page.route('**/v1/config/model/openrouter', lambda route: (calls.append('unexpected model override'), route.abort()))
+    login(page,router_server)
+    page.get_by_role('button',name='Providers',exact=True).click()
+    page.locator('#cfg-key-provider').select_option('openrouter')
+    expect(page.locator('#cfg-manual-models')).not_to_be_visible()
+    page.locator('#cfg-key-value').fill('mock-auto-secret')
+    page.get_by_role('button',name='Save provider',exact=True).click()
+    expect(page.locator('#cfg-key-msg')).to_contain_text('no restart needed')
+    expect(page.locator('#cfg-key-value')).to_have_value('')
+    assert calls == [{"key":"mock-auto-secret","discover_free":True}]
+    page.locator('#cfg-key-provider').select_option('groq')
+    expect(page.locator('#cfg-free-tier-label')).to_be_visible()
+    expect(page.locator('#cfg-free-tier')).not_to_be_checked()

@@ -273,3 +273,12 @@ MIT — see [LICENSE](LICENSE).
 ### Provider presets
 
 The Providers dashboard includes 65 API-key presets: choose a provider, open its key link, paste your key and select multiple models. Base URLs are already filled in. See the [provider directory and setup steps](documentation/providers.md#add-a-provider-from-the-dashboard). Free offers, trial credits and paid subscriptions are labeled separately; verify current prices with each provider.
+
+### Automatic free chat models
+
+In **Providers**, save a key with **Automatically add free chat models** selected.
+Hermes imports the confirmed free chat catalog in the background without a restart,
+keeps your model switches, and shows progress or a retryable error on the provider card.
+Unknown prices are skipped; Groq needs explicit Free-plan confirmation. Speech and
+moderation models do not enter the chat pool. See the
+[provider setup guide](website/src/content/docs/providers.md) for details and limits.

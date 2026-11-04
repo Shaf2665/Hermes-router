@@ -22,6 +22,7 @@ class _FakePool:
 def test_refresh_bounds_extras_when_kept_meets_limit(monkeypatch):
     """Configured models at/above the limit must not pull in the full catalog."""
     monkeypatch.setattr(router, "AUTO_DISCOVER_MODELS", True)
+    monkeypatch.setattr(router, "AUTO_DISCOVER_FREE_MODELS", False)
     monkeypatch.setattr(router, "AUTO_DISCOVER_MODEL_LIMIT", 2)
     monkeypatch.setenv("GEMINI_AUTO_DISCOVER_MODELS", "1")
 
@@ -49,6 +50,7 @@ def test_refresh_bounds_extras_when_kept_meets_limit(monkeypatch):
 
 def test_refresh_keeps_configured_above_limit_and_caps_extras(monkeypatch):
     monkeypatch.setattr(router, "AUTO_DISCOVER_MODELS", True)
+    monkeypatch.setattr(router, "AUTO_DISCOVER_FREE_MODELS", False)
     monkeypatch.setattr(router, "AUTO_DISCOVER_MODEL_LIMIT", 2)
     monkeypatch.setenv("GEMINI_AUTO_DISCOVER_MODELS", "1")
 
