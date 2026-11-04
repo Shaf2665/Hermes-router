@@ -45,6 +45,12 @@ hr restart                            # apply
 `.env`. The last two are richer config, so `hr features` shows their status and points you to
 the command that manages them. The live state is also in `/v1/status` under `features`.
 
+Dashboard feature saves show confirmation above the add-ons. A failed or timed-out
+save releases the control so you can retry; use Refresh to check the saved state
+before retrying an uncertain request. A restart banner appears only when the
+server says the setting requires a restart. If an older dashboard stays on
+“Saving…”, reload the page to load the current dashboard files.
+
 ## Where your keys live
 
 `hr auth add` writes to **`auth.json`** — the router's own credential store, kept next to
