@@ -2260,6 +2260,11 @@ def _initialize_ratings(providers: list, pool_ref):
     for p in providers:
         name  = p["name"]
         key   = pool_ref.first_key(name)
+        # Automatic setup deliberately persists an empty manual roster. On a
+        # restart there are no model buckets yet, but catalog discovery still
+        # needs the provider's saved key to rebuild those buckets.
+        if not key and _provider_model_discovery_enabled(p) and p.get("keys"):
+            key = p["keys"][0]
         if not key:
             new_state[name] = {"rating": _rate_model(p["model"]), "model": p["model"],
                                 "available": False, "latency_ms": 0, "overridden": False}
