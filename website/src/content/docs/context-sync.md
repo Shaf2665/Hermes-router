@@ -74,6 +74,12 @@ bounded by the remaining context and any provider input ceiling. The logical
 pool advertises the lowest input and output budgets across eligible models, so
 failover cannot silently use a smaller model than the client was promised.
 
+Reasoning tokens share the advertised output budget for synchronized requests;
+the router does not add extra reasoning reserve after preflight. The Codex OAuth
+subscription protocol is excluded from this bounded client pool because its
+upstream request does not enforce an output-token ceiling. Confirming capacities
+does not remove that restriction. Existing non-synchronized routing is unchanged.
+
 For a single eligible 512,000-context model with at least 8,192 output capacity,
 selecting 256K advertises 247,808 input + 8,192 output = 256,000 total. Selecting
 Auto advertises 503,808 input + 8,192 output. Mixed provider ceilings can result

@@ -3828,7 +3828,10 @@ def forward(provider: dict, key: str, payload: dict, streaming: bool,
     # asked for, so the actual answer still fits. (The model stops when done, so
     # short answers stay short.) Tune/disable with REASONING_TOKEN_RESERVE.
     # Per-model: only the actual model being sent gets the reserve.
-    if _model_caps(provider["name"], body["model"]).get("reasoning"):
+    # A synchronized request already reserves output within its total context.
+    # Hidden reasoning must share that ceiling instead of expanding it afterward.
+    context_bound = has_request_context() and getattr(g, "context_client_pool", None) is not None
+    if not context_bound and _model_caps(provider["name"], body["model"]).get("reasoning"):
         reserve = _int_env("REASONING_TOKEN_RESERVE", 4096)
         if reserve > 0:
             for field in ("max_tokens", "max_completion_tokens"):
@@ -4248,6 +4251,10 @@ def _context_candidates(config):
     providers, models = _caller_scope(), _caller_models()
     result = []
     for provider in PROVIDERS:
+        # The subscription Responses protocol cannot enforce max output tokens.
+        # Do not promise a bounded client budget for this otherwise usable pool.
+        if provider.get("protocol") == "codex":
+            continue
         if providers is not None and provider["name"] not in providers:
             continue
         for model in _provider_models(provider):
@@ -4293,12 +4300,15 @@ def _check_client_context(payload):
     # Conservative across tokenizers, including tool schemas and arguments.
     content = {k: payload[k] for k in ("messages", "tools") if k in payload}
     input_bound = len(json.dumps(content, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
-    output = payload.get("max_tokens")
-    if type(output) is not int or not 0 < output <= model["max_output_tokens"]:
+    outputs = [payload.get("max_tokens")]
+    if "max_completion_tokens" in payload:
+        outputs.append(payload["max_completion_tokens"])
+    if any(type(output) is not int or not 0 < output <= model["max_output_tokens"] for output in outputs):
         return jsonify({"error": {"code": "context_output_limit", "message": "Invalid client output budget"}}), 400
     if input_bound > model["max_input_tokens"]:
         return jsonify({"error": {"code": "context_input_limit", "message":
             "Conversation exceeds the current router input budget. Start a shorter conversation."}}), 400
+    g.context_client_revision = config["revision"]
     g.context_client_pool = {(c["provider"]["name"], c["model"]) for c in _context_candidates(g.context_config)}
     return None
 
@@ -4377,6 +4387,10 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
 
     context_config = getattr(g, "context_config", _CONTEXT_CONFIG) if has_request_context() else _CONTEXT_CONFIG
     context_pool = getattr(g, "context_client_pool", None) if has_request_context() else None
+    # Bound requests cannot reuse a legacy response with a larger reasoning
+    # allowance or a response from an earlier eligible pool.
+    if context_pool is not None:
+        ns += ":client:" + g.context_client_revision
     # A response cached under an old policy cannot satisfy a new policy.
     ns += ":context:" + hashlib.sha256(json.dumps(context_config, sort_keys=True).encode()).hexdigest()
 
