@@ -146,8 +146,8 @@ def _model_enabled(provider, model):
     return (provider, model) not in _DISABLED_MODELS
 
 
-def _model_policy_revision():
-    return hashlib.sha256(json.dumps(sorted(_DISABLED_MODELS)).encode()).hexdigest()
+def _model_policy_revision(policy=None):
+    return hashlib.sha256(json.dumps(sorted(_DISABLED_MODELS if policy is None else policy)).encode()).hexdigest()
 
 
 CACHE_TTL         = int(os.environ.get("CACHE_TTL_SECONDS", 300))   # 0 = disabled
@@ -4552,7 +4552,10 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
         ns += ":client:" + g.context_client_revision
     # A response cached under an old policy cannot satisfy a new policy.
     ns += ":context:" + hashlib.sha256(json.dumps(context_config, sort_keys=True).encode()).hexdigest()
-    ns += ":models:" + _model_policy_revision()
+    # Retain this exact snapshot: even an A→B→A edit must not cache a response
+    # routed through the temporary pool under the original pool's namespace.
+    model_policy = _DISABLED_MODELS
+    ns += ":models:" + _model_policy_revision(model_policy)
 
     # Cache check (non-streaming only): exact match first (cheap), then optional
     # semantic match. query_emb is reused to store the response so future similar
@@ -4809,7 +4812,7 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
                         pool.mark_rate_limited(name, key, model, retry_after=30)
                         break
                     _add_provider_tokens(name, data, model)
-                    if not tool_loop:
+                    if not tool_loop and _DISABLED_MODELS is model_policy:
                         cache.set(payload, data, ns, query_emb)
                     _session_affinity_set(session_affinity_id, name, model)
                     stats.record_success(name, elapsed)
@@ -4864,7 +4867,7 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
                     if not is_anthropic:
                         _strip_response(data)
                     _add_provider_tokens(name, data, model)
-                    if not tool_loop:
+                    if not tool_loop and _DISABLED_MODELS is model_policy:
                         cache.set(payload, data, ns, query_emb)
                     _session_affinity_set(session_affinity_id, name, model)
                     stats.record_success(name, elapsed)
@@ -5005,6 +5008,7 @@ def anthropic_messages():
 
 @app.route("/v1/embeddings", methods=["POST"])
 def embeddings():
+    model_policy = _DISABLED_MODELS
     _req_ctx.deadline = time.monotonic() + REQUEST_TIMEOUT
     err = _auth_check()
     if err:
@@ -5114,7 +5118,8 @@ def embeddings():
                 resp.close()
             _settle_request_usage(getattr(g, "usage_reservation", None), data.get("usage"), em)
             _add_provider_tokens(name, data)
-            cache.set(payload, data, ns)
+            if _DISABLED_MODELS is model_policy:
+                cache.set(payload, data, ns)
             request_log.append({
                 "ts":         time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "endpoint":   "embeddings",

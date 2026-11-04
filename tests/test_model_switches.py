@@ -109,6 +109,35 @@ def test_cached_answer_cannot_bypass_disable(switches, monkeypatch):
     assert forward.call_count == 2
 
 
+@pytest.mark.parametrize("restore_before_finish", [False, True])
+def test_switch_during_routing_cannot_poison_old_policy_cache(switches, monkeypatch, restore_before_finish):
+    toggle(switches, "beta")
+    toggle(switches, model="small")
+    ordered = router._ordered_providers
+    attempts = []
+    def change_pool(*args):
+        toggle(switches)
+        toggle(switches, "beta", enabled=True)
+        return ordered(*args)
+    def restore():
+        toggle(switches, enabled=True)
+        toggle(switches, "beta")
+    def forward(p, k, b, s, m):
+        attempts.append(p["name"])
+        if restore_before_finish:
+            restore()
+        return Reply(p["name"], m)
+    monkeypatch.setattr(router, "_ordered_providers", change_pool)
+    monkeypatch.setattr(router, "forward", forward)
+    assert "beta/large" in switches.post("/v1/chat/completions", headers=APP, json=PAYLOAD).get_data(as_text=True)
+    restore()
+    monkeypatch.setattr(router, "_ordered_providers", ordered)
+    # The first response belongs to the temporary beta-only pool. Restoring the
+    # original switches must not reuse it with beta disabled, even after A→B→A.
+    assert "alpha/large" in switches.post("/v1/chat/completions", headers=APP, json=PAYLOAD).get_data(as_text=True)
+    assert attempts == ["beta", "alpha"]
+
+
 def test_disable_during_failed_request_skips_its_retry(switches, monkeypatch):
     monkeypatch.setattr(router.pool, "key_count", lambda *_: 2)
     monkeypatch.setattr(router.pool, "mark_key_down", lambda *args, **kwargs: None)
