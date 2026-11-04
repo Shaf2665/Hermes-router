@@ -1944,8 +1944,10 @@ async function setRotation() {
             setMsg('cfg-rotation-msg', apiError(d) || 'Failed.', false);
             return;
         }
-        setMsg('cfg-rotation-msg', 'Saved rotation mode.', true);
-        showRestartBanner();
+        setMsg('cfg-rotation-msg', 'Saved rotation mode. ' + (d.restart_required ? 'Restart to apply.' : 'Applied immediately.'), true);
+        delete document.getElementById('cfg-rotation-value').dataset.edited;
+        if (d.restart_required) showRestartBanner();
+        await refresh();
     }
     catch (e) {
         setMsg('cfg-rotation-msg', 'Network error: ' + e.message, false);

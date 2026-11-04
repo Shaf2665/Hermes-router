@@ -112,7 +112,7 @@ system-wide — `install.sh` only symlinks the `hr` command onto your PATH.
 
 Package update (2026-11-04): [download the VS Code 0.9.7 VSIX](https://github.com/Shaf2665/Hermes-router/releases/download/vscode-v0.9.7/hermes-router-0.9.7.vsix). Use extension version 0.9.6 or newer for administrator controls. Docker images and upgrade instructions are in the setup guide.
 
-Dashboard update (2026-11-04): provider API keys, model selections/resets, and Settings switches save and apply without restarting. Active responses can finish on their original model. Includes the official Hermes logo and improved Connect and Settings pages. Images `providers-20261104` and `providers-20261104-cli` support AMD64 and ARM64. See [InstaBox hosting](documentation/instabox.md) and the [validation record](docs/research/2026-11-04-live-providers.md).
+Dashboard update (2026-11-04): provider API keys, model selections/resets, key rotation mode, and Settings switches save and apply without restarting. Active responses can finish on their original model. Includes the official Hermes logo and improved Connect and Settings pages. Images `rotation-20261104` and `rotation-20261104-cli` support AMD64 and ARM64. See [InstaBox hosting](documentation/instabox.md) and the [validation record](docs/research/2026-11-04-live-rotation.md).
 
 **Foundation preview:** see [Local and server setup](documentation/setup.md) for the new
 Windows starter, persistent Docker Compose installation, administrator/application-key

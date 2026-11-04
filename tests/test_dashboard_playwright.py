@@ -317,7 +317,7 @@ def test_visible_page_polling_deduplicates_and_pauses(router_server, page):
     assert any("/v1/logs" in url for url in calls)
 
 
-def test_live_provider_save_and_pending_rotation_restart_are_truthful(router_server, page):
+def test_live_provider_save_and_legacy_restart_response_are_truthful(router_server, page):
     login(page, router_server)
     page.get_by_role("button", name="Providers", exact=True).click()
     page.locator("#cfg-key-provider").select_option("openai")
@@ -327,6 +327,7 @@ def test_live_provider_save_and_pending_rotation_restart_are_truthful(router_ser
     expect(page.locator("#cfg-key-msg")).to_contain_text("Saved")
     expect(page.locator("#cfg-key-value")).to_have_value("")
     expect(page.locator("#restart-banner")).not_to_be_visible()
+    page.route('**/v1/config/rotation', lambda route: route.fulfill(json={'mode': 'round-robin', 'restart_required': True}))
     page.locator('.rotation-settings > summary').click()
     page.get_by_role('button', name='Save rotation mode', exact=True).click()
     page.get_by_role("button", name="Home", exact=True).click()
@@ -422,7 +423,14 @@ def test_rotation_control_still_saves_in_advanced_section(router_server, page):
     page.locator('#cfg-rotation-value').select_option('sequential')
     page.get_by_role('button', name='Save rotation mode', exact=True).click()
     expect(page.locator('#cfg-rotation-msg')).to_contain_text('Saved rotation mode')
-    expect(page.locator('#restart-banner')).to_be_visible()
+    expect(page.locator('#cfg-rotation-msg')).to_contain_text('Applied immediately')
+    expect(page.locator('#restart-banner')).not_to_be_visible()
+    assert page.request.get(router_server+'/v1/status').json()['rotation']['mode'] == 'sequential'
+    page.locator('#cfg-rotation-value').select_option('round-robin')
+    page.get_by_role('button', name='Save rotation mode', exact=True).click()
+    expect(page.locator('#cfg-rotation-msg')).to_contain_text('Applied immediately')
+    expect(page.locator('#cfg-rotation-value')).to_have_value('round-robin')
+    assert page.request.get(router_server+'/v1/status').json()['rotation']['mode'] == 'round-robin'
 
 
 def test_model_change_keeps_active_stream_and_new_requests_use_new_model(router_server, stream_release):

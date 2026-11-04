@@ -16,7 +16,7 @@ hermes-router splits its behavior into two groups:
   environment variable (or some `auth.json` config), and unset = off (except the response
   cache, on by default).
 
-Dashboard **Settings** switches, provider API keys, and model selections/resets apply
+Dashboard **Settings** switches, provider API keys, key rotation mode, and model selections/resets apply
 immediately and save their values for future starts. Active responses finish on their
 original model; subsequent requests use the new selection.
 The file-based CLI below still needs a restart. Model discovery refreshes in the background

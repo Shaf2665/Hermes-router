@@ -41,6 +41,7 @@ if record.exists():
     features=requests.get(base+'/v1/status',headers={'Authorization':'Bearer '+admin}).json()['features']['addons']
     state={a['name']:a['enabled'] for a in features}
     assert state['fast_routing'] and state['persistent_cache'] and not state['request_log']
+    assert requests.get(base+'/v1/status',headers={'Authorization':'Bearer '+admin}).json()['rotation']['mode']=='sequential'
 else:
     r=requests.post(base+'/v1/config/proxy-keys',headers={'Authorization':'Bearer '+admin},json={'name':'release-check'})
     assert r.status_code==200,r.status_code
@@ -59,6 +60,10 @@ assert requests.get(base+'/v1/status',headers=headers).status_code==401
 assert requests.get(base+'/v1/usage',headers=headers).json()['keys'][0]['req_total']>=1
 owner={'Authorization':'Bearer '+admin}
 started=Path('/proc/1/stat').read_text().split()[21]
+changed=requests.post(base+'/v1/config/rotation',headers=owner,json={'mode':'sequential'})
+assert changed.status_code==200 and changed.json()['restart_required'] is False
+assert requests.get(base+'/v1/status',headers=owner).json()['rotation']['mode']=='sequential'
+assert Path('/proc/1/stat').read_text().split()[21]==started
 if attempt == 0:
     saved=requests.post(base+'/v1/config/keys/kimi',headers=owner,json={'key':'mock-provider-key','model':'model-a'})
     assert saved.status_code==200 and saved.json()['restart_required'] is False
@@ -73,7 +78,7 @@ assert changed.status_code==200 and changed.json()['restart_required'] is False
 assert requests.post(base+'/v1/chat/completions',headers=headers,json=body).json()['model']=='model-b'
 assert Path('/proc/1/stat').read_text().split()[21]==started
 upstream.shutdown()
-print('health/dashboard/auth/live provider/model/settings/persistence/durable usage OK')
+print('health/dashboard/auth/live provider/model/rotation/settings/persistence/durable usage OK')
 '''
 try:
     docker('volume','create',volume)

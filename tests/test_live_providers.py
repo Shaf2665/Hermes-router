@@ -14,6 +14,8 @@ def client(monkeypatch, tmp_path):
     monkeypatch.setattr(router, '_AUTH_KEYS', {})
     monkeypatch.setattr(router, 'PROVIDERS', [])
     monkeypatch.setattr(router, 'pool', router.CredentialPool([]))
+    monkeypatch.setattr(router, 'ROTATION_MODE', 'round-robin')
+    monkeypatch.setenv('ROTATION_MODE', 'round-robin')
     monkeypatch.setattr(router, '_provider_state', {})
     monkeypatch.setattr(router, '_model_state', {})
     monkeypatch.setattr(router, 'cache', router.ResponseCache())
@@ -92,3 +94,44 @@ def test_key_save_failure_rolls_back_model_override(client, monkeypatch):
     assert result.status_code == 500
     assert router._env_read_line('OPENAI_MODEL') == 'before'
     assert router.PROVIDERS == []
+
+
+def test_rotation_applies_live_without_resetting_pool(client):
+    provider = {'name': 'test', 'model': 'chat', 'keys': ['one', 'two', 'three']}
+    router.pool = router.CredentialPool([provider], mode='round-robin')
+    original_pool = router.pool
+    assert router.pool.get_key('test', 'chat') == 'one'
+    router.pool.mark_rate_limited('test', 'three', 'chat', 60)
+    bucket = router.pool.pools['test']['chat']
+    cooling = next(entry['cool_until'] for entry in bucket if entry['key'] == 'three')
+    result = client.post('/v1/config/rotation', headers=ADMIN, json={'mode': 'seq'})
+    assert result.status_code == 200 and result.json['restart_required'] is False
+    assert router.ROTATION_MODE == router.pool.mode == 'sequential'
+    assert router._env_read_line('ROTATION_MODE') == 'sequential'
+    assert client.get('/v1/status', headers=ADMIN).json['rotation']['mode'] == 'sequential'
+    assert [router.pool.get_key('test', 'chat') for _ in range(2)] == ['two', 'two']
+    result = client.post('/v1/config/rotation', headers=ADMIN, json={'mode': 'round-robin'})
+    assert result.status_code == 200 and result.json['restart_required'] is False
+    assert [router.pool.get_key('test', 'chat') for _ in range(3)] == ['two', 'one', 'two']
+    assert router.pool is original_pool and router.pool.pools['test']['chat'] is bucket
+    assert next(entry['cool_until'] for entry in bucket if entry['key'] == 'three') == cooling
+    assert router.pool.key_requests_for('test', 'one') == 2
+    assert router.pool.key_requests_for('test', 'two') == 4
+
+
+@pytest.mark.parametrize('body', [[], {'mode': []}, {'mode': 1}, {'mode': 'unknown'}, {}])
+def test_invalid_rotation_is_rejected(client, body):
+    result = client.post('/v1/config/rotation', headers=ADMIN, json=body)
+    assert result.status_code == 400
+    assert router.ROTATION_MODE == router.pool.mode == 'round-robin'
+    assert not router.ENV_FILE_PATH.exists()
+
+
+def test_rotation_failed_save_and_application_access_leave_runtime_unchanged(client, monkeypatch):
+    body = {'mode': 'sequential'}
+    assert client.post('/v1/config/rotation', headers={'Authorization': 'Bearer sk-test'}, json=body).status_code == 401
+    def fail(*args): raise OSError('read-only')
+    monkeypatch.setattr(router, '_env_write_line', fail)
+    result = client.post('/v1/config/rotation', headers=ADMIN, json=body)
+    assert result.status_code == 500
+    assert router.ROTATION_MODE == router.pool.mode == 'round-robin'

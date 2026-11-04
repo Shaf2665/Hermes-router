@@ -48,7 +48,7 @@ Application key creation, revocation and budgets also apply immediately. Provide
 keys and model changes (including resetting defaults) apply live. Active responses finish
 with their original model; subsequent requests use the new configuration. Provider checks
 run in the background and may make small upstream test requests. Adding a key preserves
-existing cooldowns and usage counters. Key rotation changes still show a restart banner.
+existing cooldowns and usage counters. Key rotation mode also applies immediately, preserving pool position, cooldowns and usage.
 Direct `.env` edits and the file-based `hr features` CLI require a restart.
 The Settings page reports save failures without changing the switch state.
 
