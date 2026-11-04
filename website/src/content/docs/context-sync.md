@@ -176,3 +176,10 @@ revoked-key, malformed-metadata and unavailable-model states fail closed.
   accounting, strict metadata parsing and actual local HTTP wire behavior.
 - A real installed VSIX/Copilot session must still be checked when rolling out:
   change 128K → 256K → Auto and verify the model picker and next request update.
+
+## Live model switches
+
+The On / Off switches in Providers update routing without restarting Hermes.
+Disabled models are excluded from the context budget and eligible failover pool.
+If no enabled model meets your minimum, the extension has no eligible model until
+you enable one or lower the minimum. The saved minimum itself is unchanged.

@@ -10,6 +10,49 @@ the technical version (scoring formulas, code paths), see the
 capability, and the router sends it to the cheapest model that can still do the job — skipping
 anything that can't, and trying the next option automatically if one fails.
 
+## Enable or disable individual models
+
+Open **Providers** and use the **On / Off** switch beside each registered model.
+Each switch belongs to one provider/model pair, so switching off a model on one
+provider does not switch off the same model ID on another provider.
+
+Changes apply immediately, without restarting Hermes. New routing attempts,
+retries, and failover skip disabled models. A request already sent upstream can
+finish. Disabled models stay listed so you can turn them back on, and their keys,
+ratings, context limits, and usage history are preserved. Cached answers from an
+older model selection cannot bypass a switch. Configured embedding models also
+have switches; disabling one excludes it from embedding requests and semantic
+cache lookups that need a new embedding.
+
+Turning every chat model off pauses chat routing and returns HTTP 503 until one is
+enabled. Enabled models still need to satisfy the context minimum, tool support,
+application access scopes, and other routing rules. Context-aware extensions
+refresh their eligible pool; stale client revisions receive HTTP 409 so they can
+refresh before retrying. An On switch does not enlarge a model's context window.
+
+Switches are saved atomically in `model-policy.json` beside the file selected by
+`HR_ENV_FILE` (normally `/app/data/model-policy.json` in Docker). Include this file
+in data backups. Set `ROUTER_MODEL_POLICY_FILE` only when using a different path.
+Existing models default to On until disabled. Saved choices survive provider
+refreshes and restarts, including a model being removed and registered again.
+The normal single-process, multi-threaded Hermes server applies them live;
+separate router processes/instances maintain their own live policy.
+
+Administrator API (application keys cannot change routing):
+
+```http
+POST /v1/config/models/enabled
+Content-Type: application/json
+Authorization: Bearer YOUR_ADMIN_API_KEY
+
+{"provider":"anthropic","model":"claude-sonnet-5-5","enabled":false}
+```
+
+The response includes `restart_required: false`. Browser sessions must also send
+their CSRF token. A failed save leaves the running policy unchanged. This live
+switch behavior applies once the router version containing this feature has been
+deployed; editing source files alone cannot change an older running process.
+
 ## Chat completion routing
 
 This is the core of the router, used by every request.

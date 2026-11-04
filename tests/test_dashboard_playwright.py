@@ -61,6 +61,7 @@ def router_server(tmp_path):
         "HR_ENV_FILE": str(tmp_path / "router.env"), "HR_USAGE_DB": str(tmp_path / "usage.db"),
         "ROUTER_AUTH_FILE": str(tmp_path / "auth.json"),
         "ROUTER_STATE_FILE": str(tmp_path / "router_state.json"),
+        "ROUTER_MODEL_POLICY_FILE": str(tmp_path / "model-policy.json"),
         "HERMES_INSTANCES_FILE": str(tmp_path / "instances.json"),
         "CACHE_DB_PATH": str(tmp_path / "cache.db"), "CACHE_PERSIST": "0",
         "AUTO_DISCOVER_MODELS": "0", "REQUEST_LOG_SIZE": "50", "LOG_LEVEL": "WARNING",
@@ -108,6 +109,58 @@ def login(page, base_url):
     page.get_by_role("button", name="Open Dashboard").click()
     expect(page.locator("#key-gate")).to_be_hidden()
     expect(page.locator("#plain-title")).not_to_contain_text("Checking")
+
+
+def test_model_switch_changes_live_requests_without_restart(router_server, page):
+    requests_seen = []
+    page.on("request", lambda r: requests_seen.append(r.url))
+    login(page, router_server)
+    page.get_by_role("button", name="Providers", exact=True).click()
+    switch = page.get_by_role("switch", name="Route through local / test-local", exact=True)
+    expect(switch).to_have_attribute("aria-checked", "true")
+    payload = {"model": "hermes-router", "messages": [{"role": "user", "content": "hello"}]}
+    auth = {"Authorization": "Bearer " + AUTH_KEY}
+    assert page.request.post(router_server + "/v1/chat/completions", headers=auth, data=payload).status == 200
+    switch.click()
+    expect(switch).to_have_attribute("aria-checked", "false")
+    expect(page.locator("#model-routing-message")).to_contain_text("All chat models are disabled")
+    assert page.request.post(router_server + "/v1/chat/completions", headers=auth, data=payload).status == 503
+    page.reload()
+    expect(switch).to_have_attribute("aria-checked", "false")
+    switch.click()
+    expect(switch).to_have_attribute("aria-checked", "true")
+    expect(page.locator("#model-routing-message")).to_contain_text("no restart needed")
+    assert page.request.post(router_server + "/v1/chat/completions", headers=auth, data=payload).status == 200
+    assert not any("/v1/config/restart" in url for url in requests_seen)
+
+
+def test_model_switch_save_failure_keeps_confirmed_state(router_server, page):
+    login(page, router_server)
+    page.get_by_role("button", name="Providers", exact=True).click()
+    page.route("**/v1/config/models/enabled", lambda route: route.fulfill(
+        status=503, json={"error": {"message": "Could not save model switch. Routing is unchanged."}}))
+    switch = page.get_by_role("switch", name="Route through local / test-local", exact=True)
+    switch.click()
+    expect(page.locator("#model-routing-message")).to_contain_text("Could not save")
+    expect(switch).to_have_attribute("aria-checked", "true")
+    expect(switch).to_be_enabled()
+
+
+def test_all_registered_models_are_visible_and_names_are_escaped(router_server, page):
+    def status(route):
+        data = route.fetch().json()
+        template = data["providers"]["local"]
+        data["providers"] = {"provider-" + str(i): {**template, "model_states": [
+            {"model": HOSTILE, "enabled": False, "kind": "chat"},
+            {"model": "second", "enabled": True, "kind": "chat"}]} for i in range(9)}
+        route.fulfill(json=data)
+    page.route("**/v1/status", status)
+    login(page, router_server)
+    page.get_by_role("button", name="Providers", exact=True).click()
+    expect(page.get_by_role("switch")).to_have_count(18)
+    expect(page.get_by_role("switch", name="Route through provider-8 / " + HOSTILE, exact=True)).to_have_attribute("aria-checked", "false")
+    assert page.locator("#provider-card-grid img").count() == 0
+    assert page.evaluate("window.hermesXss") is None
 
 
 def test_provider_presets_key_link_live_models_and_multiple_selection(router_server, page):

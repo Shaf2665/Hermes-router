@@ -115,6 +115,18 @@ main{padding:18px 20px;display:grid;gap:16px;max-width:1180px;margin:0 auto;widt
 .provider-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:5px}
 .provider-name{font-weight:700}
 .provider-model{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.model-routing-list{display:grid;gap:10px;margin-top:12px}
+.model-routing-row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.model-routing-name{min-width:0;font-size:14px;color:var(--text);overflow-wrap:anywhere}
+.model-routing-kind{display:block;font-size:10px;color:var(--muted)}
+.model-switch{display:flex;align-items:center;gap:6px;flex-shrink:0;min-height:40px;background:none;border:0;color:var(--muted);padding:6px;cursor:pointer;font:inherit;font-size:14px}
+.model-switch-track{display:block;width:32px;height:18px;border-radius:12px;background:var(--border);position:relative}
+.model-switch-track:before{content:"";position:absolute;top:3px;left:3px;width:12px;height:12px;border-radius:50%;background:white;transition:transform .15s}
+.model-switch[aria-checked="true"] .model-switch-track{background:var(--accent)}
+.model-switch[aria-checked="true"] .model-switch-track:before{transform:translateX(14px)}
+.model-switch:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+.model-switch:disabled{opacity:.55;cursor:wait}
+.model-routing-note{margin:0;padding:0 18px 12px;font-size:12px;color:var(--muted)}
 .provider-meta{display:flex;justify-content:space-between;gap:8px;margin-top:10px;font-size:11px;color:var(--muted)}
 .advanced-panel summary{cursor:pointer;list-style:none}
 .advanced-panel summary::-webkit-details-marker{display:none}
@@ -440,6 +452,7 @@ body{font-size:16px;line-height:1.5}button,input,select,textarea{font-family:inh
         <div class="panel">
           <div class="panel-header"><span class="panel-title">Provider Health</span><span class="muted">attention first</span></div>
           <div class="provider-grid" id="provider-card-grid"></div>
+          <p class="model-routing-note" id="model-routing-message" role="status">Model switches apply immediately. Requests already in progress can finish.</p>
         </div>
 
         <details class="panel advanced-panel">
@@ -725,6 +738,8 @@ body{font-size:16px;line-height:1.5}button,input,select,textarea{font-family:inh
 // Only the CSRF token and a one-time application key are held in memory.
 let csrfToken = '', authenticated = false, connectKey = '';
 let statusData = null, usageData = null, logsData = [], accessKeysData = [], instancesData = [];
+const modelRoutingPending = new Set();
+let modelRoutingEpoch = 0;
 let editingKeyTail = null, autoInstanceBaseUrl = false;
 const INTERVAL = 5000;
 let sessionGeneration = 0, restartNeeded = false;
@@ -821,7 +836,7 @@ function refresh() {
         return Promise.resolve();
     if (refreshPromise)
         return refreshPromise;
-    const generation = pageGeneration, session = sessionGeneration;
+    const generation = pageGeneration, session = sessionGeneration, routingEpoch = modelRoutingEpoch;
     const tasks = [];
     const panel = (name, url, apply) => tasks.push((async () => {
         try {
@@ -843,7 +858,9 @@ function refresh() {
         renderPanelErrors();
     })());
     if (['overview', 'providers', 'connect', 'settings'].includes(currentPage))
-        panel('Providers', '/v1/status', d => statusData = d);
+        panel('Providers', '/v1/status', d => {
+            if (routingEpoch === modelRoutingEpoch && !modelRoutingPending.size) statusData = d;
+        });
     if (['overview', 'providers'].includes(currentPage))
         panel('Usage', '/v1/usage', d => usageData = d);
     if (currentPage === 'logs') {
@@ -875,6 +892,8 @@ function showGate(message) {
     pageGeneration++;
     stop();
     statusData = null;
+    modelRoutingEpoch++;
+    modelRoutingPending.clear();
     usageData = null;
     logsData = [];
     accessKeysData = [];
@@ -1171,6 +1190,11 @@ function renderPlainOverview() {
         title.textContent = 'Add one provider key to start routing';
         msg.textContent = 'Open Providers to add a credential, then send a small test from Connect.';
     }
+    else if (vals.length && vals.every(p => p.model_states && !p.model_states.some(m => m.enabled && m.kind === 'chat'))) {
+        state.classList.add('warn'); state.textContent = 'routing paused';
+        title.textContent = 'All chat models are disabled';
+        msg.textContent = 'Enable a model in Providers to resume chat. No restart is needed.';
+    }
     else if (statusData.readiness?.state === 'initializing') {
         state.classList.add('warn');state.textContent='checking providers';
         title.textContent='Checking provider readiness';
@@ -1221,7 +1245,7 @@ function renderProviderCards() {
         const badA = (a.breaker?.open ? 2 : 0) + ((a.stats?.errors || 0) > 0 ? 1 : 0);
         const badB = (b.breaker?.open ? 2 : 0) + ((b.stats?.errors || 0) > 0 ? 1 : 0);
         return badB - badA || an.localeCompare(bn);
-    }).slice(0, 8);
+    });
     if (!entries.length) {
         grid.innerHTML = '<div class="provider-card bad"><div class="provider-name">No providers configured</div><div class="provider-model">Add an API key below.</div></div>';
         return;
@@ -1232,17 +1256,57 @@ function renderProviderCards() {
         const erp = req ? err / req * 100 : 0;
         const ready = (p.keys || []).filter(k => k.status === 'ready').length;
         const brk = p.breaker?.open;
+        const models = p.model_states || [];
+        const allDisabled = models.length > 0 && models.every(m => !m.enabled);
         const cls = brk || erp > 25 ? 'bad' : erp > 5 ? 'warn' : '';
-        const pill = brk ? '<span class="pill pill-err">paused</span>' :
+        const pill = allDisabled ? '<span class="pill pill-grey">disabled</span>' : brk ? '<span class="pill pill-err">paused</span>' :
             erp > 25 ? '<span class="pill pill-err">check</span>' :
                 erp > 5 ? '<span class="pill pill-warn">watch</span>' :
                     '<span class="pill pill-ok">ready</span>';
         return `<div class="provider-card ${cls}">
       <div class="provider-head"><span class="provider-name">${esc(name)}</span>${pill}</div>
-      <div class="provider-model" title="${attr(p.model || '')}">${esc(p.model || 'no model')}</div>
+      ${models.length ? `<div class="model-routing-list">${models.map(m => {
+          const pending = modelRoutingPending.has(JSON.stringify([name, m.model]));
+          return `<div class="model-routing-row"><span class="model-routing-name">${esc(m.model)}${m.kind === 'embeddings' ? '<span class="model-routing-kind">Embeddings</span>' : ''}</span>
+          <button type="button" role="switch" class="model-switch" aria-label="${attr('Route through ' + name + ' / ' + m.model)}" aria-checked="${m.enabled ? 'true' : 'false'}" ${pending ? 'disabled aria-busy="true"' : ''}
+          onclick="setModelEnabled(${jsarg(name)},${jsarg(m.model)},${!m.enabled})"><span class="model-switch-track" aria-hidden="true"></span><span>${m.enabled ? 'On' : 'Off'}</span></button></div>`;
+      }).join('')}</div>` : `<div class="provider-model" title="${attr(p.model || '')}">${esc(p.model || 'no model')}</div>`}
       <div class="provider-meta"><span>${ready} ready key${ready === 1 ? '' : 's'}</span><span>${fmt.ms(p.stats?.avg_latency_ms)}</span></div>
     </div>`;
     }).join('');
+}
+async function setModelEnabled(provider, model, enabled) {
+    const identity = JSON.stringify([provider, model]), session = sessionGeneration;
+    if (modelRoutingPending.has(identity)) return;
+    modelRoutingPending.add(identity);
+    modelRoutingEpoch++;
+    renderProviderCards();
+    const message = document.getElementById('model-routing-message');
+    message.textContent = 'Saving model switch…';
+    try {
+        const r = await adminFetch('/v1/config/models/enabled', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ provider, model, enabled })
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(apiError(d) || 'Could not save model switch.');
+        if (!authenticated || session !== sessionGeneration) return;
+        const saved = statusData?.providers?.[provider]?.model_states?.find(m => m.model === model);
+        if (saved) saved.enabled = d.enabled;
+        const anyChat = Object.values(statusData?.providers || {}).some(p =>
+            (p.model_states || []).some(m => m.enabled && m.kind === 'chat'));
+        message.textContent = anyChat ? `${provider} / ${model}: ${d.enabled ? 'enabled' : 'disabled'}. Applied immediately; no restart needed.` :
+            'All chat models are disabled. Chat requests will fail until you enable a model. No restart needed.';
+    } catch (e) {
+        if (authenticated && session === sessionGeneration)
+            message.textContent = e.message + ' The switch is not confirmed; use Refresh to check its saved state.';
+    } finally {
+        if (session === sessionGeneration) {
+            modelRoutingPending.delete(identity);
+            modelRoutingEpoch++;
+            if (authenticated) renderProviderCards();
+        }
+    }
 }
 // ── instances ────────────────────────────────────────────────────────────────
 function renderInstances() {

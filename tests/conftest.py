@@ -49,6 +49,7 @@ os.environ.update({
     "HR_USAGE_DB": str(_TMP / "usage.db"),
     "ROUTER_AUTH_FILE": str(_TMP / "auth.json"),
     "ROUTER_STATE_FILE": str(_TMP / "router_state.json"),
+    "ROUTER_MODEL_POLICY_FILE": str(_TMP / "model-policy.json"),
     "CACHE_DB_PATH": str(_TMP / "cache.db"),
     "CACHE_PERSIST": "0",
     "AUTO_DISCOVER_MODELS": "0",
