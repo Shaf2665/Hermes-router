@@ -64,9 +64,9 @@ The launcher reads current context limits each time it starts. Dashboard model s
 | Claude Code CLI | `POST /claude/v1/messages` | Existing Messages translation, restricted to enabled Claude candidates, strict confirmed tool support |
 | Readiness | `GET /v1/bridge-info`, `/codex/v1/client-config`, `/claude/v1/client-config` | Authenticated, scoped metadata; no inference |
 
-The Responses bridge translates through the existing router pipeline. It keeps application-key authorization, scope/budget controls, dashboard model enablement and context policy. It buffers tool arguments until the upstream turn finishes and validates all tool calls before marking any executable call complete. XML-looking text is never converted into a tool call. A truncated/failed stream emits a failure instead of a successful completion. Codex transport retries are set to zero by the launcher; Hermes can still try eligible providers before handing a stream to the client.
+The Responses bridge translates through the existing router pipeline. It keeps application-key authorization, scope/budget controls, dashboard model enablement and context policy. Coding-client requests bypass response caches, including requests without tools. It buffers tool arguments until the upstream turn finishes and validates all tool calls before marking any executable call complete. XML-looking text is never converted into a tool call. A truncated/failed stream emits a failure instead of a successful completion. Codex transport retries are set to zero by the launcher; Hermes can still try eligible providers before handing a stream to the client.
 
-Custom free-text tools are represented upstream as a function taking an `input` string. Grammar descriptions are passed to the provider; grammar-constrained decoding is not guaranteed. The official client remains responsible for tool validation and execution.
+Custom free-text tools are represented upstream as a function taking an `input` string. Grammar descriptions are passed to the provider; grammar-constrained decoding is not guaranteed. Namespaced tool definitions are flattened for upstream providers and restored for the client, including saved-session history. The official client remains responsible for tool validation and execution.
 
 Unsupported: stored Responses state, `previous_response_id`, background mode, hosted built-in tools (web search is disabled by the launcher), file-ID inputs, realtime/WebSockets, and `/responses/compact`. Encrypted reasoning is provider-specific and is not forwarded. Unknown request item/tool types are rejected instead of silently removed. Automatic compaction support depends on the client's local custom-provider behavior; very long sessions may need a new chat.
 
@@ -74,13 +74,16 @@ Desktop apps, VS Code windows, web/cloud sessions, and running native sessions a
 
 ## Validation and next phase
 
-Run `python -m pytest -q tests/test_responses_api.py tests/test_cli_bridge.py` from the repository with its test dependencies installed. An opt-in native Codex smoke test uses a loopback stub and an empty client state directory, with no provider billing:
+Run `python -m pytest -q tests/test_responses_api.py tests/test_cli_bridge.py` from the repository with its test dependencies installed. Opt-in native CLI tests use loopback stubs and empty client state directories, with no provider billing:
 
 ```sh
 HERMES_RUN_CODEX_SMOKE=1 python -m pytest -q tests/test_codex_cli_bridge.py
+HERMES_RUN_CLAUDE_SMOKE=1 python -m pytest -q tests/test_claude_cli_bridge.py
 ```
 
-The test requires a host capable of running Codex's sandbox. It skips inside restricted nested containers. Protocol regression tests still run there. Validate the exact client version and your provider's tool behavior before relying on session handoffs for work that changes files.
+CI pins Codex CLI `0.167.0-alpha.4` and Claude Code `2.1.318`. Both pass streaming and saved-session resume checks. The Codex check also executes a read-only `pwd` tool call and verifies its result reaches the next model request. These tests validate client transport against stubs, not the quality or tool reliability of a live model.
+
+The Codex test requires a host capable of running its sandbox. It skips inside restricted nested containers; each native test also skips if its CLI is not installed. Protocol regression tests still run there. Validate the exact client version and your provider's tool behavior before relying on session handoffs for work that changes files.
 
 Automatic switching is a later phase: detect documented quota events, capture an explicit session checkpoint, prevent overlapping agents, and demonstrate that interrupted edits/commands are not duplicated. No subscription-token import or unofficial quota bypass is part of this plugin.
 

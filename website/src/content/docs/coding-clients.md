@@ -17,7 +17,7 @@ Run from the checkout or use the launcher's absolute path. Python 3.10+ and the 
 
 For Claude Code, substitute `claude` for `codex`. Its dedicated `/claude/v1/messages` route uses only enabled Claude models with confirmed tool/context support; your application's provider/model restrictions still apply. Codex uses the wider Hermes pool through `/v1/responses`.
 
-The Responses endpoint accepts complete message/tool history with `store=false`, and returns JSON or SSE. Hosted tools, saved response references, background mode, WebSockets, and `/responses/compact` are unsupported. Custom text tools are translated to functions; provider grammar enforcement is not guaranteed. Failed streams never claim a successful turn.
+The Responses endpoint accepts complete message/tool history with `store=false`, and returns JSON or SSE. Namespaced function/custom tools retain their identity across turns. Coding-client requests bypass response caches. Hosted tools, saved response references, background mode, WebSockets, and `/responses/compact` are unsupported. Custom text tools are translated to functions; provider grammar enforcement is not guaranteed. Failed streams never claim a successful turn.
 
 Installing the plugin does not switch a running editor, desktop or cloud session. It is distributed through this repository's marketplace, not published to an official public plugin directory.
 
