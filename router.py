@@ -5096,6 +5096,8 @@ def responses():
         payload, custom = responses_api.to_chat(request.get_json(silent=True), ROUTER_MODEL)
     except ValueError as exc:
         return jsonify({"error": {"message": str(exc), "type": "invalid_request_error"}}), 400
+    except (TypeError, AttributeError):
+        return jsonify({"error": {"message": "Invalid Responses request structure", "type": "invalid_request_error"}}), 400
     context_error = _check_client_context(payload)
     if context_error:
         return context_error

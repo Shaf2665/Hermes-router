@@ -54,6 +54,8 @@ def test_text_tools_and_full_history_round_trip_without_mutation():
     {"max_output_tokens": -5}, {"temperature": float("nan")}, {"tools": "secret"},
     {"tools": [None]}, {"tools": [{"type": "web_search"}]}, {"tools": [TOOL, TOOL]},
     {"tools": [{"type": "custom", "name": "bad", "format": []}]},
+    {"tools": [{"type": []}]}, {"input": [{"role": []}]}, {"input": [{"type": {}}]},
+    {"tool_choice": {"type": "function", "name": {}}},
     {"previous_response_id": "private-response"}, {"store": True}, {"background": True},
     {"conversation": "private-conversation"}, {"tool_choice": {"type": "function", "name": "unknown"}},
     {"input": [{"type": "item_reference", "id": "private-item"}]},

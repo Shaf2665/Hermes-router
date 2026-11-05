@@ -21,6 +21,16 @@ pytestmark = pytest.mark.skipif(os.environ.get("HERMES_RUN_CODEX_SMOKE") != "1" 
 def test_installed_codex_accepts_bridge_and_resumes_saved_history(monkeypatch, tmp_path):
     monkeypatch.setattr(router, "request_log", router.RequestRingBuffer(50))
     received = []
+    rejected = []
+    original_translate = router.responses_api.to_chat
+    def translate(body, model):
+        try:
+            return original_translate(body, model)
+        except Exception as error:
+            rejected.append({"error": str(error), "keys": list(body or {}),
+                             "tool_types": [t.get("type") for t in (body or {}).get("tools", [])]})
+            raise
+    monkeypatch.setattr(router.responses_api, "to_chat", translate)
     def route(payload, streaming, _namespace):
         received.append(payload)
         def stream():
@@ -49,7 +59,8 @@ def test_installed_codex_accepts_bridge_and_resumes_saved_history(monkeypatch, t
                                env=env, cwd=tmp_path, capture_output=True, text=True, input="", timeout=50)
         if "bwrap: loopback: Failed to create NETLINK_ROUTE socket" in first.stderr:
             pytest.skip("Host does not permit a nested Codex sandbox; run on native Linux CI")
-        assert first.returncode == 0, (first.stdout[-3000:], first.stderr[-3000:])
+        if first.returncode:
+            pytest.fail(first.stdout[-8000:] + "\n" + first.stderr[-3000:] + "\n" + json.dumps(rejected))
         events = [json.loads(line) for line in first.stdout.splitlines() if line.startswith("{")]
         session = next(e["thread_id"] for e in events if e["type"] == "thread.started")
         assert "BRIDGE_OK" in first.stdout and received
