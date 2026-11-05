@@ -34,11 +34,22 @@ def test_installed_codex_accepts_bridge_and_resumes_saved_history(monkeypatch, t
     def route(payload, streaming, _namespace):
         received.append(payload)
         def stream():
-            for event in [
+            if len(received) == 1:
+                # A real client-side, non-filesystem tool verifies the complete
+                # function-call -> tool result -> next response path.
+                tool = next(t["function"] for t in payload["tools"]
+                            if t["function"]["name"] == "update_plan" or
+                            t["function"].get("description", "").split("\n")[0].endswith(".update_plan"))
+                events = [{"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call_plan",
+                    "type": "function", "function": {"name": tool["name"], "arguments": json.dumps({"plan": [
+                        {"step": "Verify bridge", "status": "completed"}]})}}]}, "finish_reason": "tool_calls"}]}]
+            else:
+                events = [
                 {"choices": [{"index": 0, "delta": {"content": "BRIDGE_OK"}, "finish_reason": None}]},
                 {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
                 {"choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 2}},
-            ]:
+                ]
+            for event in events:
                 yield ("data: " + json.dumps(event) + "\n\n").encode()
             yield b"data: [DONE]\n\n"
         return ("stream", stream(), "test")
@@ -67,8 +78,9 @@ def test_installed_codex_accepts_bridge_and_resumes_saved_history(monkeypatch, t
         second = subprocess.run([*base, "exec", "resume", "--skip-git-repo-check", "--json", session, "Say it again"],
                                 env=env, cwd=tmp_path, capture_output=True, text=True, input="", timeout=50)
         assert second.returncode == 0, (second.stdout[-3000:], second.stderr[-3000:])
-        assert len(received) == 2
-        assert any(m.get("role") == "assistant" and "BRIDGE_OK" in str(m.get("content")) for m in received[1]["messages"])
+        assert len(received) == 3
+        assert any(m.get("role") == "tool" and m.get("tool_call_id") == "call_plan" for m in received[1]["messages"])
+        assert any(m.get("role") == "assistant" and "BRIDGE_OK" in str(m.get("content")) for m in received[2]["messages"])
     finally:
         server.shutdown()
         thread.join(timeout=5)

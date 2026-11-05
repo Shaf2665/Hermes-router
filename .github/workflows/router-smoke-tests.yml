@@ -84,7 +84,7 @@ jobs:
       - run: npm run compile
 
   cli-compatibility:
-    name: Codex CLI bridge compatibility
+    name: Coding CLI bridge compatibility
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -95,8 +95,9 @@ jobs:
         with:
           node-version: '20'
       - run: python -m pip install -r requirements.txt pytest
-      - run: npm install -g @openai/codex@0.167.0-alpha.4
-      - name: Verify real Codex streaming and saved-session resume against a local stub
+      - run: npm install -g @openai/codex@0.167.0-alpha.4 @anthropic-ai/claude-code@2.1.318
+      - name: Verify native coding CLIs and saved-session resume against local stubs
         env:
           HERMES_RUN_CODEX_SMOKE: '1'
-        run: python -m pytest -q tests/test_codex_cli_bridge.py
+          HERMES_RUN_CLAUDE_SMOKE: '1'
+        run: python -m pytest -q tests/test_codex_cli_bridge.py tests/test_claude_cli_bridge.py
