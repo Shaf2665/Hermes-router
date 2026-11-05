@@ -1,0 +1,10 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "hermes-router",
+  "version": "0.1.0",
+  "description": "Check Hermes and prepare an explicit local coding-session handoff to enabled API models.",
+  "author": {"name": "Shafiq", "url": "https://github.com/Shaf2665"},
+  "homepage": "https://github.com/Shaf2665/Hermes-router",
+  "repository": "https://github.com/Shaf2665/Hermes-router",
+  "license": "MIT"
+}

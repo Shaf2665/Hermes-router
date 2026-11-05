@@ -7,10 +7,11 @@ hermes-router implements these client-facing endpoints:
 
 - OpenAI-compatible `POST /v1/chat/completions`, `POST /v1/embeddings`, and `GET /v1/models`
 - Anthropic-compatible `POST /v1/messages`
+- Stateless `POST /v1/responses` for local coding clients, plus Claude-only `POST /claude/v1/messages`
 
 Clients using those endpoints normally need only a base URL and API-key change. Other API
-surfaces, including image generation, audio, assistants, batches, files, and the OpenAI
-Responses API, are not exposed as client-facing router endpoints.
+surfaces, including image generation, audio, assistants, batches, and files, are not exposed.
+The Responses bridge supports a documented subset: see [Codex and Claude Code](/coding-clients/).
 
 `api_key` is any value from `PROXY_API_KEYS`. On first boot the router generates a random
 key, writes it to `.env`, and logs it once; you can replace it in `.env`. See

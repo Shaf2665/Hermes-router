@@ -46,6 +46,7 @@ export default defineConfig({
 					label: 'Integrations',
 					items: [
 						{ label: 'Hall of Wisdom', slug: 'hall-of-wisdom' },
+						{ label: 'Codex and Claude Code', slug: 'coding-clients' },
 					],
 				},
 				{

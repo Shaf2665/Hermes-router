@@ -1,0 +1,6 @@
+{
+  "name": "hermes-router",
+  "owner": {"name": "Shafiq", "url": "https://github.com/Shaf2665"},
+  "description": "Hermes Router local coding-client integration",
+  "plugins": [{"name": "hermes-router", "source": "./plugins/hermes-router", "version": "0.1.0"}]
+}
