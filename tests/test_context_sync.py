@@ -260,3 +260,38 @@ def test_context_cache_is_separate_from_legacy_and_old_pool(context_router, monk
     assert original['revision'] != updated['revision']
     route(updated['revision'])
     assert len(set(namespaces)) == 3
+
+
+@pytest.mark.parametrize("endpoint", ["/v1/responses", "/claude/v1/messages"])
+@pytest.mark.parametrize("output_budget", [100, 4096])
+def test_bridge_output_budget_includes_reasoning_without_revision(context_router, monkeypatch, endpoint, output_budget):
+    """Native bridge clients do not send the VS Code config revision header."""
+    from unittest.mock import Mock
+    from test_routing_hints import _Pool
+
+    monkeypatch.setattr(router, "request_log", router.RequestRingBuffer(50))
+    model = "anthropic/claude-test"
+    provider = {"name": "openrouter", "model": model, "models": [model],
+                "keys": ["fake-key"], "base_url": "https://provider.invalid/v1"}
+    monkeypatch.setattr(router, "PROVIDERS", [provider])
+    monkeypatch.setattr(router, "_model_state", {("openrouter", model): {
+        "context_window": 16000, "max_output_tokens": 4096,
+        "supports_tools": True, "reasoning": True}})
+    monkeypatch.setattr(router, "_ordered_providers", lambda *_: [{"provider": provider, "model": model}])
+    monkeypatch.setattr(router, "pool", _Pool())
+    monkeypatch.setenv("REASONING_TOKEN_RESERVE", "4096")
+    upstream = Mock(status_code=200, headers={}, text="")
+    upstream.json.return_value = {"choices": [{"message": {"role": "assistant", "content": "done"},
+                                              "finish_reason": "stop"}]}
+    sent = []
+    def post(*args, **kwargs):
+        sent.append(kwargs["json"])
+        return upstream
+    monkeypatch.setattr(router._HTTP, "post", post)
+    body = ({"input": "hello", "max_output_tokens": output_budget} if endpoint == "/v1/responses" else
+            {"model": "hermes-router", "messages": [{"role": "user", "content": "hello"}],
+             "max_tokens": output_budget})
+    response = context_router.post(endpoint, headers=APP, json=body)
+    assert response.status_code == 200, response.get_json()
+    assert len(sent) == 1
+    assert sent[0]["max_tokens"] == output_budget

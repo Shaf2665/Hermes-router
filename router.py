@@ -4068,9 +4068,12 @@ def forward(provider: dict, key: str, payload: dict, streaming: bool,
     # asked for, so the actual answer still fits. (The model stops when done, so
     # short answers stay short.) Tune/disable with REASONING_TOKEN_RESERVE.
     # Per-model: only the actual model being sent gets the reserve.
-    # A synchronized request already reserves output within its total context.
+    # Synchronized and coding-client requests already reserve output within their total context.
     # Hidden reasoning must share that ceiling instead of expanding it afterward.
-    context_bound = has_request_context() and getattr(g, "context_client_pool", None) is not None
+    context_bound = has_request_context() and (
+        getattr(g, "context_client_pool", None) is not None
+        or getattr(g, "strict_client_tools", False)
+    )
     if not context_bound and _model_caps(provider["name"], body["model"]).get("reasoning"):
         reserve = _int_env("REASONING_TOKEN_RESERVE", 4096)
         if reserve > 0:
