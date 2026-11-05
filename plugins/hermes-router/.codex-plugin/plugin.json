@@ -1,0 +1,6 @@
+{
+  "name": "hermes-router",
+  "version": "0.1.0",
+  "description": "Check Hermes and prepare an explicit local coding-session handoff to enabled API models.",
+  "skills": "./skills/"
+}

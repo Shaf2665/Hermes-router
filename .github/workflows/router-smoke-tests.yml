@@ -43,6 +43,8 @@ jobs:
           router.py
           usage_store.py
           context_policy.py
+          responses_api.py
+          plugins/hermes-router/scripts/hermes_bridge.py
 
       - name: Shell syntax check
         shell: bash
@@ -80,3 +82,21 @@ jobs:
       - run: npm run check
       - run: npm test
       - run: npm run compile
+
+  cli-compatibility:
+    name: Codex CLI bridge compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: python -m pip install -r requirements.txt pytest
+      - run: npm install -g @openai/codex@0.167.0-alpha.4
+      - name: Verify real Codex streaming and saved-session resume against a local stub
+        env:
+          HERMES_RUN_CODEX_SMOKE: '1'
+        run: python -m pytest -q tests/test_codex_cli_bridge.py

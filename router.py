@@ -32,6 +32,7 @@ from urllib.parse import urlparse, urlunparse
 from provider_catalog import PROVIDER_PRESETS, ADDITIONAL_DEFAULTS
 import context_policy
 import model_discovery
+import responses_api
 
 import requests
 
@@ -4501,6 +4502,10 @@ def _context_candidates(config):
         if providers is not None and provider["name"] not in providers:
             continue
         for model in _enabled_provider_models(provider):
+            if has_request_context() and getattr(g, "claude_only", False) and not _claude_candidate(provider, model):
+                continue
+            if has_request_context() and getattr(g, "strict_client_tools", False) and not _model_has_confirmed_tool_support(provider["name"], model):
+                continue
             if models is not None and model not in models:
                 continue
             if not _model_supports_tools(provider["name"], model):
@@ -4517,13 +4522,32 @@ def _client_context(config):
 
 
 @app.route("/v1/client-config")
+@app.route("/claude/v1/client-config")
+@app.route("/codex/v1/client-config")
 def client_configuration():
     err = _auth_check()
     if err:
         return err
+    g.claude_only = request.path.startswith("/claude/")
+    g.strict_client_tools = request.path != "/v1/client-config"
     response = jsonify(_client_context(_CONTEXT_CONFIG))
     response.headers["Cache-Control"] = "no-store"
     return response
+
+
+@app.route("/v1/bridge-info")
+def bridge_information():
+    err = _auth_check()
+    if err:
+        return err
+    return jsonify({"version": 1, "responses": "stateless",
+                    "claude_messages": "/claude/v1/messages", "automatic_handoff": False})
+
+
+def _claude_candidate(provider, model):
+    return (provider.get("name") == "anthropic" or
+            (provider.get("protocol") == "anthropic" and model.startswith("claude-")) or
+            (provider.get("name") == "openrouter" and model.startswith("anthropic/claude-")))
 
 
 def _check_client_context(payload):
@@ -4640,6 +4664,11 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
     # routed through the temporary pool under the original pool's namespace.
     model_policy = _DISABLED_MODELS
     ns += ":models:" + _model_policy_revision(model_policy)
+    claude_only = has_request_context() and getattr(g, "claude_only", False)
+    if claude_only:
+        ns += ":claude-only"
+    if has_request_context() and getattr(g, "strict_client_tools", False) and payload.get("tools"):
+        tool_loop = True
 
     # Cache check (non-streaming only): exact match first (cheap), then optional
     # semantic match. query_emb is reused to store the response so future similar
@@ -4665,7 +4694,14 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
                     return ("json", hit)
 
     est_tokens = _estimated_tokens(messages)
+    strict_client = has_request_context() and getattr(g, "strict_client_tools", False)
+    if strict_client:
+        # Include tool definitions and tool arguments in the context estimate.
+        est_tokens = max(est_tokens, _estimated_tokens([{"role": "user", "content":
+            json.dumps({k: payload[k] for k in ("messages", "tools") if k in payload}, ensure_ascii=False)}]))
     ordered    = _ordered_providers(payload, prefer_local, workload_hint)
+    if claude_only:
+        ordered = [c for c in ordered if _claude_candidate(c["provider"], c["model"])]
     ordered = _session_affinity_order(ordered, session_affinity_id)
 
     # Tool-aware routing: when the request carries tools, prefer (provider, model)
@@ -4734,6 +4770,8 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
         if context_pool is not None and (name, model) not in context_pool:
             continue
         limits = _context_limits(provider, model, context_config)
+        if strict_client and limits is None:
+            continue
         if context_config["context_window"]:
             if limits is None or limits["context_window"] < context_config["context_window"]:
                 continue
@@ -5048,6 +5086,47 @@ def chat():
     return jsonify(result[1]), result[2]
 
 
+@app.route("/v1/responses", methods=["POST"])
+def responses():
+    """Stateless client Responses API; all inference uses existing routing policy."""
+    err = _auth_check()
+    if err:
+        return err
+    try:
+        payload, custom = responses_api.to_chat(request.get_json(silent=True), ROUTER_MODEL)
+    except ValueError as exc:
+        return jsonify({"error": {"message": str(exc), "type": "invalid_request_error"}}), 400
+    context_error = _check_client_context(payload)
+    if context_error:
+        return context_error
+    g.strict_client_tools = True
+    payload.setdefault("max_tokens", 4096)
+    token = _caller_token()
+    gate = _admit_request(token, payload)
+    if gate:
+        return gate
+    started = time.time()
+    result = _route_completion(payload, payload["stream"], _cache_ns())
+    _record_request_tokens(token, payload, result)
+    _log_completion(token, "responses", payload, result, time.time() - started)
+    names = [t["function"]["name"] for t in payload.get("tools", [])]
+    if result[0] == "json":
+        try:
+            return jsonify(responses_api.from_chat(result[1], payload["model"], custom, names))
+        except (ValueError, TypeError, KeyError, AttributeError, IndexError):
+            return jsonify({"error": {"type": "upstream_error", "message": "Invalid provider response"}}), 502
+    if result[0] == "stream":
+        _, source, name = result
+        gen = responses_api.stream(source, payload["model"], custom, names)
+        response = Response(stream_with_context(gen), content_type="text/event-stream",
+                            headers={"X-Provider": name, "Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+        response.call_on_close(gen.close)
+        response.call_on_close(source.close)
+        return response
+    return jsonify(result[1]), result[2]
+
+
+@app.route("/claude/v1/messages", methods=["POST"])
 @app.route("/v1/messages", methods=["POST"])
 def anthropic_messages():
     """Anthropic Messages API endpoint — lets the Anthropic SDK use the router
@@ -5057,12 +5136,19 @@ def anthropic_messages():
     if err:
         return err
 
+    g.claude_only = request.path.startswith("/claude/")
+    g.strict_client_tools = g.claude_only
+
     body = request.get_json(force=True, silent=True)
     if not isinstance(body, dict) or "messages" not in body:
         return jsonify(_anthropic_error("request body must be a JSON object with a 'messages' field")), 400
 
+    try:
+        payload = _anthropic_request_to_openai(body)
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return jsonify(_anthropic_error("Invalid Messages request")), 400
     token  = _caller_token()
-    gate   = _admit_request(token)
+    gate   = _admit_request(token, payload)
     if gate:
         response, code = gate
         error = response.get_json().get("error", {})
@@ -5072,7 +5158,6 @@ def anthropic_messages():
         return translated, code
 
     streaming = bool(body.get("stream", False))
-    payload   = _anthropic_request_to_openai(body)
     t_start   = time.time()
     result    = _route_completion(payload, streaming, _cache_ns())
     _record_request_tokens(token, payload, result)

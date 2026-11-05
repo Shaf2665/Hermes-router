@@ -282,3 +282,7 @@ keeps your model switches, and shows progress or a retryable error on the provid
 Unknown prices are skipped; Groq needs explicit Free-plan confirmation. Speech and
 moderation models do not enter the chat pool. See the
 [provider setup guide](website/src/content/docs/providers.md) for details and limits.
+
+## Codex and Claude Code bridge (preview)
+
+The repository includes a local CLI launcher and marketplace plugin for explicitly continuing a saved coding session through Hermes. Codex uses the new stateless `/v1/responses` endpoint; Claude Code uses a Claude-only Messages route. Automatic usage-limit switching and desktop/cloud handoff are not part of this preview. See the [setup and compatibility guide](plugins/hermes-router/README.md).
