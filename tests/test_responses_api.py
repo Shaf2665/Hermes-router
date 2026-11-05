@@ -180,3 +180,20 @@ def test_scoped_and_disabled_models_still_excluded(monkeypatch):
     monkeypatch.setattr(router, "_model_enabled", lambda *_: False)
     assert client.post("/v1/responses", json={"input": "hello"}, headers=HEADERS).status_code == 503
     forward.assert_not_called()
+
+
+def test_tool_namespaces_round_trip_without_colliding():
+    tools = [TOOL, {"type": "namespace", "name": "files", "tools": [TOOL, CUSTOM]},
+             {"type": "namespace", "name": "other", "tools": [TOOL]}]
+    payload, registry = api.to_chat({"input": "work", "tools": tools,
+        "tool_choice": {"type": "custom", "name": "apply_patch", "namespace": "files"}}, "hermes-router")
+    names = [t["function"]["name"] for t in payload["tools"]]
+    assert len(set(names)) == 4
+    assert payload["tool_choice"]["function"]["name"] == names[2]
+    response = api.from_chat({"choices": [{"message": {"tool_calls": [{"id": "a", "function": {
+        "name": names[2], "arguments": '{"input":"patch"}'}}]}, "finish_reason": "tool_calls"}]},
+        "hermes-router", registry, names)
+    call = response["output"][0]
+    assert call["name"] == "apply_patch" and call["namespace"] == "files" and call["input"] == "patch"
+    next_payload, _ = api.to_chat({"input": [call, {"type": "custom_tool_call_output", "call_id": "a", "output": "done"}], "tools": tools}, "hermes-router")
+    assert next_payload["messages"][0]["tool_calls"][0]["function"]["name"] == names[2]

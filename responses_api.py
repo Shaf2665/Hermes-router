@@ -5,11 +5,53 @@ Only client-executed function/custom tools are supported. Provider-private
 reasoning is never forwarded to another provider.
 """
 import copy
+import hashlib
 import json
 import time
 import uuid
 
 MAX_BUFFER = 16 * 1024 * 1024
+
+
+class ToolRegistry(set):
+    """Custom tool aliases plus a reversible namespace mapping for this request."""
+    def __init__(self):
+        super().__init__()
+        self.aliases = {}
+
+
+def _tool_name(name, namespace=None):
+    name = _string(name, "tool name")
+    if namespace is None:
+        return name
+    _string(namespace, "namespace")
+    digest = hashlib.sha256(json.dumps([namespace, name]).encode()).hexdigest()[:24]
+    return "hrns_" + digest
+
+
+def _flatten_tools(tools, registry):
+    if not isinstance(tools, list):
+        raise ValueError("tools must be an array")
+    flattened = []
+    for tool in tools:
+        _object(tool, "tool")
+        if tool.get("type") != "namespace":
+            flattened.append(tool)
+            continue
+        namespace = _string(tool.get("name"), "namespace")
+        children = tool.get("tools")
+        if not isinstance(children, list) or not children:
+            raise ValueError("namespace tools must be a nonempty array")
+        for child in children:
+            _object(child, "namespace tool")
+            if child.get("type") not in {"function", "custom"}:
+                raise ValueError("Namespaces support only function and custom tools")
+            alias = _tool_name(child.get("name"), namespace)
+            registry.aliases[alias] = {"name": child["name"], "namespace": namespace}
+            description = _string(child.get("description") or "", "description", True)
+            flattened.append({**child, "name": alias, "description":
+                              f"{namespace}.{child['name']}\n{description}"})
+    return flattened
 
 
 def _string(value, field, empty=False):
@@ -93,7 +135,7 @@ def to_chat(body, default_model):
             arguments = (_arguments(item.get("arguments")) if kind == "function_call" else
                          json.dumps({"input": _string(item.get("input"), "input", True)}))
             call = {"id": call_id, "type": "function", "function": {
-                "name": _string(item.get("name"), "tool name"), "arguments": arguments}}
+                "name": _tool_name(item.get("name"), item.get("namespace")), "arguments": arguments}}
             messages = payload["messages"]
             if messages and messages[-1]["role"] == "assistant":
                 messages[-1].setdefault("tool_calls", []).append(call)
@@ -113,9 +155,8 @@ def to_chat(body, default_model):
             raise ValueError("Unsupported input item; send messages and client tool history")
     if not payload["messages"] or calls != results:
         raise ValueError("Full history must include results for every tool call")
-    custom, names, tools = set(), set(), body.get("tools", [])
-    if not isinstance(tools, list):
-        raise ValueError("tools must be an array")
+    custom, names = ToolRegistry(), set()
+    tools = _flatten_tools(body.get("tools", []), custom)
     translated = []
     for tool in tools:
         _object(tool, "tool")
@@ -149,8 +190,8 @@ def to_chat(body, default_model):
     if choice is not None:
         if isinstance(choice, str) and choice in {"auto", "none", "required"}:
             payload["tool_choice"] = choice
-        elif isinstance(choice, dict) and choice.get("type") in {"function", "custom"} and choice.get("name") in names:
-            payload["tool_choice"] = {"type": "function", "function": {"name": choice["name"]}}
+        elif isinstance(choice, dict) and choice.get("type") in {"function", "custom"} and _tool_name(choice.get("name"), choice.get("namespace")) in names:
+            payload["tool_choice"] = {"type": "function", "function": {"name": _tool_name(choice["name"], choice.get("namespace"))}}
         else:
             raise ValueError("Unsupported tool_choice")
     if "parallel_tool_calls" in body:
@@ -206,6 +247,7 @@ class ResponseBuilder:
                          "status": "in_progress", "model": model, "output": [], "error": None,
                          "incomplete_details": None, "usage": None, "store": False}
         self.custom, self.names = set(custom), set(names)
+        self.aliases = getattr(custom, "aliases", {})
         self.text_index, self.calls, self.sequence, self.finish = None, {}, 0, None
         self.size = 0
 
@@ -291,6 +333,7 @@ class ResponseBuilder:
             item = {"id": ("ctc_" if custom else "fc_") + uuid.uuid4().hex,
                     "type": "custom_tool_call" if custom else "function_call", "call_id": call["id"],
                     "name": call["name"], "status": "completed"}
+            item.update(self.aliases.get(call["name"], {}))
             if custom:
                 parsed = json.loads(arguments)
                 if set(parsed) != {"input"}:
