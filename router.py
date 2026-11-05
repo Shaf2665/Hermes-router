@@ -4667,14 +4667,15 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
     claude_only = has_request_context() and getattr(g, "claude_only", False)
     if claude_only:
         ns += ":claude-only"
-    if has_request_context() and getattr(g, "strict_client_tools", False) and payload.get("tools"):
+    strict_client = has_request_context() and getattr(g, "strict_client_tools", False)
+    if strict_client and payload.get("tools"):
         tool_loop = True
 
     # Cache check (non-streaming only): exact match first (cheap), then optional
     # semantic match. query_emb is reused to store the response so future similar
     # prompts can match it.
     query_emb = None
-    if not streaming and not tool_loop:
+    if not streaming and not tool_loop and not strict_client:
         cached = cache.get(payload, ns)
         if cached is not None:
             log.info("↩ cache hit")
@@ -4694,7 +4695,6 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
                     return ("json", hit)
 
     est_tokens = _estimated_tokens(messages)
-    strict_client = has_request_context() and getattr(g, "strict_client_tools", False)
     if strict_client:
         # Include tool definitions and tool arguments in the context estimate.
         est_tokens = max(est_tokens, _estimated_tokens([{"role": "user", "content":
@@ -4934,7 +4934,7 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
                         pool.mark_rate_limited(name, key, model, retry_after=30)
                         break
                     _add_provider_tokens(name, data, model)
-                    if not tool_loop and _DISABLED_MODELS is model_policy:
+                    if not tool_loop and not strict_client and _DISABLED_MODELS is model_policy:
                         cache.set(payload, data, ns, query_emb)
                     _session_affinity_set(session_affinity_id, name, model)
                     stats.record_success(name, elapsed)
@@ -4989,7 +4989,7 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
                     if not is_anthropic:
                         _strip_response(data)
                     _add_provider_tokens(name, data, model)
-                    if not tool_loop and _DISABLED_MODELS is model_policy:
+                    if not tool_loop and not strict_client and _DISABLED_MODELS is model_policy:
                         cache.set(payload, data, ns, query_emb)
                     _session_affinity_set(session_affinity_id, name, model)
                     stats.record_success(name, elapsed)

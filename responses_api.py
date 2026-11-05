@@ -394,7 +394,7 @@ def stream(source, model, custom=(), names=()):
                 yield encode(event)
         for event in builder.complete():
             yield encode(event)
-    except (ValueError, TypeError, KeyError, AttributeError, IndexError, OSError):
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError, OSError, RuntimeError):
         yield encode(builder.failed())
     finally:
         close = getattr(source, "close", None)

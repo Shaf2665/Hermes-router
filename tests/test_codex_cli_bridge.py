@@ -35,14 +35,27 @@ def test_installed_codex_accepts_bridge_and_resumes_saved_history(monkeypatch, t
         received.append(payload)
         def stream():
             if len(received) == 1:
-                # A real client-side, non-filesystem tool verifies the complete
-                # function-call -> tool result -> next response path.
-                tool = next(t["function"] for t in payload["tools"]
-                            if t["function"]["name"] == "update_plan" or
-                            t["function"].get("description", "").split("\n")[0].endswith(".update_plan"))
-                events = [{"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call_plan",
-                    "type": "function", "function": {"name": tool["name"], "arguments": json.dumps({"plan": [
-                        {"step": "Verify bridge", "status": "completed"}]})}}]}, "finish_reason": "tool_calls"}]}]
+                # Use an advertised shell tool for one read-only command. Tool
+                # names vary with the client's model metadata and namespaces.
+                choices = {"exec_command": {"cmd": "pwd"}, "shell_command": {"command": "pwd"},
+                           "shell": {"command": ["pwd"]}}
+                available = {}
+                for candidate in payload["tools"]:
+                    function = candidate["function"]
+                    name = function.get("description", "").split("\n")[0].rsplit(".", 1)[-1]
+                    available[function["name"]] = function
+                    for known, arguments in choices.items():
+                        if function["name"] == known or name == known:
+                            tool, tool_args = function, arguments
+                            break
+                    else:
+                        continue
+                    break
+                else:
+                    raise AssertionError("No read-only shell fixture for advertised tools: " + json.dumps(available))
+                events = [{"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call_pwd",
+                    "type": "function", "function": {"name": tool["name"], "arguments": json.dumps(tool_args)}}]},
+                    "finish_reason": "tool_calls"}]}]
             else:
                 events = [
                 {"choices": [{"index": 0, "delta": {"content": "BRIDGE_OK"}, "finish_reason": None}]},
@@ -66,7 +79,7 @@ def test_installed_codex_accepts_bridge_and_resumes_saved_history(monkeypatch, t
     client_state.mkdir()
     env["CODEX_HOME"] = str(client_state)
     try:
-        first = subprocess.run([*base, "exec", "--skip-git-repo-check", "--sandbox", "read-only", "--json", "Say BRIDGE_OK without tools"],
+        first = subprocess.run([*base, "exec", "--skip-git-repo-check", "--sandbox", "read-only", "--json", "Print the working directory, then say BRIDGE_OK"],
                                env=env, cwd=tmp_path, capture_output=True, text=True, input="", timeout=50)
         if "bwrap: loopback: Failed to create NETLINK_ROUTE socket" in first.stderr:
             pytest.skip("Host does not permit a nested Codex sandbox; run on native Linux CI")
@@ -79,7 +92,8 @@ def test_installed_codex_accepts_bridge_and_resumes_saved_history(monkeypatch, t
                                 env=env, cwd=tmp_path, capture_output=True, text=True, input="", timeout=50)
         assert second.returncode == 0, (second.stdout[-3000:], second.stderr[-3000:])
         assert len(received) == 3
-        assert any(m.get("role") == "tool" and m.get("tool_call_id") == "call_plan" for m in received[1]["messages"])
+        result = next(m for m in received[1]["messages"] if m.get("role") == "tool" and m.get("tool_call_id") == "call_pwd")
+        assert str(tmp_path) in str(result["content"])
         assert any(m.get("role") == "assistant" and "BRIDGE_OK" in str(m.get("content")) for m in received[2]["messages"])
     finally:
         server.shutdown()

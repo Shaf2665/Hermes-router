@@ -129,6 +129,19 @@ def test_stream_closes_upstream_on_disconnect_and_exception():
     source.close.assert_called_once()
 
 
+def test_upstream_runtime_failure_is_sanitized_and_closes():
+    closed = []
+    def source():
+        try:
+            yield wire([chunk({"content": "partial"})]).split(b"data: [DONE]")[0]
+            raise RuntimeError("SECRET-UPSTREAM")
+        finally:
+            closed.append(True)
+    result = b"".join(api.stream(source(), "hermes-router"))
+    assert b"response.failed" in result and b"response.completed" not in result
+    assert b"SECRET-UPSTREAM" not in result and closed == [True]
+
+
 def test_responses_auth_budget_admission_and_json_response(monkeypatch):
     route = Mock(return_value=("json", {"choices": [{"message": {"content": "done"}, "finish_reason": "stop"}],
                                        "usage": {"prompt_tokens": 2, "completion_tokens": 1}}))
@@ -147,6 +160,19 @@ def test_tool_requests_fail_closed_without_confirmed_models(monkeypatch):
     monkeypatch.setattr(router, "_ordered_providers", lambda *_: [])
     monkeypatch.setattr(router.cache, "get", Mock(side_effect=AssertionError("must bypass tool cache")))
     response = router.app.test_client().post("/v1/responses", json={"input": "do work", "tools": [TOOL]}, headers=HEADERS)
+    assert response.status_code == 503
+
+
+@pytest.mark.parametrize("endpoint,body", [
+    ("/v1/responses", {"input": "hello"}),
+    ("/claude/v1/messages", {"model": "claude-test", "max_tokens": 10,
+                            "messages": [{"role": "user", "content": "hello"}]}),
+])
+def test_coding_clients_bypass_cache_even_without_tools(monkeypatch, endpoint, body):
+    monkeypatch.setattr(router, "_ordered_providers", lambda *_: [])
+    monkeypatch.setattr(router.cache, "get", Mock(side_effect=AssertionError("legacy cache must not bypass strict eligibility")))
+    monkeypatch.setattr(router.cache, "semantic_lookup", Mock(side_effect=AssertionError("no semantic cache for coding clients")))
+    response = router.app.test_client().post(endpoint, json=body, headers=HEADERS)
     assert response.status_code == 503
 
 
