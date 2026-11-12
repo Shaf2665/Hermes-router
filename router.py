@@ -2976,10 +2976,44 @@ def _add_provider_tokens(name: str, data: dict, model: str | None = None):
 # Some providers (e.g. Gemini 2.5) emit reasoning/thinking fields in responses.
 # These fields cause 400 errors on other providers (Groq, Cerebras, OpenRouter).
 # We strip them from both outgoing requests and incoming responses.
+#
+# One family is the exception: DeepSeek's thinking mode (and Moonshot's Kimi
+# thinking models, which follow the same contract) REQUIRES the client to pass
+# an earlier turn's `reasoning_content` back in every later request that
+# carries `tools` — DeepSeek answers 400 ("The `reasoning_content` in the
+# thinking mode must be passed back to the API.") when it is missing. For
+# those models the field is not a foreign extra but part of the conversation
+# the upstream itself demands back, so stripping it breaks every tool loop
+# after the first tool call. It is preserved in both directions for them:
+# responses keep it (so the client can echo it) and forwarded history keeps
+# it when the destination supports this wire format. Gateways with a different
+# reasoning contract retain their existing stripping policy, even if they host
+# a DeepSeek/Kimi model. This decision is repeated for every failover candidate.
 
-def _strip_message(msg: dict):
-    """Remove thinking fields from a message dict in-place."""
-    msg.pop("reasoning_content", None)
+_REASONING_ECHO_MODEL = re.compile(r"^(?:deepseek|kimi|moonshot)(?:[-_.:]|$)", re.I)
+_REASONING_ECHO_EXCLUDED_PROVIDERS = frozenset({"groq", "cerebras", "openrouter"})
+
+
+def _requires_reasoning_echo(model: str | None, provider: dict | None = None) -> bool:
+    """Preserve the DeepSeek/Kimi echo field only on compatible destinations.
+
+    Keep the existing policy for gateways using other reasoning schemas;
+    a model-family match alone must not override their transport contract.
+    """
+    if provider is not None:
+        if provider.get("protocol") in {"anthropic", "codex"}:
+            return False
+        if provider.get("name", "").lower() in _REASONING_ECHO_EXCLUDED_PROVIDERS:
+            return False
+    # Match the model, not an incidental substring or its publisher namespace.
+    return bool(_REASONING_ECHO_MODEL.match((model or "").rsplit("/", 1)[-1]))
+
+
+def _strip_message(msg: dict, keep_reasoning: bool = False):
+    """Remove thinking fields from a message dict in-place. With
+    `keep_reasoning`, `reasoning_content` survives (see above)."""
+    if not keep_reasoning:
+        msg.pop("reasoning_content", None)
     msg.pop("reasoning", None)
     msg.pop("think", None)
     if isinstance(msg.get("content"), list):
@@ -2989,11 +3023,11 @@ def _strip_message(msg: dict):
         ]
 
 
-def _strip_response(data: dict):
+def _strip_response(data: dict, keep_reasoning: bool = False):
     """Strip thinking fields from a non-streaming response before returning it."""
     for choice in data.get("choices", []):
         if "message" in choice:
-            _strip_message(choice["message"])
+            _strip_message(choice["message"], keep_reasoning=keep_reasoning)
 
 
 def _choice_has_output(choice: dict) -> bool:
@@ -3021,10 +3055,12 @@ def _completion_has_output(data: dict) -> bool:
     return isinstance(choices, list) and any(_choice_has_output(c) for c in choices)
 
 
-def _streaming_generator(resp: requests.Response):
+def _streaming_generator(resp: requests.Response, keep_reasoning: bool = False):
     """
     Yield SSE chunks with thinking fields stripped from delta objects.
     Buffers by newline to handle chunks that split across SSE boundaries.
+    With `keep_reasoning`, `reasoning_content` deltas survive so the client
+    can pass them back on the next turn (see _requires_reasoning_echo).
     """
     buf = b""
     for raw_chunk in resp.iter_content(chunk_size=None):
@@ -3037,7 +3073,8 @@ def _streaming_generator(resp: requests.Response):
                     event = json.loads(line[6:])
                     for choice in event.get("choices", []):
                         delta = choice.get("delta", {})
-                        delta.pop("reasoning_content", None)
+                        if not keep_reasoning:
+                            delta.pop("reasoning_content", None)
                         delta.pop("reasoning", None)
                         delta.pop("think", None)
                     yield ("data: " + json.dumps(event) + "\n").encode("utf-8")
@@ -4049,12 +4086,16 @@ def forward(provider: dict, key: str, payload: dict, streaming: bool,
     # Use the model the failover loop chose (else placeholder → provider's primary)
     body["model"] = _resolve_model(provider, payload, model)
 
-    # Strip thinking fields from conversation history before forwarding
+    # Strip thinking fields from conversation history before forwarding.
+    # History bound for a reasoning-echo model family keeps its
+    # reasoning_content: those upstreams 400 a tool-carrying request whose
+    # earlier turns arrive without it (see _requires_reasoning_echo).
     if "messages" in body:
+        keep_reasoning = _requires_reasoning_echo(body["model"], provider)
         cleaned = []
         for msg in body["messages"]:
             m = dict(msg)
-            _strip_message(m)
+            _strip_message(m, keep_reasoning=keep_reasoning)
             cleaned.append(m)
         body["messages"] = cleaned
 
@@ -4947,7 +4988,8 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
                     if session_affinity_id is not None:
                         _session_affinity_set(session_affinity_id, name, model)
                     gen = (_anthropic_streaming_generator(resp) if is_anthropic
-                           else _streaming_generator(resp))
+                           else _streaming_generator(
+                               resp, keep_reasoning=_requires_reasoning_echo(model, provider)))
                     wrapped = _streaming_with_usage(_with_cleanup(resp, gen), name, model)
                     handed_off = True
                     return ("stream", wrapped, name)
@@ -4990,7 +5032,8 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
                         pool.mark_rate_limited(name, key, model, retry_after=30)
                         break
                     if not is_anthropic:
-                        _strip_response(data)
+                        _strip_response(
+                            data, keep_reasoning=_requires_reasoning_echo(model, provider))
                     _add_provider_tokens(name, data, model)
                     if not tool_loop and not strict_client and _DISABLED_MODELS is model_policy:
                         cache.set(payload, data, ns, query_emb)
