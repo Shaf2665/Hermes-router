@@ -5,7 +5,11 @@ it for those model families — in forwarded history, in non-streaming
 responses, and in streaming deltas — while still stripping it everywhere
 else (Groq / Cerebras / OpenRouter reject the foreign field).
 """
+import copy
 import json
+from unittest.mock import Mock
+
+import pytest
 
 import router
 
@@ -121,7 +125,7 @@ class _StreamResp:
 
 
 def _sse_event(delta):
-    return ("data: " + json.dumps({"choices": [{"delta": delta}]}) + "\n").encode()
+    return ("data: " + json.dumps({"choices": [{"delta": delta}]}, ensure_ascii=False) + "\n").encode()
 
 
 def test_streaming_generator_preserves_reasoning_deltas_when_asked():
@@ -143,3 +147,100 @@ def test_streaming_generator_default_strips_reasoning_deltas():
     delta = first["choices"][0]["delta"]
     assert "reasoning_content" not in delta
     assert delta["content"] == "a"
+
+
+@pytest.mark.parametrize("name,model", [
+    ("groq", "moonshotai/kimi-k2-instruct"),
+    ("cerebras", "deepseek-test"),
+    ("openrouter", "deepseek/deepseek-r1"),
+])
+def test_gateway_contract_takes_precedence_over_model_family(monkeypatch, name, model):
+    provider = {"name": name, "base_url": "http://mock.invalid/v1", "model": model}
+    body = _capture_forward(monkeypatch, provider, model)
+    assert "reasoning_content" not in body["messages"][1]
+
+
+@pytest.mark.parametrize("model", ["not-deepseek", "custom/kimiature", "moonshotai/other-model"])
+def test_unrelated_names_do_not_enable_echo(model):
+    assert not router._requires_reasoning_echo(model)
+
+
+def _route_fixture(monkeypatch, providers):
+    candidates = [{"provider": p, "model": p["model"], "list_index": i}
+                  for i, p in enumerate(providers)]
+    monkeypatch.setattr(router, "_ordered_providers", lambda *_args: candidates)
+    monkeypatch.setattr(router, "pool", Mock(key_count=Mock(return_value=1),
+                                           get_key=Mock(return_value="test-key")))
+    monkeypatch.setattr(router.cache, "get", lambda *_args: None)
+    monkeypatch.setattr(router.cache, "set", lambda *_args: None)
+
+
+@pytest.mark.parametrize("model", ["deepseek-v4-flash", "kimi-for-coding"])
+@pytest.mark.parametrize("streaming", [False, True])
+def test_tool_conversation_round_trip_through_router(monkeypatch, model, streaming):
+    provider = {"name": "echo-test", "model": model, "base_url": "http://mock.invalid/v1"}
+    _route_fixture(monkeypatch, [provider])
+    assistant = copy.deepcopy(HISTORY[1])
+    assistant["reasoning_content"] = "Check weather தமிழ்"
+    seen = []
+
+    def upstream(_url, **kwargs):
+        body = kwargs["json"]
+        seen.append(copy.deepcopy(body))
+        if len(seen) == 2:
+            assert body["messages"][1]["reasoning_content"] == assistant["reasoning_content"]
+            assert body["messages"][1]["tool_calls"] == assistant["tool_calls"]
+            return _Resp(data={"choices": [{"message": {"role": "assistant", "content": "Sunny"}}]})
+        resp = _Resp(data={"choices": [{"message": copy.deepcopy(assistant), "finish_reason": "tool_calls"}]})
+        wire = (_sse_event(assistant) + b"\ndata: [DONE]\n\n")
+        # Split even inside UTF-8 characters, as a real connection can do.
+        resp.iter_content = lambda **_kwargs: iter(bytes([b]) for b in wire)
+        return resp
+
+    monkeypatch.setattr(router._HTTP, "post", upstream)
+    payload = {"model": "hermes-router", "messages": [copy.deepcopy(HISTORY[0])], "tools": TOOLS}
+    first = router._route_completion(payload, streaming)
+    if streaming:
+        wire = b"".join(first[1]).decode()
+        events = [json.loads(line[6:]) for line in wire.splitlines()
+                  if line.startswith("data: ") and line != "data: [DONE]"]
+        message = events[0]["choices"][0]["delta"]
+    else:
+        message = first[1]["choices"][0]["message"]
+    payload["messages"].extend([message, copy.deepcopy(HISTORY[2])])
+    original = copy.deepcopy(payload)
+    second = router._route_completion(payload, False)
+    assert second[0] == "json"
+    assert second[1]["choices"][0]["message"]["content"] == "Sunny"
+    assert payload == original
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_failover_to_gateway_rechecks_request_and_response_policy(monkeypatch, streaming):
+    providers = [
+        {"name": "deepseek", "model": "deepseek-v4-flash", "base_url": "http://first.invalid/v1"},
+        {"name": "groq", "model": "moonshotai/kimi-k2-instruct", "base_url": "http://second.invalid/v1"},
+    ]
+    _route_fixture(monkeypatch, providers)
+    sent = []
+
+    def upstream(_url, **kwargs):
+        sent.append(copy.deepcopy(kwargs["json"]))
+        if len(sent) == 1:
+            return _Resp(status_code=500)
+        resp = _Resp(data={"choices": [{"message": {
+            "role": "assistant", "content": "done", "reasoning_content": "remove-me"}}]})
+        wire = _sse_event({"content": "done", "reasoning_content": "remove-me"}) + b"\ndata: [DONE]\n\n"
+        resp.iter_content = lambda **_kwargs: iter([wire])
+        return resp
+
+    monkeypatch.setattr(router._HTTP, "post", upstream)
+    payload = {"model": "hermes-router", "messages": copy.deepcopy(HISTORY), "tools": TOOLS}
+    original = copy.deepcopy(payload)
+    result = router._route_completion(payload, streaming)
+    assert len(sent) == 2
+    assert sent[0]["messages"][1]["reasoning_content"] == "thinking…"
+    assert "reasoning_content" not in sent[1]["messages"][1]
+    output = b"".join(result[1]).decode() if streaming else json.dumps(result[1])
+    assert "remove-me" not in output
+    assert payload == original

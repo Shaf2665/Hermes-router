@@ -2986,17 +2986,27 @@ def _add_provider_tokens(name: str, data: dict, model: str | None = None):
 # the upstream itself demands back, so stripping it breaks every tool loop
 # after the first tool call. It is preserved in both directions for them:
 # responses keep it (so the client can echo it) and forwarded history keeps
-# it when the destination model is in the family. A failover to any other
-# provider still strips it, exactly as before.
+# it when the destination supports this wire format. Gateways with a different
+# reasoning contract retain their existing stripping policy, even if they host
+# a DeepSeek/Kimi model. This decision is repeated for every failover candidate.
 
-_REASONING_ECHO_PATTERNS = ("deepseek", "kimi", "moonshot")
+_REASONING_ECHO_MODEL = re.compile(r"^(?:deepseek|kimi|moonshot)(?:[-_.:]|$)", re.I)
+_REASONING_ECHO_EXCLUDED_PROVIDERS = frozenset({"groq", "cerebras", "openrouter"})
 
 
-def _requires_reasoning_echo(model: str | None) -> bool:
-    """Whether this model family's API requires `reasoning_content` to be
-    passed back in later tool-carrying requests (DeepSeek / Kimi thinking)."""
-    m = (model or "").lower()
-    return any(p in m for p in _REASONING_ECHO_PATTERNS)
+def _requires_reasoning_echo(model: str | None, provider: dict | None = None) -> bool:
+    """Preserve the DeepSeek/Kimi echo field only on compatible destinations.
+
+    Keep the existing policy for gateways using other reasoning schemas;
+    a model-family match alone must not override their transport contract.
+    """
+    if provider is not None:
+        if provider.get("protocol") in {"anthropic", "codex"}:
+            return False
+        if provider.get("name", "").lower() in _REASONING_ECHO_EXCLUDED_PROVIDERS:
+            return False
+    # Match the model, not an incidental substring or its publisher namespace.
+    return bool(_REASONING_ECHO_MODEL.match((model or "").rsplit("/", 1)[-1]))
 
 
 def _strip_message(msg: dict, keep_reasoning: bool = False):
@@ -4081,7 +4091,7 @@ def forward(provider: dict, key: str, payload: dict, streaming: bool,
     # reasoning_content: those upstreams 400 a tool-carrying request whose
     # earlier turns arrive without it (see _requires_reasoning_echo).
     if "messages" in body:
-        keep_reasoning = _requires_reasoning_echo(body["model"])
+        keep_reasoning = _requires_reasoning_echo(body["model"], provider)
         cleaned = []
         for msg in body["messages"]:
             m = dict(msg)
@@ -4979,7 +4989,7 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
                         _session_affinity_set(session_affinity_id, name, model)
                     gen = (_anthropic_streaming_generator(resp) if is_anthropic
                            else _streaming_generator(
-                               resp, keep_reasoning=_requires_reasoning_echo(model)))
+                               resp, keep_reasoning=_requires_reasoning_echo(model, provider)))
                     wrapped = _streaming_with_usage(_with_cleanup(resp, gen), name, model)
                     handed_off = True
                     return ("stream", wrapped, name)
@@ -5023,7 +5033,7 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
                         break
                     if not is_anthropic:
                         _strip_response(
-                            data, keep_reasoning=_requires_reasoning_echo(model))
+                            data, keep_reasoning=_requires_reasoning_echo(model, provider))
                     _add_provider_tokens(name, data, model)
                     if not tool_loop and not strict_client and _DISABLED_MODELS is model_policy:
                         cache.set(payload, data, ns, query_emb)
