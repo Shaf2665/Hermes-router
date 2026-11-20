@@ -112,6 +112,24 @@ def login(page, base_url):
     expect(page.locator("#plain-title")).not_to_contain_text("Checking")
 
 
+def test_reasoning_settings_save_and_failure(router_server, page):
+    login(page, router_server)
+    page.get_by_role("button", name="Settings", exact=True).click()
+    page.locator("#reasoning-default").select_option("low")
+    expect(page.locator("#reasoning-msg")).to_contain_text("Saved")
+    page.reload()
+    expect(page.locator("#reasoning-default")).to_have_value("low")
+    page.locator("#reasoning-target").select_option("local::test-local")
+    expect(page.locator("#reasoning-support")).to_contain_text("auto")
+    page.locator("#reasoning-override").select_option("auto")
+    expect(page.locator("#reasoning-msg")).to_contain_text("Saved")
+    page.route("**/v1/config/reasoning", lambda route: route.fulfill(
+        status=500, json={"error": {"message": "Could not save reasoning settings"}}))
+    page.locator("#reasoning-default").select_option("high")
+    expect(page.locator("#reasoning-msg")).to_contain_text("Could not save")
+    expect(page.locator("#reasoning-default")).to_have_value("low")
+
+
 def test_model_switch_changes_live_requests_without_restart(router_server, page):
     requests_seen = []
     page.on("request", lambda r: requests_seen.append(r.url))

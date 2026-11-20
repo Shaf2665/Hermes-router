@@ -51,7 +51,7 @@ test('context diagnostics show the real budget and explain rejected application 
   const context = { subscriptions: [], secrets: { get: async () => undefined } };
   module.exports.activate(context);
   await commands.get('hermesRouter.checkContextSync')();
-  assert.ok(lines.some(s => s.includes('256,000 total tokens (247,808 input + 8,192 output)')));
+  assert.ok(lines.some(s => s.includes(`${(256000).toLocaleString()} total tokens (${(247808).toLocaleString()} input + ${(8192).toLocaleString()} output)`)));
   code = 401;
   await commands.get('hermesRouter.checkContextSync')();
   assert.ok(notices.some(s => s.includes('active application key from dashboard Connect')));

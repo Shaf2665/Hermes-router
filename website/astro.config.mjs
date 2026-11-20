@@ -39,6 +39,7 @@ export default defineConfig({
 					label: 'Build With It',
 					items: [
 						{ label: 'Usage', slug: 'usage' },
+						{ label: 'Reasoning / Thinking', slug: 'reasoning' },
 						{ label: 'Build an Agent', slug: 'build-an-agent' },
 					],
 				},

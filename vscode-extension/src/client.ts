@@ -75,11 +75,19 @@ function post(urlStr: string, headers: Record<string, string>, body?: string, ti
 }
 
 export class RouterClient {
-  constructor(private baseUrl: string, private apiKey: string) {}
+  constructor(private baseUrl: string, private apiKey: string, private reasoning = "server") {
+    if (!["server", "auto", "off", "low", "medium", "high"].includes(reasoning)) {
+      throw new Error("Invalid hermesRouter.reasoning setting.");
+    }
+  }
+
+  private reasoningHeaders(): Record<string, string> {
+    return this.reasoning === "server" ? {} : { "X-Hermes-Reasoning": this.reasoning };
+  }
 
   /** Compare connections without exposing credentials in logs or settings. */
   sameConnection(other: RouterClient): boolean {
-    return this.base() === other.base() && this.apiKey === other.apiKey;
+    return this.base() === other.base() && this.apiKey === other.apiKey && this.reasoning === other.reasoning;
   }
 
   private base(): string {
@@ -106,6 +114,7 @@ export class RouterClient {
   async getClientConfiguration(): Promise<ClientConfiguration> {
     const { code, body } = await get(`${this.base()}/v1/client-config`, {
       Authorization: `Bearer ${this.apiKey}`, "Cache-Control": "no-cache",
+      ...this.reasoningHeaders(),
     });
     if (code === 401 || code === 403) throw new Error("Context sync unauthorized. Set hermesRouter.apiKey to an active application key from dashboard Connect. The dashboard administrator key cannot be used here.");
     if (code === 404) throw new Error("This router needs the context-sync update. Update the router before using this extension.");
@@ -187,6 +196,7 @@ export class RouterClient {
             "Content-Length": Buffer.byteLength(payload),
             Authorization: `Bearer ${this.apiKey}`,
             "X-Hermes-Config-Revision": opts.configRevision,
+            ...this.reasoningHeaders(),
           },
           timeout: 120_000,
         },

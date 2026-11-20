@@ -50,6 +50,9 @@ The docs read in order, from zero experience to a running, monitored router:
 
 **Build with it:**
 
+- [Reasoning / Thinking controls](documentation/reasoning.md) — source preview,
+  provider-specific effort, output budgets and legacy Auto privacy limits.
+
 - **[Usage](documentation/usage.md)** — OpenAI SDK, Anthropic SDK, tool use, embeddings
 - 🤖 **[Build your first AI agent](documentation/build-an-agent.md)** — chatbot → memory → tools, copy-paste
 - 🏛️ **[Hall of Wisdom integration](documentation/hall-of-wisdom.md)** — use Hermes as Hall's multi-provider inference gateway

@@ -10,6 +10,10 @@ provider (including a local model) is configured.
 
 ## Core features vs. add-ons
 
+Reasoning preferences can be saved in dashboard Settings. See
+[Reasoning / Thinking](/reasoning/) for supported models, output budgets and
+the legacy Auto privacy exception. This feature requires a matching source build.
+
 hermes-router splits its behavior into two groups:
 
 - **Core features** — always on; they *are* the router. Auth, the credential pool + key

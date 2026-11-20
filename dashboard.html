@@ -539,7 +539,7 @@ body{font-size:16px;line-height:1.5}button,input,select,textarea{font-family:inh
                 <th>Time</th><th>Endpoint</th><th>Provider</th><th>Model</th>
                 <th class="right">Latency</th><th class="right">Complexity</th>
                 <th class="right">Cascades</th><th class="right">Prompt tok</th>
-                <th class="right">Compl tok</th><th>Status</th>
+                <th class="right">Compl tok</th><th>Reasoning</th><th>Status</th>
               </tr></thead>
               <tbody id="log-tbody"></tbody>
             </table>
@@ -566,6 +566,24 @@ body{font-size:16px;line-height:1.5}button,input,select,textarea{font-family:inh
               <div class="row"><button class="btn primary" id="context-confirm" onclick="saveContextModel(false)">Save confirmed limits</button>
                 <button class="btn" id="context-reset" onclick="saveContextModel(true)">Use discovered limits</button></div>
             </details>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Reasoning / Thinking</span></div>
+          <div class="panel-body pad config-form">
+            <label for="reasoning-default">Default reasoning</label>
+            <select id="reasoning-default" onchange="saveReasoning({default:this.value})" disabled>
+              <option value="auto">Auto</option><option value="off">Off</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option>
+            </select>
+            <p class="muted">Auto keeps provider defaults and legacy tool compatibility. Explicit levels require verified support and share the total output budget. Some thinking tool loops are unavailable with explicit controls.</p>
+            <label for="reasoning-target">Provider or model override</label>
+            <select id="reasoning-target" onchange="fillReasoningOverride()"></select>
+            <label for="reasoning-override">Reasoning override</label>
+            <select id="reasoning-override" onchange="saveReasoningOverride()">
+              <option value="">Inherit</option><option value="auto">Auto</option><option value="off">Off</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option>
+            </select>
+            <p class="muted" id="reasoning-support"></p>
+            <div class="config-msg" id="reasoning-msg" role="status" aria-live="polite"></div>
           </div>
         </div>
         <div class="panel">
@@ -1139,6 +1157,7 @@ function renderAll() {
     renderCache();
     renderAddons();
     renderContextSettings();
+    renderReasoningSettings();
     renderKeys();
     renderAccessKeys();
     renderModelCaps();
@@ -1660,6 +1679,7 @@ function renderLogs() {
       <td class="right">${cascBadge}</td>
       <td class="right muted">${e.prompt_tokens != null ? fmt.num(e.prompt_tokens) : '—'}</td>
       <td class="right muted">${e.completion_tokens != null ? fmt.num(e.completion_tokens) : '—'}</td>
+      <td class="muted" style="max-width:260px;overflow-wrap:anywhere">${e.reasoning ? esc(e.reasoning.requested + ' → ' + (typeof e.reasoning.effective === 'string' ? e.reasoning.effective : JSON.stringify(e.reasoning.effective)) + ' · tokens: ' + (e.reasoning.reasoning_tokens ?? 'unknown')) : '—'}</td>
       <td><span class="pill ${sp}">${esc(e.status || '—')}</span></td>
     `;
         tbody.appendChild(tr);
@@ -1708,6 +1728,58 @@ function renderAddons() {
     }).join('');
 }
 // Context limits are owned by the router; all saves go through its admin boundary.
+let reasoningSaving = false;
+function renderReasoningSettings() {
+    const config = statusData?.reasoning_config;
+    if (!config || reasoningSaving) return;
+    const select = document.getElementById('reasoning-default');
+    select.disabled = false;
+    select.value = config.default;
+    const target = document.getElementById('reasoning-target'), old = target.value;
+    target.replaceChildren(
+        ...Object.keys(statusData.providers || {}).map(p => new Option('Provider: ' + p, 'provider:' + p)),
+        ...(statusData.reasoning_models || []).map(m => new Option(m.provider + ' / ' + m.model, m.id)));
+    if ([...target.options].some(o => o.value === old)) target.value = old;
+    fillReasoningOverride();
+}
+function fillReasoningOverride() {
+    const id = document.getElementById('reasoning-target').value;
+    const provider = id.startsWith('provider:');
+    const key = provider ? id.slice(9) : id;
+    const config = statusData?.reasoning_config;
+    document.getElementById('reasoning-override').value = config?.[provider ? 'providers' : 'models']?.[key] ?? '';
+    const models = (statusData?.reasoning_models || []).filter(m => provider ? m.provider === key : m.id === id);
+    document.getElementById('reasoning-support').textContent = models.map(m =>
+        m.model + ': ' + m.modes.join(', ') + '. Current policy: ' + m.policy +
+        (m.private_tool_state ? '. Explicit thinking tool continuity is unavailable.' : '')).join(' ');
+}
+function saveReasoningOverride() {
+    const id = document.getElementById('reasoning-target').value;
+    if (!id) return;
+    const provider = id.startsWith('provider:');
+    return saveReasoning({[provider ? 'providers' : 'models']: {
+        [provider ? id.slice(9) : id]: document.getElementById('reasoning-override').value || null}});
+}
+async function saveReasoning(body) {
+    if (reasoningSaving) return;
+    reasoningSaving = true;
+    const controls = ['reasoning-default', 'reasoning-target', 'reasoning-override'];
+    controls.forEach(id => document.getElementById(id).disabled = true);
+    setMsg('reasoning-msg', 'Saving reasoning settings…', true);
+    try {
+        const response = await adminFetch('/v1/config/reasoning', {method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)});
+        const data = await response.json();
+        if (!response.ok) throw new Error(apiError(data) || 'Could not save reasoning settings.');
+        statusData.reasoning_config = data;
+        setMsg('reasoning-msg', 'Saved. Applies to new requests; no restart needed.', true);
+        await refresh();
+    } catch (error) { setMsg('reasoning-msg', error.message || 'Could not save reasoning settings.', false); }
+    finally {
+        reasoningSaving = false;
+        controls.forEach(id => document.getElementById(id).disabled = false);
+        renderReasoningSettings();
+    }
+}
 let contextSaving = false, contextModelDirty = false;
 function renderContextSettings() {
     if (contextSaving || !Number.isSafeInteger(statusData?.context_window)) return;

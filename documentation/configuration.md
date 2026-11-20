@@ -358,3 +358,9 @@ hr restart             # apply the change
 Either way, failover, per-key cooldowns, and the circuit breaker keep working — the mode
 only changes *which ready key is preferred* next. The active mode shows in `hr status` and
 at `/v1/status`.
+## Reasoning controls (source preview)
+
+`ROUTER_REASONING_CONFIG` stores the global default and provider/model reasoning
+overrides. Configure it in dashboard Settings or via the administrator API.
+See [Reasoning / Thinking](reasoning.md) for precedence, supported models,
+budget requirements and the legacy Auto privacy exception.
