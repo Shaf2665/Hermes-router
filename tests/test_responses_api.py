@@ -21,6 +21,15 @@ def chunk(delta=None, finish=None, **kwargs):
     return {"choices": [{"index": 0, "delta": delta or {}, "finish_reason": finish}], **kwargs}
 
 
+def test_unknown_reasoning_usage_is_not_zero():
+    builder = api.ResponseBuilder("model")
+    list(builder.feed({"choices": [], "usage": {"prompt_tokens": 3, "completion_tokens": 5}}))
+    assert "reasoning_tokens" not in builder.response["usage"]["output_tokens_details"]
+    list(builder.feed({"choices": [], "usage": {"prompt_tokens": 3, "completion_tokens": 5,
+                     "completion_tokens_details": {"reasoning_tokens": 0}}}))
+    assert builder.response["usage"]["output_tokens_details"]["reasoning_tokens"] == 0
+
+
 def wire(items):
     return ("".join("data: " + json.dumps(item, ensure_ascii=False) + "\r\n\r\n" for item in items) + "data: [DONE]\r\n\r\n").encode()
 

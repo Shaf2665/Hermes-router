@@ -1,6 +1,6 @@
 # Issue 46: provider-aware reasoning controls
 
-Status: proposed for approval. No product implementation yet.
+Status: approved by the user on 2026-11-20; implementing the first slice.
 
 Issue: https://github.com/Shaf2665/Hermes-router/issues/46
 
