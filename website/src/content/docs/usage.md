@@ -106,10 +106,19 @@ and `COHERE_EMBED_MODEL=` empty in `.env`).
 
 ## Reasoning models
 
-Some models (e.g. gpt-oss, Nemotron, and GLM reasoning models) spend output tokens on
-internal reasoning before answering. The router detects these at startup and reserves extra
-output budget to reduce empty replies caused by a small `max_tokens`. Tune with
-`REASONING_TOKEN_RESERVE` (see [configuration.md](/configuration/)).
+Reasoning models spend part of their output budget thinking before answering.
+In this source preview, set **Settings → Reasoning / Thinking** or send
+`extra_headers={"X-Hermes-Reasoning": "low"}` in an OpenAI SDK request.
+Supported values are `auto`, `off`, `low`, `medium`, and `high`; omit the header
+to follow dashboard preferences. Explicit `auto` overrides those preferences.
+
+Explicit controls require a compatible model and share the total output ceiling
+with the final answer; they never add `REASONING_TOKEN_RESERVE`. Legacy Auto may
+reserve extra headroom where existing output constraints allow it. Raise the total
+output limit or lower supported effort when there is insufficient answer room.
+
+See [Reasoning / Thinking controls](/reasoning/) for provider support, request examples,
+strict error behavior, and legacy Auto's reasoning-echo privacy limitation.
 
 ---
 
