@@ -104,6 +104,19 @@ export class RouterClient {
     return JSON.parse(body) as RouterStatus;
   }
 
+  async getContextWindow(): Promise<number> {
+    const { code, body } = await get(`${this.base()}/v1/models`, {
+      Authorization: `Bearer ${this.apiKey}`,
+    });
+    if (code !== 200) throw new Error(`models HTTP ${code}`);
+    const model = JSON.parse(body).data?.find((m: any) => m.owned_by === "hermes-router");
+    const window = model?.context_window ?? 0; // Older routers do not advertise a minimum.
+    if (!Number.isSafeInteger(window) || window < 0 || window > 2147483647) {
+      throw new Error("Invalid router context window");
+    }
+    return window;
+  }
+
   async restart(): Promise<void> {
     const { code, body } = await post(`${this.base()}/v1/config/restart`, {
       Authorization: `Bearer ${this.apiKey}`,
@@ -132,6 +145,7 @@ export class RouterClient {
       }
       const lib = url.protocol === "https:" ? https : http;
       const body: any = { model: "hermes-router", messages: opts.messages, stream: true };
+      if (opts.maxOutputTokens !== undefined) body.max_tokens = opts.maxOutputTokens;
       if (opts.tools && opts.tools.length) {
         body.tools = opts.tools;
         body.tool_choice = opts.toolChoice || "auto";
@@ -164,6 +178,7 @@ export class RouterClient {
             "Content-Type": "application/json",
             "Content-Length": Buffer.byteLength(payload),
             Authorization: `Bearer ${this.apiKey}`,
+            ...(opts.contextWindow !== undefined ? { "X-Hermes-Context-Window": String(opts.contextWindow) } : {}),
           },
           timeout: 120_000,
         },
@@ -251,6 +266,8 @@ export interface ToolDef {
 
 export interface StreamOpts {
   messages: ChatMessage[];
+  contextWindow?: number;
+  maxOutputTokens?: number;
   tools?: ToolDef[];
   toolChoice?: "auto" | "required";
   onText: (delta: string) => void;

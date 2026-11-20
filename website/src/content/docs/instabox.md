@@ -2,10 +2,9 @@
 title: InstaBox hosting
 description: Deploy Hermes on an InstaBox VM with a public HTTPS address and persistent settings.
 ---
-# Host Hermes Router on InstaBox
 
 This deployment runs the dashboard and API on an existing Docker-capable InstaBox VM.
-It uses the published provider-catalog image and a small Nginx gateway. No image build
+It uses the published context-routing image and a small Nginx gateway. No image build
 or extra paid service is required. You still need your own upstream provider account.
 
 ## Install
@@ -63,6 +62,13 @@ and `restart: unless-stopped`. Keep both settings together. The router only requ
 its own container restart when it is the container entrypoint (PID 1); it does not
 need access to the Docker socket. In-flight requests can be interrupted by a restart.
 
+## Set a context minimum
+
+Open **Settings → Context length** and select **16K**, **128K**, or another size.
+Hermes uses only models with at least that known capacity. Saves apply immediately
+and survive a container update. **Auto** adds no server minimum. Extension 0.9.9+
+follows this setting when `hermesRouter.contextWindow` is 0.
+
 ## Ports and HTTPS
 
 - Publish **8319**, HTTP protocol, through InstaBox's **Ports** tab or the command above.
@@ -101,7 +107,7 @@ docker compose restart gateway
 ```
 
 Restarting the gateway after recreating Hermes refreshes its internal Docker address.
-The supplied Compose file pins the router to the UI refresh released on 2026-11-04
+The supplied Compose file pins the router to the context-routing release from 2026-11-04
 and the tested Nginx image. Your provider settings remain in the same data directory.
 
 ## Free-plan limits

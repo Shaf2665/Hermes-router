@@ -4,8 +4,8 @@ hermes-router routes across a pool of providers. You only need **one** configure
 to start. Add providers and keys to create more failover options. Multiple keys do not
 necessarily add quota: many services enforce limits per project, organization, or account.
 
-Add keys with `hr auth add <provider>` (see [configuration.md](configuration.md) for where
-they're stored).
+For your first provider, use **Providers** in the browser dashboard as shown below.
+The optional `hr auth add <provider>` command also works on Linux/macOS/WSL.
 
 Want help choosing? See the [free model rankings](free-model-rankings.md) for a
 quality-first comparison of the exact models Hermes Router uses by default.
@@ -13,6 +13,23 @@ quality-first comparison of the exact models Hermes Router uses by default.
 Dashboard provider keys and model selections apply immediately, including model resets.
 Active responses finish normally. Background capability checks may use a small amount of
 provider quota. File-based CLI or environment changes still require a restart.
+
+## GroqCloud (Groq)
+
+1. Open **Providers** and choose **GroqCloud (Groq)**.
+2. Click **Get API key** to open [GroqCloud API Keys](https://console.groq.com/keys),
+   create a key, and paste it into Hermes.
+3. The base URL is already filled in: `https://api.groq.com/openai/v1`. Keep the
+   `/openai/v1` path; do not paste a console URL or add `/chat/completions`.
+4. Select a model you can access, such as `openai/gpt-oss-120b` or
+   `openai/gpt-oss-20b`, then click **Save provider**.
+5. Open **Connect** and send a test request.
+
+The preset follows [Groq's OpenAI compatibility documentation](https://console.groq.com/docs/openai).
+Both GPT-OSS models have a documented 131,072-token context window, so they qualify
+for Hermes's 128K minimum. Quotas and reply limits still apply; this does not grant
+128K of free usage per request. Check [Groq's model limits](https://console.groq.com/docs/models)
+and your account's rate limits.
 
 ## Custom providers and local models
 
@@ -49,7 +66,7 @@ never returned by the dashboard API.
 
 Open **Providers**, choose a provider, click **Get API key**, sign in on the provider’s
 website and copy your key. Paste it into Hermes, select one or more model checkboxes,
-and click **Save provider**. Restart Hermes when prompted, then use **Connect** to test.
+and click **Save provider**. Current versions apply the change immediately; use **Connect** to test.
 The base URL is already set; you do not need to type it.
 
 **Refresh model list** asks that provider for its current catalog using the pasted key
@@ -59,8 +76,9 @@ The suggestions are dated snapshots, not a guarantee of availability or price.
 The live catalog may contain paid models. No model checkbox is selected for a new provider.
 
 You can repeat this for many providers, multiple keys and multiple models. Saving an
-existing key again is safe and lets you change the selected models. Provider credentials
-and model changes still require a restart; application access keys are managed separately.
+existing key again is safe and lets you change the selected models. Dashboard key/model
+changes apply live. Direct file edits still require a restart. Application access keys
+are created separately in **Connect** and managed in **Settings → Application access**.
 
 There are **65 API-key presets** (48 additions on 2026-11-03). Access labels distinguish
 free-model offers, trial/credit allowances and paid subscriptions. For newly added
@@ -103,7 +121,7 @@ covers the presets below, not browser-cookie or OAuth services.
 | `friendliai` | FriendliAI | Listed free tier — verify | [Open provider](https://friendli.ai) |
 | `gemini` | Gemini | Free tier / selected models | [Open provider](https://aistudio.google.com/apikey) |
 | `github_models` | GitHub Models | Free tier / selected models | [Open provider](https://github.com/settings/personal-access-tokens) |
-| `groq` | Groq | Free tier / selected models | [Open provider](https://console.groq.com/keys) |
+| `groq` | GroqCloud (Groq) | Free tier / selected models | [Open provider](https://console.groq.com/keys) |
 | `huggingface` | Hugging Face | Trial / limited credits | [Open provider](https://huggingface.co/settings/tokens) |
 | `hyperbolic` | Hyperbolic | Trial / limited credits | [Open provider](https://hyperbolic.xyz) |
 | `iflytek` | iFlytek Spark | Listed free tier — verify | [Open provider](https://xinghuo.xfyun.cn) |

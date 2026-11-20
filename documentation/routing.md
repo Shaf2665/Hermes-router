@@ -23,10 +23,16 @@ This is the core of the router, used by every request.
   heuristic difficulty score. These ratings are routing hints, not a guarantee of answer quality.
 - If the chosen model is rate-limited, down, or errors, the router **automatically tries the next
   best one**. If every candidate fails, the app receives a `503`.
-- A request whose history exceeds a model's context window is rejected with a `400` and the router
-  cascades to the next candidate — correct, but it costs one wasted round-trip per too-small model.
-  If you see this happen repeatedly for a provider, set `<PROVIDER>_SKIP_TOKENS_OVER` (see
-  [configuration.md](configuration.md#per-provider-capability-overrides)) to skip it upfront for large requests.
+- Before sending, Hermes filters models by their known context windows, including
+  estimated conversation/tool content and reply space. Set a required window in
+  **Settings → Context length** in the dashboard, or via `ROUTER_CONTEXT_WINDOW`.
+  A client can ask for more with `X-Hermes-Context-Window`, but cannot lower the
+  dashboard minimum. 128K allows 128K and larger models; 16K allows 16K and larger.
+  If no eligible model fits, the request gets a clear HTTP 400. Unknown-capacity
+  models remain usable only when no positive window is requested. See
+  [context configuration](configuration.md#context-windows).
+- Provider input ceilings such as free-tier TPM remain separate:
+  `<PROVIDER>_SKIP_TOKENS_OVER` still skips that provider for oversized input.
 
 This also works *within* a single provider: if you list several models for one provider (e.g.
 `GEMINI_MODEL=gemini-2.5-flash-lite,gemini-2.5-flash,gemini-2.5-pro`), the router treats each one

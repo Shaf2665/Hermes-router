@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.9
+
+- Follow the dashboard's context length by default and refresh the model picker when it changes.
+- Keep explicit client context requests at or above the router's minimum. Older routers retain the 40K fallback.
+
+## 0.9.8
+
+- Configure the total chat context window and reply allowance using `hermesRouter.contextWindow` and `hermesRouter.maxOutputTokens`; update model information when settings change.
+- Send the context requirement to Hermes so only models with sufficient known capacity are used. Upgrade the router alongside the extension.
+- Include tool calls and results in the extension's approximate token counts.
+
 ## 0.9.7
 
 - Fix the dashboard remaining on “Loading…” because a generated button broke the webview's JavaScript.

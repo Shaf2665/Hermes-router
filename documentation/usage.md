@@ -9,26 +9,54 @@ Clients using those endpoints normally need only a base URL and API-key change. 
 surfaces, including image generation, audio, assistants, batches, files, and the OpenAI
 Responses API, are not exposed as client-facing router endpoints.
 
-`api_key` is any value from `PROXY_API_KEYS`. On first boot the router generates a random
-key, writes it to `.env`, and logs it once; you can replace it in `.env`. See
-[configuration.md](configuration.md).
+First complete [setup](setup.md) and get a test reply in **Connect**. Create an
+application key there for your script. That is your `api_key`; do not use a
+provider key or the administrator key. Existing `PROXY_API_KEYS` also work.
 
 ## OpenAI SDK
 
-Point an OpenAI chat-completions client at `http://localhost:8319/v1`, model `hermes-router`:
+This is optional if you only want to use the VS Code extension. To try a Python
+script, create a folder named `hello-hermes` and open a terminal in it. With Python
+installed, run the commands for your operating system.
+
+**Windows PowerShell:**
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install openai
+```
+
+**Mac/Linux Terminal:**
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install openai
+```
+
+This keeps the example's libraries in that folder. Save the following as
+`hello_hermes.py` in the same folder:
 
 ```python
 from openai import OpenAI
+from getpass import getpass
 
-client = OpenAI(base_url="http://localhost:8319/v1", api_key="YOUR_ROUTER_KEY")
+client = OpenAI(base_url="http://localhost:8319/v1", api_key=getpass("Hermes application key: "))
 resp = client.chat.completions.create(
     model="hermes-router",
     messages=[{"role": "user", "content": "Hello!"}],
+    max_tokens=64,
 )
 print(resp.choices[0].message.content)
 ```
 
-Streaming (`stream=True`) and function calling (`tools=[...]`) both work.
+Run `.\.venv\Scripts\python.exe hello_hermes.py` on Windows or
+`.venv/bin/python hello_hermes.py` on Mac/Linux.
+Paste the application key when prompted (it is hidden). You should see a reply.
+Keep the router running. For a remote router, use its HTTPS address or your open
+SSH tunnel's address. See [Server setup](deployment.md).
+
+Streaming (`stream=True`) and function calling (`tools=[...]`) both work with
+eligible models.
 
 > **Tip — add model-level failover:** give a provider several models with a comma-separated
 > `<PROVIDER>_MODEL` (e.g. `GEMINI_MODEL=gemini-2.5-flash-lite,gemini-2.5-flash`). Since
@@ -57,8 +85,8 @@ print(msg.content[0].text)
 
 Streaming (`client.messages.stream(...)`) works too.
 
-> The `model` you pass is **ignored** — hermes-router routes to the cheapest capable free
-> provider, so an Anthropic-SDK app transparently gets the same multi-provider failover.
+> The `model` you pass is **ignored** — Hermes selects among the eligible models
+> in your configured pool, so an Anthropic-SDK app gets the same multi-provider failover.
 > (Use the `openai`/`anthropic` paid providers if you specifically want those models.)
 
 ### Tool use

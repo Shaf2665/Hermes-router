@@ -29,6 +29,17 @@ def test_all_presets_are_wired_into_runtime_and_configuration(monkeypatch):
     assert subprocess.check_output([sys.executable, str(ROOT / "provider_catalog.py"), "canonical", "kilo-gateway"], text=True).strip() == "kilo_gateway"
 
 
+def test_groqcloud_preset_and_context_match_official_docs():
+    preset = router.app.test_client().get('/v1/config/providers', headers=ADMIN).json['presets']['groq']
+    assert preset['label'] == 'GroqCloud (Groq)'
+    assert preset['base_url'] == 'https://api.groq.com/openai/v1'
+    assert preset['key_url'] == 'https://console.groq.com/keys'
+    for model in preset['models']:
+        assert router._model_context_window({'name': 'groq'}, model) == 131072
+        assert router._context_candidate_allowed({'name': 'groq'}, model, {'max_tokens': 8192}, 10, 128000)
+        assert not router._context_candidate_allowed({'name': 'groq'}, model, {'max_tokens': 8192}, 10, 200000)
+
+
 def test_save_key_and_multiple_models_survives_reload(monkeypatch, tmp_path):
     monkeypatch.setattr(router, '_refresh_provider_capabilities', lambda *args: None)
     for name in ('PROVIDERS', '_AUTH_KEYS', '_provider_state', '_model_state'):

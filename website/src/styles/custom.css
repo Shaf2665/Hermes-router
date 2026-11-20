@@ -128,6 +128,7 @@ header.header {
 }
 
 .sidebar-content a[aria-current='page'] {
+	color: var(--sl-color-accent-high);
 	border-inline-start: 3px solid var(--sl-color-accent);
 	background: var(--sl-color-accent-low);
 	font-weight: 700;

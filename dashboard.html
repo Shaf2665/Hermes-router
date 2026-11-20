@@ -596,6 +596,7 @@ pre{padding:18px;background:var(--surface2);border:1px solid var(--border);borde
 <section class="page" id="page-settings">
   <div class="settings-heading"><div class="page-heading"><h2>Settings</h2><p>Make Hermes work your way.</p></div><span class="live-setting-note">Changes apply immediately</span></div>
   <div id="settings-save-msg" class="config-msg settings-feedback" role="status" aria-live="polite"></div>
+  <section class="settings-group" aria-labelledby="context-heading"><h3 id="context-heading">Context length</h3><div class="settings-rows"><div class="setting-row"><div class="setting-copy"><label for="context-window" class="setting-title">Minimum model context</label><p id="context-window-help">128K uses only models with at least 128,000 tokens of context. 16K allows 16K and larger models. Applies to all new chat requests, including failover. Larger requests may need a larger model.</p></div><select id="context-window" aria-describedby="context-window-help" onchange="saveContextWindow()" disabled><option value="0">Auto</option><option value="16000">16K</option><option value="32000">32K</option><option value="40192">40K</option><option value="64000">64K</option><option value="128000">128K</option><option value="200000">200K</option><option value="256000">256K</option><option value="512000">512K</option><option value="1000000">1M</option></select></div></div><p class="settings-links">Auto uses the request size and any client requirement. Models with unknown capacity are excluded when a minimum is set. If no model fits, Hermes returns an error.</p></section>
   <div id="addon-grid" class="settings-groups"></div>
   <section class="settings-group" aria-labelledby="appearance-heading"><h3 id="appearance-heading">Appearance</h3><div class="settings-rows"><div class="setting-row"><div><label for="theme" class="setting-title">Interface theme</label><p>Choose how Hermes looks on this browser.</p></div><select id="theme" onchange="setTheme(this.value)"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div></div></section>
   <div class="settings-security"><strong>Administrator protection is always on.</strong><p>Application keys can send requests. Only administrators can change settings and view metrics.</p></div>
@@ -1671,6 +1672,7 @@ const settingCopy = {
     cost_currency: ['Currency conversion', 'Show the configured second currency alongside USD. The exchange rate is set by your server configuration.'],
 };
 function renderAddons() {
+    renderContextWindow();
     if (!statusData?.features) return;
     const addons = statusData.features.addons || [];
     const row = a => {
@@ -1685,6 +1687,44 @@ function renderAddons() {
         ['Activity and display', flags.filter(a => activity.includes(a.name))],
     ].filter(([, items]) => items.length).map(([title, items]) => `<section class="settings-group"><h3>${title}</h3><div class="settings-rows">${items.map(row).join('')}</div></section>`).join('') +
         `<p class="settings-links">Manage <a href="#providers">local models in Providers</a> and <a href="#settings" onclick="document.getElementById('settings-access').open=true">budgets under Application access</a>.</p>`;
+}
+let contextSaving = false;
+function renderContextWindow() {
+    if (contextSaving) return;
+    const select = document.getElementById('context-window');
+    const window = statusData?.context_window;
+    select.disabled = !Number.isSafeInteger(window);
+    if (select.disabled) return;
+    select.querySelector('[data-custom]')?.remove();
+    if (![...select.options].some(option => Number(option.value) === window)) {
+        const option = new Option(window.toLocaleString() + ' tokens', String(window));
+        option.dataset.custom = 'true';
+        select.add(option);
+    }
+    select.value = String(window);
+}
+async function saveContextWindow() {
+    if (contextSaving) return;
+    const select = document.getElementById('context-window');
+    contextSaving = true;
+    select.disabled = true;
+    setMsg('settings-save-msg', 'Saving context length…', true);
+    try {
+        const r = await adminFetch('/v1/config/context', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ context_window: Number(select.value) }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(apiError(d) || 'Could not save context length.');
+        statusData.context_window = d.context_window;
+        setMsg('settings-save-msg', (d.context_window ? 'Minimum context: ' + d.context_window.toLocaleString() + ' tokens.' : 'Automatic context selection.') + ' Saved and applied to new requests.', true);
+        await refresh();
+    } catch (e) {
+        setMsg('settings-save-msg', e.message + ' Your setting was not changed.', false);
+    } finally {
+        contextSaving = false;
+        renderContextWindow();
+    }
 }
 // ── config: add-ons toggle ───────────────────────────────────────────────────
 async function toggleAddon(name, enable) {

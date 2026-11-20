@@ -25,16 +25,18 @@ export function activate(context: vscode.ExtensionContext) {
     return new RouterClient(cfg.get<string>("baseUrl", "http://localhost:8319"), credential);
   };
   const dashboard = new DashboardProvider(makeAdminClient);
+  const chatProvider = new HermesChatModelProvider(makeClient);
 
   context.subscriptions.push(
     out,
     statusBar,
+    chatProvider,
     vscode.window.registerWebviewViewProvider(DashboardProvider.viewType, dashboard),
     // Register hermes-router as a Language Model provider so it shows up in
     // Copilot Chat's model picker and any vscode.lm consumer can select it.
     vscode.lm.registerLanguageModelChatProvider(
       "hermes-router",
-      new HermesChatModelProvider(makeClient)
+      chatProvider
     )
   );
 
@@ -47,6 +49,7 @@ export function activate(context: vscode.ExtensionContext) {
   const refresh = async () => {
     if (refreshing) return;
     refreshing = true;
+    const contextRefresh = chatProvider.syncContextWindow();
     try {
       const status = await dashboard.refresh();
       if (status) {
@@ -61,7 +64,7 @@ export function activate(context: vscode.ExtensionContext) {
       } catch (e: any) {
         statusBar.setUnreachable(e?.message || "no response");
       }
-    } finally { refreshing = false; }
+    } finally { await contextRefresh; refreshing = false; }
   };
 
   // ── Commands ─────────────────────────────────────────────────────────────────
@@ -169,6 +172,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("hermesRouter")) {
+        chatProvider.refresh();
         startTimer();
         void refresh();
       }

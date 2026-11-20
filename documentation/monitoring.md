@@ -51,11 +51,10 @@ The Settings page reports save failures without changing the switch state.
 It's pure HTML/JS (no framework, no external CDN) and reads/writes only the router's own
 `/v1/*` endpoints — so it adds essentially no memory or CPU to the router itself.
 
-> **Accessing it remotely.** By default the router binds to `0.0.0.0` (all interfaces). If you
-> set `HOST=127.0.0.1` (localhost-only, recommended on a shared/VPS host), reach the dashboard
-> over an SSH tunnel: `ssh -L 8319:127.0.0.1:8319 user@server`, then open
-> `http://localhost:8319/` locally. With **Docker** the mapped port (`-p 8319:8319`) exposes it
-> to your host automatically. The raw API endpoints stay key-protected either way.
+> **Accessing it remotely:** the native installers and documented Docker commands
+> keep the router on localhost. Use an SSH tunnel or HTTPS reverse proxy as shown
+> in [Server setup](deployment.md). `localhost` always means the machine running
+> the client; it does not automatically point to your remote server.
 
 From **VS Code**, the extension's dashboard panel has a **⬈ Web dashboard** button (and a globe
 icon in the panel header) that opens this page in your browser.

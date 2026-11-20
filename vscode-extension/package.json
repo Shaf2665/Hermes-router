@@ -2,7 +2,7 @@
   "name": "hermes-router",
   "displayName": "hermes-router",
   "description": "Control panel for hermes-router — monitor provider health and manage your multi-provider AI router from VS Code.",
-  "version": "0.9.7",
+  "version": "0.9.9",
   "publisher": "MohammedShafiq",
   "license": "MIT",
   "icon": "icon.png",
@@ -122,6 +122,20 @@
           "default": "hr",
           "description": "Path to the `hr` CLI (used for local control actions)."
         },
+        "hermesRouter.contextWindow": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 2147483647,
+          "description": "0 follows the dashboard context length (40,192 tokens when the router is on Auto or does not advertise a window). A positive value requests a larger total context, including output. The dashboard minimum always applies. The effective window must exceed maxOutputTokens."
+        },
+        "hermesRouter.maxOutputTokens": {
+          "type": "integer",
+          "default": 8192,
+          "minimum": 1,
+          "maximum": 2147483646,
+          "description": "Reply token budget reserved within the effective context window from the dashboard or contextWindow. Must be smaller than that window. Provider output caps still apply."
+        },
         "hermesRouter.dockerContainer": {
           "type": "string",
           "default": "",
@@ -131,12 +145,13 @@
           "type": "number",
           "default": 10,
           "minimum": 3,
-          "description": "How often to refresh the dashboard and status bar (seconds)."
+          "description": "How often to refresh the dashboard, status bar and router context setting (seconds)."
         }
       }
     }
   },
   "scripts": {
+    "vscode:prepublish": "npm run compile",
     "compile": "node esbuild.js",
     "test": "node --test tests/*.test.cjs",
     "watch": "node esbuild.js --watch",

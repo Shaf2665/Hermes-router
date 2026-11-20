@@ -9,7 +9,8 @@ head:
 hermes-router doesn't just forward your request to the first provider it finds — it looks at
 *what kind* of request it is and picks a provider that can actually handle it, then falls back
 automatically if that one fails. This page explains each routing feature in plain language. For
-the technical version (scoring formulas, code paths), see **[Architecture](/architecture/)**.
+the technical version (scoring formulas, code paths), see the
+**[Architecture section of the README](/architecture/)**.
 
 **The short version:** every request gets scored for difficulty, every model is scored for
 capability, and the router sends it to the cheapest model that can still do the job — skipping
@@ -28,10 +29,16 @@ This is the core of the router, used by every request.
   heuristic difficulty score. These ratings are routing hints, not a guarantee of answer quality.
 - If the chosen model is rate-limited, down, or errors, the router **automatically tries the next
   best one**. If every candidate fails, the app receives a `503`.
-- A request whose history exceeds a model's context window is rejected with a `400` and the router
-  cascades to the next candidate — correct, but it costs one wasted round-trip per too-small model.
-  If you see this happen repeatedly for a provider, set `<PROVIDER>_SKIP_TOKENS_OVER` (see
-  [configuration.md](configuration.md#per-provider-capability-overrides)) to skip it upfront for large requests.
+- Before sending, Hermes filters models by their known context windows, including
+  estimated conversation/tool content and reply space. Set a required window in
+  **Settings → Context length** in the dashboard, or via `ROUTER_CONTEXT_WINDOW`.
+  A client can ask for more with `X-Hermes-Context-Window`, but cannot lower the
+  dashboard minimum. 128K allows 128K and larger models; 16K allows 16K and larger.
+  If no eligible model fits, the request gets a clear HTTP 400. Unknown-capacity
+  models remain usable only when no positive window is requested. See
+  [context configuration](/configuration/#context-windows).
+- Provider input ceilings such as free-tier TPM remain separate:
+  `<PROVIDER>_SKIP_TOKENS_OVER` still skips that provider for oversized input.
 
 This also works *within* a single provider: if you list several models for one provider (e.g.
 `GEMINI_MODEL=gemini-2.5-flash-lite,gemini-2.5-flash,gemini-2.5-pro`), the router treats each one
@@ -41,12 +48,12 @@ instead of only using the extra models as backups.
 ## Tool-calling routing
 
 **Tool calling** (or "function calling") is how you let the model *do* something — like look up
-the weather — instead of just answering in text. See **[Concepts](/concepts/)** if that's new to you.
+the weather — instead of just answering in text. See **[concepts.md](/concepts/)** if that's new to you.
 
 Not every model can do this. When your request includes `tools`, the router first considers
 models known to support function calling, skipping ones known not to support it. This is detected per model at
-startup (see [Configuration → Per-provider capability overrides](/configuration/#per-provider-capability-overrides)
-to override a result manually with `<PROVIDER>_SUPPORTS_TOOLS`).
+startup (see [configuration.md](/configuration/#per-provider-capability-overrides) to override a
+result manually with `<PROVIDER>_SUPPORTS_TOOLS`).
 
 **Safety net:** if the router can't confirm *any* candidate supports tools (e.g. every provider is
 new/unprobed), it doesn't hard-fail — it falls back to trying all of them rather than refusing the
@@ -103,7 +110,7 @@ providers, the router falls back to trying all of them instead of refusing the r
 ## Embeddings routing
 
 **Embeddings** turn text into a list of numbers representing its *meaning*, used for things like
-"find the most similar document." See **[Concepts](/concepts/)** for the plain-language version.
+"find the most similar document." See **[concepts.md](/concepts/)** for the plain-language version.
 
 This is a separate, simpler routing path — only providers configured with an embedding model
 (currently Gemini, Mistral, Cohere, and OpenAI) are candidates. `POST /v1/embeddings` uses the
@@ -120,7 +127,7 @@ routes text and vision *input* — reading images you send it, not generating ne
 
 This page is the plain-language tour. For the exact scoring formula, the request pipeline
 diagram, and how each of these interacts with failover, the circuit breaker, and capability
-probing under the hood, see **[Architecture — How it works](/architecture/)**.
+probing under the hood, see the **[Architecture section of the README](/architecture/)**.
 
 ---
 

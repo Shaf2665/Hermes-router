@@ -88,6 +88,7 @@ def router_server(tmp_path, stream_release):
         "AUTO_DISCOVER_MODELS": "0", "REQUEST_LOG_SIZE": "50", "LOG_LEVEL": "WARNING",
         "WORKER_THREADS": "4", "LOCAL_BASE_URL": f"http://127.0.0.1:{upstream.server_port}/v1",
         "LOCAL_MODEL": "test-local",
+        "ROUTER_CONTEXT_WINDOW": "0", "LOCAL_CONTEXT_WINDOW": "32000",
     })
     log = (tmp_path / "server.log").open("w", encoding="utf-8")
     env["PYTHONPATH"] = str(ROOT)
@@ -166,9 +167,44 @@ def test_live_settings_and_connect_layout(router_server, page):
         page.screenshot(path=str(ROOT / '.pytest_cache' / f'live-settings-{width}.png'), full_page=True)
 
 
+def test_context_setting_applies_to_requests_and_preserves_failed_save(router_server, page):
+    login(page, router_server)
+    page.get_by_role('button', name='Settings', exact=True).click()
+    window = page.get_by_label('Minimum model context', exact=True)
+    expect(window).to_have_value('0')
+    window.select_option('128000')
+    expect(page.locator('#settings-save-msg')).to_contain_text('128,000 tokens')
+    response = page.request.post(router_server + '/v1/chat/completions',
+        headers={'Authorization': 'Bearer ' + AUTH_KEY, 'X-Hermes-Context-Window': '16000'},
+        data={'messages': [{'role': 'user', 'content': 'Hello'}], 'max_tokens': 64})
+    assert response.status == 400
+    assert response.json()['error']['code'] == 'context_length_exceeded'
+    page.reload()
+    expect(window).to_have_value('128000')
+    window.select_option('16000')
+    expect(page.locator('#settings-save-msg')).to_contain_text('16,000 tokens')
+    response = page.request.post(router_server + '/v1/chat/completions',
+        headers={'Authorization': 'Bearer ' + AUTH_KEY},
+        data={'messages': [{'role': 'user', 'content': 'Hello'}], 'max_tokens': 64})
+    assert response.status == 200
+    page.route('**/v1/config/context', lambda route: route.fulfill(status=500, json={'error': {'message': 'Storage unavailable'}}))
+    window.select_option('128000')
+    expect(page.locator('#settings-save-msg')).to_contain_text('Storage unavailable')
+    expect(window).to_have_value('16000')
+    expect(window).to_be_enabled()
+    for width in (1366, 390):
+        page.set_viewport_size({'width': width, 'height': 900})
+        assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+        page.screenshot(path=str(ROOT / '.pytest_cache' / f'context-settings-{width}.png'), full_page=True)
+
+
 def test_provider_presets_key_link_live_models_and_multiple_selection(router_server, page):
     login(page, router_server)
     page.locator('[data-page="providers"]').click()
+    page.locator('#cfg-key-provider').select_option('groq')
+    expect(page.locator('#cfg-provider-url')).to_have_value('https://api.groq.com/openai/v1')
+    expect(page.locator('#cfg-provider-key-link')).to_have_attribute('href', 'https://console.groq.com/keys')
+    expect(page.locator('#cfg-key-provider option:checked')).to_contain_text('GroqCloud')
     page.locator('#cfg-key-provider').select_option('kilo_gateway')
     expect(page.locator('#cfg-provider-url')).to_have_value('https://ai-gateway.kilo.ai/api/v1')
     expect(page.locator('#cfg-provider-key-link')).to_have_attribute('href', 'https://app.kilo.ai/')

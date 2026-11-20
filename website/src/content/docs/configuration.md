@@ -2,11 +2,11 @@
 title: "Configuration"
 description: "auth.json, main .env settings and provider patterns, model overrides, key rotation, and advanced controls."
 ---
-# Configuration
 
-All configuration is via environment variables (in `.env`) and the `auth.json` credential
-store. Most settings are optional; the router can serve model requests once at least one
-provider (including a local model) is configured.
+For ordinary setup, use **Providers**, **Connect** and **Settings** in the browser
+dashboard. You do not need to edit configuration files to add a provider and chat.
+The dashboard saves settings in the private `.env` and `auth.json` files.
+This page is the reference for optional settings and manual configuration.
 
 ## Core features vs. add-ons
 
@@ -182,10 +182,9 @@ in `auth.json` look like:
 { "proxy_keys": { "sk-team-1": { "rpm": 60, "req_per_day": 500, "tokens_per_day": 100000, "cost_per_day": 5 } } }
 ```
 
-> **Security boundary:** every proxy key can also call the dashboard's configuration-write
-> endpoints. Limits and provider scopes restrict routing usage, but they do not create a
-> read-only or non-admin role. Give keys only to trusted users/services and put an external
-> auth layer in front if you need tenant isolation.
+> **Access:** application keys authorize inference and the caller's own usage only.
+> Dashboard configuration, global status/logs and metrics require the separate
+> administrator credential. Never give an application the administrator key.
 
 ### Cost / spend awareness
 
@@ -237,6 +236,88 @@ machine. It's keyless (cloud providers remain the fallback). See
 |---|---|---|
 | `GEMINI_EMBED_MODEL` | `gemini-embedding-001` | Embedding model (empty disables this provider for `/v1/embeddings`) |
 | `<PROVIDER>_EMBED_MODEL` | *(gemini/mistral/cohere set)* | Same pattern for embeddings; set empty to disable |
+
+### Context windows
+
+Open the browser dashboard, go to **Settings → Context length**, and choose a
+**Minimum model context**. It saves immediately and applies to new chat requests;
+no restart is needed.
+
+| Choose | Models Hermes may use |
+| --- | --- |
+| **16K** | Models with at least 16,000 tokens of context |
+| **128K** | Models with at least 128,000 tokens of context |
+| **Auto** | Uses request size and any client requirement |
+
+The minimum applies to every chat client and to failover. A client cannot lower it.
+Existing responses finish normally. If no eligible model has enough known capacity,
+Hermes returns a clear error instead of using a smaller model.
+
+Extension **0.9.9+** follows the dashboard by default (`hermesRouter.contextWindow=0`)
+and refreshes the model picker automatically. With Auto or an older router, it
+uses **40,192 total tokens** (32,000 input + 8,192 output). A positive extension
+setting can request a larger window. See [VS Code](/vscode-extension/).
+
+For file-based setup, set `ROUTER_CONTEXT_WINDOW=128000` in the router's `.env`
+and restart. A request may send `X-Hermes-Context-Window: 128000`; the router uses
+the larger of that value and the dashboard minimum. Values are integers from 0 to
+2,147,483,647; **0** (the server default) adds no minimum of its own.
+The administrator-only `POST /v1/config/context` accepts `{"context_window": 128000}`;
+authenticated `GET /v1/models` advertises the saved `context_window` for clients.
+These controls are included in Docker image `context-20261104.1` and newer.
+The older `custom-20261104` image predates them.
+This is a model-selection requirement, not a provider upgrade or a hard prompt
+truncation limit. Hermes never truncates the conversation to make it fit.
+
+Hermes filters each model by the larger of the configured window and the estimated
+input plus reply allowance, then uses its existing cost/quality ranking and
+failover. Input estimates include tool schemas, tool calls/results and structured
+response schemas. An explicit `max_tokens`/`max_completion_tokens` supplies the
+reply allowance, with the existing reasoning reserve and provider clamp; omitted
+bounds use an estimated 8,192-token reserve. Send an explicit output limit for
+predictable sizing. Token counts vary by provider; image tokens are not counted
+by this text estimator, and provider-side overflow can still occur.
+
+Capacity is resolved in this order:
+
+1. `<PROVIDER>_<MODEL>_CONTEXT_WINDOW` (model ID uppercased; punctuation becomes `_`).
+2. `<PROVIDER>_CONTEXT_WINDOW` for all models on that provider.
+3. A positive integer `context_length` from the provider's `/models` response,
+   collected during existing opt-in auto-discovery.
+4. Conservative defaults for the direct-provider models listed below.
+
+For example, if these are your deployment's verified limits:
+
+```dotenv
+ROUTER_CONTEXT_WINDOW=128000
+LOCAL_CONTEXT_WINDOW=32768
+OPENROUTER_VENDOR_MODEL_NAME_CONTEXT_WINDOW=200000
+```
+
+Use the **actual served limit**, especially for a local server's configured context
+size or a gateway/account with tighter limits. An override of `0` marks capacity
+unknown. Restart after editing `.env`. `/v1/status` reports each model's resolved
+`context_window` in `model_caps` (administrator access required).
+
+A positive requested window excludes models whose capacity is unknown. Without
+one, unknown models retain legacy attempt/failover behavior, while known limits
+are checked against estimated request size. If all otherwise eligible models are
+too small or unknown, Hermes returns HTTP 400 with `context_length_exceeded`.
+Provider quotas, access scopes and tool/vision requirements still apply.
+
+Direct-provider defaults, verified 2026-11-04: OpenAI
+[GPT-4o](https://developers.openai.com/api/docs/models/gpt-4o) and
+[GPT-4o mini](https://developers.openai.com/api/docs/models/gpt-4o-mini): 128,000;
+[GPT-4.1](https://developers.openai.com/api/docs/models/gpt-4.1): 1,047,576;
+Google [Gemini 2.5 Pro, Flash and Flash-Lite](https://firebase.google.com/docs/ai-logic/models):
+1,048,576 (conservatively treated as total capacity); Anthropic
+[Haiku 4.5](https://platform.claude.com/docs/en/models/haiku-4-5/overview): 200,000;
+[Sonnet 5.5](https://platform.claude.com/docs/en/models/sonnet-5-5/overview): 1,000,000;
+Groq [GPT-OSS 120B/20B and Llama 3.1 8B/3.3 70B](https://console.groq.com/docs/models): 131,072.
+These exact model IDs do not imply capacities for aliases, other models, Codex
+subscription endpoints, custom gateways or local deployments. Override them when
+your provider's limits differ. Catalog support uses OpenRouter's documented
+[`context_length`](https://openrouter.ai/docs/api/api-reference/models/get-models) field.
 
 ### Per-provider capability overrides
 

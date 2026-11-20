@@ -1644,6 +1644,33 @@ def _model_env_suffix(model: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "_", model).strip("_").upper()
 
 
+# Conservative direct-provider defaults; gateway/local limits must come from
+# their catalog or an operator override. Sources: documentation/configuration.md.
+_CONTEXT_WINDOWS = {
+    # Groq production model limits: https://console.groq.com/docs/models (2026-11-04).
+    "groq": {"openai/gpt-oss-120b": 131072, "openai/gpt-oss-20b": 131072,
+             "llama-3.1-8b-instant": 131072, "llama-3.3-70b-versatile": 131072},
+    "openai": {"gpt-4o": 128000, "gpt-4o-mini": 128000, "gpt-4.1": 1047576},
+    "gemini": {"gemini-2.5-flash-lite": 1048576, "gemini-2.5-flash": 1048576,
+               "gemini-2.5-pro": 1048576},
+    "anthropic": {"claude-haiku-4-5": 200000, "claude-haiku-4-5-20251001": 200000,
+                  "claude-sonnet-5-5": 1000000},
+}
+
+
+def _model_context_window(provider: dict, model: str) -> int:
+    name = provider["name"].upper()
+    for key in (f"{name}_{_model_env_suffix(model)}_CONTEXT_WINDOW", f"{name}_CONTEXT_WINDOW"):
+        if key in os.environ:
+            return max(0, _int_env(key))
+    discovered = provider.get("context_windows", {}).get(model)
+    if discovered is not None:
+        return discovered
+    if provider.get("custom"):
+        return 0
+    return _CONTEXT_WINDOWS.get(provider["name"], {}).get(model, 0)
+
+
 def _model_caps(name: str, model: str) -> dict:
     """Per-(provider, model) capability with optimistic defaults. Rating is always
     derivable (pattern-based, free); tools default to capable when unknown (mirrors
@@ -1742,6 +1769,7 @@ def _discover_models(provider: dict, key: str, free_only: bool = False) -> list[
         if r.status_code != 200:
             return []
         models = []
+        context_windows = {}
         for item in r.json().get("data", []):
             mid = item.get("id") if isinstance(item, dict) else None
             if isinstance(mid, str) and mid.strip():
@@ -1750,10 +1778,14 @@ def _discover_models(provider: dict, key: str, free_only: bool = False) -> list[
                 if provider["name"] == "gemini" and normalized.startswith("models/"):
                     normalized = normalized[len("models/"):]
                 models.append(normalized)
+                window = item.get("context_length")
+                if isinstance(window, int) and not isinstance(window, bool) and window > 0:
+                    context_windows[normalized] = window
         if free_only:
             models = [m for m in models if _is_free_model_id(m)]
         models = list(dict.fromkeys(models))
         models.sort(key=lambda m: (_price_rank(m), _quality_rank(provider["name"], m), m.lower()))
+        provider["context_windows"] = context_windows
         return models
     except Exception as e:
         log.debug(f"[ratings]   {provider['name']}: model discovery skipped: {e}")
@@ -3571,9 +3603,47 @@ def _estimated_tokens(messages: list) -> int:
     if enc is not None:
         total = 3
         for m in messages:
-            total += 4 + len(enc.encode(_message_text(m)))
+            total += 4 + len(enc.encode(_message_text(m), disallowed_special=()))
         return total
     return sum(len(_message_text(m)) for m in messages) // 4
+
+
+def _estimated_request_tokens(payload: dict) -> int:
+    # Count tool definitions, tool-call arguments and response schemas as well as
+    # message text. They can occupy most of an agent's context window.
+    messages = payload.get("messages", [])
+    extra = {field: payload[field] for field in ("tools", "functions", "tool_choice", "response_format")
+             if field in payload}
+    extra["message_metadata"] = [
+        {k: v for k, v in message.items() if k != "content"} for message in messages]
+    serialized = json.dumps(extra, ensure_ascii=False, separators=(",", ":"))
+    enc = _get_encoder()
+    overhead = len(enc.encode(serialized, disallowed_special=())) if enc else math.ceil(len(serialized) / 4)
+    # shortcut: a shared tokenizer estimates text only; image token budgets need provider-specific counting.
+    return _estimated_tokens(messages) + overhead + 4 * len(messages) + 3
+
+
+def _configured_context_window() -> int:
+    value = os.environ.get("ROUTER_CONTEXT_WINDOW", "0")
+    if not re.fullmatch(r"[0-9]{1,10}", value) or int(value) > 2147483647:
+        raise ValueError("ROUTER_CONTEXT_WINDOW must be an integer from 0 to 2147483647")
+    return int(value)
+
+
+def _requested_context_window() -> int:
+    minimum = _configured_context_window()
+    value = request.headers.get("X-Hermes-Context-Window", "0") if has_request_context() else "0"
+    if not re.fullmatch(r"[0-9]{1,10}", value) or int(value) > 2147483647:
+        raise ValueError("X-Hermes-Context-Window must be an integer from 0 to 2147483647")
+    return max(minimum, int(value))
+
+
+def _context_candidate_allowed(provider, model, payload, input_tokens, requested_window):
+    window = _model_context_window(provider, model)
+    if not window:
+        return not requested_window  # Legacy clients can still try unknown-capacity models.
+    output_tokens = _output_bound(payload, provider, model) or 8192
+    return window >= max(requested_window, input_tokens + output_tokens)
 
 
 def _ordered_providers(payload: dict, prefer_local: bool = False,
@@ -4292,11 +4362,12 @@ def models():
     err = _auth_check()
     if err:
         return err
-    data = [{"id": ROUTER_MODEL, "object": "model", "owned_by": "hermes-router"}]
+    data = [{"id": ROUTER_MODEL, "object": "model", "owned_by": "hermes-router",
+             "context_window": _configured_context_window()}]
     # Advertise the fast/conversation profile only when a local model is configured,
     # since that's what it routes short turns to.
     if any(p["name"] == "local" for p in PROVIDERS):
-        data.append({"id": f"{ROUTER_MODEL}:fast", "object": "model", "owned_by": "hermes-router"})
+        data.append({**data[0], "id": f"{ROUTER_MODEL}:fast"})
     return jsonify({"object": "list", "data": data})
 
 
@@ -4318,8 +4389,15 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
     _req_ctx.started = time.monotonic()
     _req_ctx.deadline = _req_ctx.started + REQUEST_TIMEOUT
 
+    try:
+        requested_window = _requested_context_window()
+    except ValueError as error:
+        return ("error", {"error": {"message": str(error), "type": "invalid_request_error"}}, 400)
+
     # Old in-flight responses must not populate the new configuration's cache.
-    routing_identity = [(p["name"], p.get("base_url", ""), _provider_models(p)) for p in PROVIDERS]
+    routing_identity = [(p["name"], p.get("base_url", ""),
+                         [(m, _model_context_window(p, m)) for m in _provider_models(p)]) for p in PROVIDERS]
+    routing_identity.append(requested_window)
     ns += ":" + hashlib.sha256(json.dumps(routing_identity, sort_keys=True).encode()).hexdigest()[:16]
 
     # Generic routing hints on the existing completion endpoint. `:fast`
@@ -4364,8 +4442,19 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
                     _req_ctx.cache_hit = True
                     return ("json", hit)
 
-    est_tokens = _estimated_tokens(messages)
+    est_tokens = _estimated_request_tokens(payload)
     ordered    = _ordered_providers(payload, prefer_local, workload_hint)
+    scoped = [c for c in ordered
+              if (_caller_scope() is None or c["provider"]["name"] in _caller_scope())
+              and _budget_candidate_allowed(c["provider"], c["model"], payload)]
+    ordered = [c for c in scoped if _context_candidate_allowed(
+        c["provider"], c["model"], payload, est_tokens, requested_window)]
+    if scoped and not ordered:
+        return ("error", {"error": {
+            "message": f"No eligible model fits the context requirement (configured window: {requested_window}, "
+                       f"estimated input: {est_tokens}, plus output reserve). Configure a model's "
+                       "<PROVIDER>_<MODEL>_CONTEXT_WINDOW or choose a smaller context window.",
+            "type": "invalid_request_error", "code": "context_length_exceeded"}}, 400)
     ordered = _session_affinity_order(ordered, session_affinity_id)
 
     # Tool-aware routing: when the request carries tools, prefer (provider, model)
@@ -4376,7 +4465,7 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
     needs_tools = bool(payload.get("tools"))
     tool_capable = _model_has_confirmed_tool_support if tool_loop else _model_supports_tools
     any_tool_candidate = any(
-        tool_capable(c["provider"]["name"], c["model"]) for c in ordered
+        tool_capable(c["provider"]["name"], c["model"]) for c in scoped
     )
     if tool_loop and not needs_tools:
         return (
@@ -4399,7 +4488,7 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
     # tools: only enforce when at least one vision-capable candidate exists.
     needs_vision  = _payload_has_image(payload)
     enforce_vision = needs_vision and any(
-        _model_supports_vision(c["provider"], c["model"]) for c in ordered)
+        _model_supports_vision(c["provider"], c["model"]) for c in scoped)
 
     # Provider scoping: an access key can be restricted to specific providers
     # from the dashboard's Access Keys page. Unlike tool/vision detection above,
@@ -5325,6 +5414,24 @@ def config_feature(name):
     return jsonify({"name": name, "enabled": enabled, "restart_required": False})
 
 
+@app.route("/v1/config/context", methods=["POST"])
+@_locked_access
+def config_context():
+    err = _admin_check()
+    if err:
+        return err
+    body = request.get_json(silent=True)
+    window = body.get("context_window") if isinstance(body, dict) else None
+    if type(window) is not int or not 0 <= window <= 2147483647:
+        return jsonify({"error": {"message": "context_window must be an integer from 0 to 2147483647"}}), 400
+    try:
+        _env_write_line("ROUTER_CONTEXT_WINDOW", str(window))
+    except OSError:
+        return jsonify({"error": {"message": "Could not save context window. Check configuration file permissions and retry."}}), 500
+    os.environ["ROUTER_CONTEXT_WINDOW"] = str(window)
+    return jsonify({"context_window": window, "restart_required": False})
+
+
 @app.route("/v1/config/rotation", methods=["POST"])
 @_locked_access
 def config_rotation():
@@ -5719,7 +5826,8 @@ def status():
             # dashboards can show why a non-primary model gets picked for hard turns.
             entry["model_caps"] = [
                 {"model": m, **_model_caps(p["name"], m),
-                 "supports_vision": _model_supports_vision(p, m)} for m in p["models"]]
+                 "supports_vision": _model_supports_vision(p, m),
+                 "context_window": _model_context_window(p, m)} for m in p["models"]]
         if "available" in st:
             entry["available"] = st["available"]
         if "supports_tools" in st:
@@ -5736,6 +5844,7 @@ def status():
 
     return jsonify({
         "providers": provider_stats,
+        "context_window": _configured_context_window(),
         "readiness": _readiness(),
         "cache": {
             "enabled":    CACHE_TTL > 0,

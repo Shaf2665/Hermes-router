@@ -10,6 +10,7 @@ test('owner credentials are scoped SecretStorage; legacy app key remains for cha
   let input = 'owner-secret', dashboard, model;
   const disposable = { dispose() {} };
   const vscode = {
+    EventEmitter: class { event = () => disposable; fire() {} dispose() {} },
     StatusBarAlignment: { Left: 1 },
     ThemeColor: class {},
     window: {

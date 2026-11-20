@@ -43,7 +43,8 @@ The docs read in order, from zero experience to a running, monitored router:
 
 **Set it up:**
 
-- **[Deployment](documentation/deployment.md)** — Windows/macOS/Linux, Docker, Hugging Face Spaces, **surviving reboots**
+- **[Local setup](documentation/setup.md)** — Windows, macOS and Linux, with or without Docker
+- **[Server setup](documentation/deployment.md)** — Linux/Windows Server, remote access, backups and automatic startup
 - **[Providers](documentation/providers.md)** — free & paid providers, sign-up links, capabilities
 - **[Free model rankings](documentation/free-model-rankings.md)** — compare the default free models by quality and best use
 - **[Configuration](documentation/configuration.md)** — `auth.json`, main `.env` settings and provider patterns, **core features vs. add-ons** (`hr features`)
@@ -110,79 +111,25 @@ system-wide — `install.sh` only symlinks the `hr` command onto your PATH.
 
 ## Setup
 
-Package update (2026-11-04): [download the VS Code 0.9.7 VSIX](https://github.com/Shaf2665/Hermes-router/releases/download/vscode-v0.9.7/hermes-router-0.9.7.vsix). Use extension version 0.9.6 or newer for administrator controls. Docker images and upgrade instructions are in the setup guide.
+Start with [the beginner guide](documentation/getting-started.md), then choose one path:
 
-Dashboard update (2026-11-04): provider API keys, model selections/resets, key rotation mode, and Settings switches save and apply without restarting. Active responses can finish on their original model. Custom OpenAI-compatible providers and local models now support editable addresses and optional API keys. Includes the official Hermes logo and improved Connect and Settings pages. Images `custom-20261104` and `custom-20261104-cli` support AMD64 and ARM64. See [InstaBox hosting](documentation/instabox.md) and the [validation record](docs/research/2026-11-04-custom-providers.md).
+- [Your computer](documentation/setup.md): Windows, macOS or Linux, with Python or Docker.
+- [A server](documentation/deployment.md): Linux/Windows Server, remote access and automatic startup.
+- [VS Code](documentation/vscode-extension.md): connect Copilot Chat after your first dashboard test works.
 
-**Foundation preview:** see [Local and server setup](documentation/setup.md) for the new
-Windows starter, persistent Docker Compose installation, administrator/application-key
-migration, first request and SSH/HTTPS server access. These instructions require this preview
-source from [`codex/hermes-upgrade-design`](https://github.com/Shaf2665/Hermes-router/tree/codex/hermes-upgrade-design); the published `main` installer and older images may not contain it yet.
+The guides use the published `custom-20261104` Docker image or the
+`codex/hermes-upgrade-design` source branch. They explain separate administrator
+and application keys, persistent storage, live provider changes and backups.
+The 0.9.8 context-routing feature remains a source preview requiring matching
+router and extension updates; the dated Docker image does not include it.
 
-For the initial codebase exploration, see the [graph report](graphify-out/GRAPH_REPORT.md).
-Download [graph.html](graphify-out/graph.html) and open it locally to explore the graph.
-It records the original `9d87915` baseline, before the foundation changes; use the
-[foundation validation report](docs/research/foundation-validation.md) for the updated behavior.
+Your dashboard runs at `http://localhost:8319` for a local installation.
+Sign in with the generated administrator key, add a provider in **Providers**,
+then create an application key and send a test message in **Connect**.
+Use that application key in your app; keep the administrator key private.
 
-**Requirements:** Python 3.10+ and at least one configured cloud provider key or local model
-(see **[Providers](documentation/providers.md)**).
-
-> **Platform note:** the router runs on **Linux, macOS, and Windows**. The one-liner and
-> `hr` CLI below are for Linux/macOS (and WSL2). On **Windows**, the foundation preview
-> provides native `install.ps1` and `start.ps1`; Docker is also supported — see
-> **[Local and server setup](documentation/setup.md)**.
-
-### One-liner install
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Shaf2665/Hermes-router/main/get.sh | bash
-```
-
-This clones the repo to `~/.local/share/hermes-router`, creates a venv, installs
-dependencies, and puts `hr` on your PATH — all in one step. Then run the interactive setup
-wizard, which walks you through adding your first API key and starting the router:
-
-```bash
-hr setup
-```
-
-### Manual install (if you already cloned)
-
-```bash
-git clone https://github.com/Shaf2665/Hermes-router.git
-cd Hermes-router
-./install.sh     # creates venv, installs deps, symlinks hr
-hr setup         # interactive wizard: add a key + start the router
-```
-
-Check it's running:
-
-```bash
-curl http://localhost:8319/health
-```
-
-Or open **`http://localhost:8319/`** in a browser for the live monitoring dashboard —
-provider health, request log, cache stats, per-key usage, and an **Instances** tab for
-tracking other Hermes routers or launching Docker-backed ones (it'll ask for your proxy key).
-
-### Quick start
-
-Point an OpenAI chat-completions client at `http://localhost:8319/v1`, model `hermes-router`:
-
-```python
-from openai import OpenAI
-
-client = OpenAI(base_url="http://localhost:8319/v1", api_key="YOUR_ROUTER_KEY")
-resp = client.chat.completions.create(
-    model="hermes-router",
-    messages=[{"role": "user", "content": "Hello!"}],
-)
-print(resp.choices[0].message.content)
-```
-
-The Anthropic SDK works the same way (point `base_url` at `http://localhost:8319`), and the
-router also serves embeddings and tool calls — see **[Usage](documentation/usage.md)** for
-all of it.
+Hermes is free software. Upstream AI accounts, quotas and charges are your own.
+For SDK examples, see [Use the API](documentation/usage.md).
 
 ---
 

@@ -8,27 +8,64 @@ import { RouterClient, ChatMessage, ToolDef } from "./client";
  * tool calling for agent mode.
  */
 export class HermesChatModelProvider implements vscode.LanguageModelChatProvider {
+  private readonly changed = new vscode.EventEmitter<void>();
+  readonly onDidChangeLanguageModelChatInformation = this.changed.event;
+  private routerContextWindow = 0;
+  private generation = 0;
+
   constructor(private getClient: () => RouterClient) {}
+
+  refresh(): void {
+    this.generation++;
+    this.routerContextWindow = 0;
+    this.changed.fire();
+  }
+  dispose(): void { this.generation++; this.changed.dispose(); }
+
+  async syncContextWindow(): Promise<void> {
+    const generation = ++this.generation;
+    try {
+      const window = await this.getClient().getContextWindow();
+      if (generation === this.generation && window !== this.routerContextWindow) {
+        this.routerContextWindow = window;
+        this.changed.fire();
+      }
+    } catch {
+      // Keep the last known window during an outage; the router still enforces its minimum.
+    }
+  }
 
   async provideLanguageModelChatInformation(
     _options: vscode.PrepareLanguageModelChatModelOptions,
     _token: vscode.CancellationToken
   ): Promise<vscode.LanguageModelChatInformation[]> {
+    await this.syncContextWindow();
+    const cfg = vscode.workspace.getConfiguration("hermesRouter");
+    const configured = cfg.get<number>("contextWindow", 0);
+    if (!Number.isSafeInteger(configured) || configured < 0 || configured > 2147483647) {
+      throw new Error("Set hermesRouter.contextWindow to 0 to follow the dashboard, or a positive integer up to 2147483647.");
+    }
+    const contextWindow = Math.max(configured || this.routerContextWindow || 40192, this.routerContextWindow);
+    const maxOutputTokens = cfg.get<number>("maxOutputTokens", 8192);
+    if (!Number.isSafeInteger(contextWindow) || contextWindow < 2 || contextWindow > 2147483647 ||
+        !Number.isSafeInteger(maxOutputTokens) || maxOutputTokens < 1 || maxOutputTokens >= contextWindow) {
+      throw new Error("The context window must exceed hermesRouter.maxOutputTokens. Increase it in dashboard Settings or hermesRouter.contextWindow, or lower hermesRouter.maxOutputTokens (a positive integer).");
+    }
     return [
       {
         id: "hermes-router",
         name: "hermes-router (provider pool)",
         family: "hermes-router",
         version: "1.0.0",
-        maxInputTokens: 32000,
-        maxOutputTokens: 8192,
+        maxInputTokens: contextWindow - maxOutputTokens,
+        maxOutputTokens,
         capabilities: { toolCalling: true, imageInput: false },
       },
     ];
   }
 
   async provideLanguageModelChatResponse(
-    _model: vscode.LanguageModelChatInformation,
+    model: vscode.LanguageModelChatInformation,
     messages: readonly vscode.LanguageModelChatRequestMessage[],
     options: vscode.ProvideLanguageModelChatResponseOptions,
     progress: vscode.Progress<vscode.LanguageModelResponsePart>,
@@ -52,6 +89,8 @@ export class HermesChatModelProvider implements vscode.LanguageModelChatProvider
 
     await this.getClient().streamChat({
       messages: oai,
+      contextWindow: model.maxInputTokens + model.maxOutputTokens,
+      maxOutputTokens: model.maxOutputTokens,
       tools,
       toolChoice,
       onText: (delta) => progress.report(new vscode.LanguageModelTextPart(delta)),
@@ -66,16 +105,9 @@ export class HermesChatModelProvider implements vscode.LanguageModelChatProvider
     text: string | vscode.LanguageModelChatRequestMessage,
     _token: vscode.CancellationToken
   ): Promise<number> {
-    const s = typeof text === "string" ? text : messageText(text);
-    return Math.ceil(s.length / 4); // cheap estimate (matches the router's char/4 fallback)
+    const s = typeof text === "string" ? text : JSON.stringify(toOpenAIMessages(text));
+    return Math.ceil(s.length / 4); // shortcut: approximate across provider tokenizers; router also checks the complete payload.
   }
-}
-
-/** Concatenate the text parts of a VS Code chat message. */
-function messageText(msg: vscode.LanguageModelChatRequestMessage): string {
-  return (msg.content || [])
-    .map((p: any) => (p instanceof vscode.LanguageModelTextPart ? p.value : ""))
-    .join("");
 }
 
 /** Extract plain text from a tool result's content parts. */

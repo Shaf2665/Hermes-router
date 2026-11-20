@@ -44,6 +44,8 @@ if record.exists():
     state={a['name']:a['enabled'] for a in features}
     assert state['fast_routing'] and state['persistent_cache'] and not state['request_log']
     assert requests.get(base+'/v1/status',headers={'Authorization':'Bearer '+admin}).json()['rotation']['mode']=='sequential'
+    assert requests.get(base+'/v1/models',headers={'Authorization':'Bearer '+app}).json()['data'][0]['context_window']==128000
+    assert requests.post(base+'/v1/config/context',headers={'Authorization':'Bearer '+admin},json={'context_window':0}).status_code==200
 else:
     r=requests.post(base+'/v1/config/proxy-keys',headers={'Authorization':'Bearer '+admin},json={'name':'release-check'})
     assert r.status_code==200,r.status_code
@@ -93,13 +95,23 @@ for provider,model in [('custom_smoke','custom-smoke'),('local','local-smoke')]:
     response=requests.post(base+'/v1/chat/completions',headers={'Authorization':'Bearer '+appkey},json={'model':'hermes-router','messages':[{'role':'user','content':'custom smoke'}],'max_tokens':8})
     assert response.status_code==200 and response.json()['model']==model
 assert Path('/proc/1/stat').read_text().split()[21]==started
+headers={'Authorization':'Bearer '+appkey}
+assert requests.post(base+'/v1/config/context',headers=headers,json={'context_window':128000}).status_code==401
+for window,expected in [(128000,200),(200000,400),(16000,200),(128000,200)]:
+    changed=requests.post(base+'/v1/config/context',headers=owner,json={'context_window':window})
+    assert changed.status_code==200 and changed.json()['restart_required'] is False
+    assert requests.get(base+'/v1/models',headers=headers).json()['data'][0]['context_window']==window
+    response=requests.post(base+'/v1/chat/completions',headers={**headers,'X-Hermes-Context-Window':'16000'},json={'model':'hermes-router','messages':[{'role':'user','content':'context smoke'}],'max_tokens':8})
+    assert response.status_code==expected,response.text[:300]
+    if expected==400: assert response.json()['error']['code']=='context_length_exceeded'
+assert Path('/proc/1/stat').read_text().split()[21]==started
 upstream.shutdown()
-print('health/dashboard/auth/live provider/custom/local/model/rotation/settings/persistence/durable usage OK')
+print('health/dashboard/auth/live provider/custom/local/model/rotation/context/settings/persistence/durable usage OK')
 '''
 try:
     docker('volume','create',volume)
     for attempt in range(2):
-        docker('run','-d','--platform',platform,'--name',name,'-e','AUTO_DISCOVER_MODELS=0','-e','KIMI_BASE_URL=http://127.0.0.1:18320/v1','-v',volume+':/app/data',tag)
+        docker('run','-d','--platform',platform,'--name',name,'-e','AUTO_DISCOVER_MODELS=0','-e','LOCAL_CONTEXT_WINDOW=131072','-e','KIMI_BASE_URL=http://127.0.0.1:18320/v1','-v',volume+':/app/data',tag)
         print(platform,tag,attempt,docker('exec','-i',name,'python','-',input='attempt='+str(attempt)+'\n'+probe).strip(),flush=True)
         if tag.endswith('-cli'):
             docker('exec',name,'hr','status','--json')
