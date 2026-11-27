@@ -26,7 +26,7 @@ hermes-router splits its behavior into two groups:
 hr features list                      # core features + every add-on, with on/off
 hr features enable persistent_cache   # writes the backing var to .env
 hr features disable semantic_cache
-hr restart                            # apply
+hr restart                            # CLI edits apply after a restart
 ```
 
 | Add-on | Backing setting | Default | What it does |
@@ -44,6 +44,11 @@ hr restart                            # apply
 `hr features enable/disable` toggles the simple **flag** add-ons by writing their variable to
 `.env`. The last two are richer config, so `hr features` shows their status and points you to
 the command that manages them. The live state is also in `/v1/status` under `features`.
+
+Flag add-ons switched from **Settings** in the dashboard apply immediately, without a restart.
+Turning **Persistent cache** on copies the current in-memory cache to disk and needs
+**Response cache** on; turning it off stops mirroring but keeps rows already on disk.
+Turning **Request log** off clears the in-memory history.
 
 Dashboard feature saves show confirmation above the add-ons. A failed or timed-out
 save releases the control so you can retry; use Refresh to check the saved state
