@@ -50,6 +50,9 @@ The docs read in order, from zero experience to a running, monitored router:
 
 **Build with it:**
 
+- [Reasoning / Thinking controls](documentation/reasoning.md) — source preview,
+  provider-specific effort, output budgets and legacy Auto privacy limits.
+
 - **[Usage](documentation/usage.md)** — OpenAI SDK, Anthropic SDK, tool use, embeddings
 - 🤖 **[Build your first AI agent](documentation/build-an-agent.md)** — chatbot → memory → tools, copy-paste
 - 🏛️ **[Hall of Wisdom integration](documentation/hall-of-wisdom.md)** — use Hermes as Hall's multi-provider inference gateway
@@ -195,6 +198,22 @@ all of it.
 
 ---
 
+## Reasoning / Thinking controls (source preview)
+
+In **Settings → Reasoning / Thinking**, choose Auto, Off, Low, Medium or High,
+with optional provider and model overrides. Saves persist and apply to new requests.
+Clients can override the setting with `X-Hermes-Reasoning`; the VS Code setting
+`hermesRouter.reasoning` defaults to `server` to follow the dashboard.
+
+Explicit controls route only to verified compatible models. Thinking shares the
+output limit with the answer, and supported levels vary by provider. Auto preserves
+legacy behavior, including its reasoning-echo privacy limitation. Private thinking
+tool continuity is still follow-up work.
+
+Use matching router and extension builds from this branch; this preview does not
+update published packages. See the [reasoning guide](documentation/reasoning.md)
+for examples, supported models, budgets and errors.
+
 ## Commands
 
 The `./install.sh` step puts `hr` (and the full name `hermes-router`) on your PATH.
@@ -246,9 +265,10 @@ some with `hr auth add`.
 **Port already in use** — something else is on `8319`. Set `PORT=8320` in `.env` (and point
 your app at the new port), then `hr restart`.
 
-**Empty replies on short requests** — some reasoning models spend the whole budget
-thinking; the router reserves extra headroom automatically, but you can raise
-`REASONING_TOKEN_RESERVE`. See [Configuration](documentation/configuration.md).
+**Empty replies on reasoning requests** — thinking and the final answer share the
+output budget. Explicit reasoning controls do not add `REASONING_TOKEN_RESERVE`;
+increase the total output limit or choose a lower supported effort. Strict requests
+report incomplete answers as errors. See [Reasoning controls](documentation/reasoning.md).
 
 **Check it's alive** — `curl http://localhost:8319/health` should return `{"status":"ok",...}`.
 For detail, `hr status` or watch the logs (`router.log`, or `journalctl -u hermes-router` if

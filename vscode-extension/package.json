@@ -131,6 +131,12 @@
           "default": "",
           "description": "Name (or ID) of the Docker container running hermes-router. When set, control actions run via `docker exec <container> hr \u2026` and Restart runs `docker restart <container>`. Requires the `:cli` image (e.g. shafiq735/hermes-router:cli) with a mounted volume so changes persist. Leave blank for a non-Docker local install."
         },
+        "hermesRouter.reasoning": {
+          "type": "string",
+          "enum": ["server", "auto", "off", "low", "medium", "high"],
+          "default": "server",
+          "description": "Reasoning policy. Server follows dashboard settings; Auto explicitly uses legacy provider defaults. Other levels require verified model support and may reduce the eligible tool-capable pool."
+        },
         "hermesRouter.refreshSeconds": {
           "type": "number",
           "default": 10,

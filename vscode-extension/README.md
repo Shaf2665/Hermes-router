@@ -39,6 +39,19 @@ In VS Code Settings, search for `hermesRouter`:
 
 Before opening the model picker, confirm model capacities as described below. Open Copilot Chat, open its model picker, and select **hermes-router**. Text streams through your configured providers. Tool calling in agent mode requires a compatible configured model; provider prices and limits still apply.
 
+## Reasoning preference (source preview)
+
+Set `hermesRouter.reasoning` to `server` (default) to follow dashboard reasoning
+settings, or select `auto`, `off`, `low`, `medium`, or `high` for each chat request.
+`auto` explicitly selects legacy provider defaults; it does not inherit the
+dashboard preference. Use matching router and extension source builds.
+
+Changing the preference refreshes client configuration before the next request.
+Only compatible models remain eligible, so a strict setting can reduce the model
+pool. Thinking tool loops on Anthropic, Gemini, DeepSeek and Kimi require private
+continuation support that this preview does not provide with non-Off explicit
+controls. See [Reasoning / Thinking controls](../documentation/reasoning.md) for support and privacy limits.
+
 ## Context synchronization (0.9.10+)
 
 Think of the dashboard as the control knob and the extension as its display. In the browser dashboard, open **Settings → Context length** and choose **Minimum model context**. The extension reads the effective input/output limits using its application key, refreshes them every 10 seconds by default, and checks again before each chat request. No administrator credential is needed for that read.

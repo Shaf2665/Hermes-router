@@ -31,6 +31,7 @@ from flask import Flask, request, jsonify, Response, stream_with_context, redire
 from urllib.parse import urlparse, urlunparse
 from provider_catalog import PROVIDER_PRESETS, ADDITIONAL_DEFAULTS
 import context_policy
+import reasoning_policy
 import model_discovery
 import responses_api
 
@@ -117,6 +118,7 @@ if ADMIN_API_KEY in PROXY_API_KEYS:
 _ACCESS_LOCK = threading.RLock()
 ROUTER_MODEL      = os.environ.get("ROUTER_MODEL_ID", "hermes-router")
 _CONTEXT_CONFIG = context_policy.validate_config(json.loads(os.environ.get("ROUTER_CONTEXT_CONFIG", "{}")))
+_REASONING_CONFIG = reasoning_policy.validate_config(json.loads(os.environ.get("ROUTER_REASONING_CONFIG", "{}")))
 _DISCOVERED_CONTEXT_LIMITS = {}
 MODEL_POLICY_FILE = Path(os.environ.get("ROUTER_MODEL_POLICY_FILE") or
                          str(Path(os.environ.get("HR_ENV_FILE", ".env")).with_name("model-policy.json")))
@@ -3230,13 +3232,17 @@ def _streaming_with_usage(gen, name: str, model: str | None = None):
     usage, has_output, completed = {}, False, False
     started = getattr(_req_ctx, "started", time.monotonic())
     deadline = getattr(_req_ctx, "deadline", started + REQUEST_TIMEOUT)
+    reasoning_info = getattr(_req_ctx, "reasoning", None)
+    strict_reasoning = bool(reasoning_info and reasoning_info.get("strict"))
+    if strict_reasoning:
+        gen = _strict_reasoning_stream(gen, deadline)
 
     def iterate():
         nonlocal usage, has_output, completed
         buf = ""
         stream_error = False
         for chunk in gen:
-            if time.monotonic() >= deadline:
+            if not strict_reasoning and time.monotonic() >= deadline:
                 raise requests.Timeout("Router request deadline exceeded")
             buf += chunk.decode("utf-8", errors="replace") if isinstance(chunk, bytes) else chunk
             while "\n" in buf:
@@ -3265,6 +3271,9 @@ def _streaming_with_usage(gen, name: str, model: str | None = None):
         finally:
             if usage:
                 _add_provider_tokens(name, {"usage": usage}, model)
+            if reasoning_info is not None:
+                count = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
+                reasoning_info["reasoning_tokens"] = count if type(count) is int and count >= 0 else None
             if completed and has_output:
                 stats.record_success(name, time.monotonic() - started)
                 stats.record_health(name, True)
@@ -3274,8 +3283,49 @@ def _streaming_with_usage(gen, name: str, model: str | None = None):
                     stats.record_health(name, False)
             if reservation is not None:
                 _settle_request_usage(reservation, usage or None, model, cached=False,
-                                      failed=not completed and not has_output and not usage)
+                                      failed=not strict_reasoning and not completed and not has_output and not usage)
     return _ManagedStream(iterate(), finalize)
+
+
+def _strict_reasoning_stream(source, deadline=None):
+    """Validate complete events before yielding; incomplete tails never pass raw."""
+    output, finished = False, False
+    try:
+        for event in responses_api._chunks(source):
+            if deadline is not None and time.monotonic() >= deadline:
+                raise requests.Timeout("Router request deadline exceeded")
+            if not isinstance(event, dict) or event.get("error"):
+                raise ValueError("Upstream reasoning stream failed")
+            event = reasoning_policy.public_output(event)
+            for choice in event.get("choices", []):
+                delta = choice.get("delta") or {}
+                output = output or bool(delta.get("content") or delta.get("tool_calls"))
+                finish = choice.get("finish_reason")
+                if finish == "length":
+                    # Preserve reported usage before the terminal error.
+                    if event.get("usage"):
+                        yield _sse("", {"choices": [], "usage": event["usage"]}).encode()
+                    raise ValueError("Reasoning output exhausted its token budget")
+                finished = finished or finish in {"stop", "tool_calls", "content_filter"}
+            yield ("data: " + json.dumps(event) + "\n\n").encode()
+        if not output or not finished:
+            raise ValueError("Reasoning stream ended without a complete answer")
+        yield b"data: [DONE]\n\n"
+    except (ValueError, TypeError, KeyError, AttributeError, requests.exceptions.RequestException):
+        yield b'data: {"error":{"type":"upstream_error","code":"reasoning_incomplete","message":"Reasoning response was incomplete, truncated or invalid; check the output budget."}}\n\n'
+    finally:
+        source.close()
+
+
+def _strict_completion(data, reasoning):
+    if not reasoning["strict"]:
+        return data, None
+    data = reasoning_policy.public_output(data) if isinstance(data, dict) else {}
+    if (not _completion_has_output(data) or any(c.get("finish_reason") == "length" for c in data.get("choices", []))):
+        return data, ("error", {"error": {"type": "upstream_error", "code": "reasoning_incomplete",
+                     "message": "Reasoning response was incomplete or exhausted its output budget"},
+                     "usage": data.get("usage"), "model": data.get("model")}, 502)
+    return data, None
 
 # ── Anthropic format translation ──────────────────────────────────────────────
 # Anthropic's Messages API uses a different format from OpenAI. These helpers
@@ -3676,6 +3726,8 @@ def _anthropic_request_to_openai(body: dict) -> dict:
             messages.append(msg)
 
     payload: dict = {"model": ROUTER_MODEL, "messages": messages}
+    reasoning_policy.request_control(body, None)
+    payload.update(reasoning_policy.native_fields(body))
     if body.get("stream"):
         payload["stream"] = True
     for field in ("max_tokens", "temperature", "top_p"):
@@ -4017,16 +4069,35 @@ def _codex_output_source(final: dict, done_items: list) -> dict:
     return {"output": done_items}
 
 
-def _from_codex_response(events: list) -> dict:
+def _codex_usage(usage, strict=False):
+    usage = usage if isinstance(usage, dict) else {}
+    result = {target: usage.get(source, 0) for source, target in
+              (("input_tokens", "prompt_tokens"), ("output_tokens", "completion_tokens"), ("total_tokens", "total_tokens"))
+              if not strict or type(usage.get(source)) is int and usage[source] >= 0}
+    if "total_tokens" not in usage and all(type(usage.get(k)) is int and usage[k] >= 0 for k in ("input_tokens", "output_tokens")):
+        result["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
+    details = usage.get("output_tokens_details") or {}
+    if isinstance(details, dict) and type(details.get("reasoning_tokens")) is int and details["reasoning_tokens"] >= 0:
+        result["completion_tokens_details"] = {"reasoning_tokens": details["reasoning_tokens"]}
+    return result
+
+
+def _from_codex_response(events: list, strict=False) -> dict:
     """Aggregate a list of Responses SSE event objects into one OpenAI
     chat-completion JSON (used for non-streaming clients)."""
     final = {}
     text_acc = []
     done_items = []
+    completed, failed = False, False
     for ev in events:
         t = ev.get("type", "")
         if t == "response.completed" and isinstance(ev.get("response"), dict):
             final = ev["response"]
+            completed = final.get("status", "completed") == "completed"
+        elif t in {"response.failed", "response.incomplete", "error"}:
+            failed = True
+            if strict and isinstance(ev.get("response"), dict):
+                final = ev["response"]
         elif t == "response.output_text.delta":
             text_acc.append(ev.get("delta", ""))
         elif t == "response.output_item.done" and isinstance(ev.get("item"), dict):
@@ -4040,6 +4111,8 @@ def _from_codex_response(events: list) -> dict:
     if tool_calls:
         message["tool_calls"] = tool_calls
     finish = "tool_calls" if tool_calls else "stop"
+    if strict and (not completed or failed):
+        finish = "length"
     usage = (final.get("usage") or {}) if final else {}
     return {
         "id":      final.get("id", "chatcmpl-codex"),
@@ -4047,15 +4120,11 @@ def _from_codex_response(events: list) -> dict:
         "created": int(time.time()),
         "model":   final.get("model", "codex"),
         "choices": [{"index": 0, "message": message, "finish_reason": finish}],
-        "usage": {
-            "prompt_tokens":     usage.get("input_tokens", 0),
-            "completion_tokens": usage.get("output_tokens", 0),
-            "total_tokens":      usage.get("total_tokens", 0),
-        },
+        "usage": _codex_usage(usage, strict),
     }
 
 
-def _codex_streaming_generator(resp: requests.Response):
+def _codex_streaming_generator(resp: requests.Response, strict=False):
     """Translate a Codex Responses SSE stream into OpenAI chat.completion.chunk
     SSE on the fly."""
     cid = "chatcmpl-codex"
@@ -4072,6 +4141,7 @@ def _codex_streaming_generator(resp: requests.Response):
     event_type = None
     finish = "stop"
     done_items = []
+    completed = False
     for raw in resp.iter_lines():
         if not raw:
             continue
@@ -4087,8 +4157,17 @@ def _codex_streaming_generator(resp: requests.Response):
         try:
             ev = json.loads(data_str)
         except Exception:
+            if strict:
+                yield 'data: {"error":{"message":"Invalid Codex stream"}}\n\n'
+                return
             continue
         etype = ev.get("type") or event_type
+        if strict and etype in {"response.failed", "response.incomplete", "error"}:
+            usage = _codex_usage((ev.get("response") or {}).get("usage"), True)
+            if usage:
+                yield "data: " + json.dumps({"choices": [], "usage": usage}) + "\n\n"
+            yield 'data: {"error":{"message":"Codex response was incomplete"}}\n\n'
+            return
         if etype == "response.output_text.delta":
             d = ev.get("delta", "")
             if d:
@@ -4096,17 +4175,19 @@ def _codex_streaming_generator(resp: requests.Response):
         elif etype == "response.output_item.done" and isinstance(ev.get("item"), dict):
             done_items.append(ev["item"])
         elif etype == "response.completed" and isinstance(ev.get("response"), dict):
+            completed = ev["response"].get("status", "completed") == "completed"
             usage = ev["response"].get("usage")
             if usage:
-                normalized = {"prompt_tokens": usage.get("input_tokens", 0),
-                              "completion_tokens": usage.get("output_tokens", 0)}
-                normalized["total_tokens"] = usage.get("total_tokens", sum(normalized.values()))
+                normalized = _codex_usage(usage, strict)
                 yield "data: " + json.dumps({"choices": [], "usage": normalized}) + "\n\n"
             _, tcs = _codex_text_and_tools(_codex_output_source(ev["response"], done_items))
             if tcs:
                 finish = "tool_calls"
                 for i, tc in enumerate(tcs):
                     yield chunk({"tool_calls": [{"index": i, **tc}]})
+    if strict and not completed:
+        yield 'data: {"error":{"message":"Codex stream ended without completion"}}\n\n'
+        return
     yield chunk({}, finish=finish)
     yield "data: [DONE]\n\n"
 
@@ -4133,6 +4214,9 @@ def _upstream_timeout(read_seconds=120):
 
 def forward(provider: dict, key: str, payload: dict, streaming: bool,
             model: str | None = None) -> requests.Response | None:
+    selected_model = _resolve_model(provider, payload, model)
+    reasoning = _reasoning_settings(payload, provider, selected_model)
+    output = _output_bound(payload, provider, selected_model)
     # Codex (ChatGPT OAuth) speaks the Responses API — translate and send directly.
     if provider.get("protocol") == "codex":
         token = codex_creds.get_access_token(key)   # key is the account_id
@@ -4144,6 +4228,8 @@ def forward(provider: dict, key: str, payload: dict, streaming: bool,
         for msg in payload.get("messages", []):
             m = dict(msg); _strip_message(m); cleaned.append(m)
         body = _to_codex_body({**payload, "messages": cleaned}, model)
+        if reasoning["strict"]:
+            body.update(reasoning["fields"])
         hdrs = {
             "Authorization":      f"Bearer {token}",
             "chatgpt-account-id": key,
@@ -4168,6 +4254,9 @@ def forward(provider: dict, key: str, payload: dict, streaming: bool,
             _strip_message(m)
             cleaned.append(m)
         body = _to_anthropic_body({**payload, "messages": cleaned}, model)
+        if output is not None:
+            body["max_tokens"] = output
+        body.update(reasoning["fields"])
         if provider.get("max_output_tokens"):
             body["max_tokens"] = min(body["max_tokens"], provider["max_output_tokens"])
         hdrs = {"x-api-key": key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"}
@@ -4194,7 +4283,7 @@ def forward(provider: dict, key: str, payload: dict, streaming: bool,
     # reasoning_content: those upstreams 400 a tool-carrying request whose
     # earlier turns arrive without it (see _requires_reasoning_echo).
     if "messages" in body:
-        keep_reasoning = _requires_reasoning_echo(body["model"], provider)
+        keep_reasoning = not reasoning["strict"] and _requires_reasoning_echo(body["model"], provider)
         cleaned = []
         for msg in body["messages"]:
             m = dict(msg)
@@ -4205,37 +4294,23 @@ def forward(provider: dict, key: str, payload: dict, streaming: bool,
     # Strip top-level thinking fields (Gemini sometimes adds these)
     body.pop("think", None)
     body.pop("thinking", None)
+    if reasoning["strict"]:
+        for field in reasoning_policy.NATIVE_FIELDS:
+            body.pop(field, None)
+        body.pop("reasoning_format", None)
+        body.pop("include_reasoning", None)
+        body.update(reasoning["fields"])
+        if provider["name"] == "groq":
+            body["include_reasoning"] = False
+    else:
+        # Non-strict means no native effort: only a summary hint can remain, never forwarded.
+        body.pop("reasoning", None)
 
-    # Reasoning models spend output tokens on hidden chain-of-thought, so a small
-    # client max_tokens can be entirely consumed by thinking — leaving empty
-    # content. Give reasoning models extra headroom on top of what the client
-    # asked for, so the actual answer still fits. (The model stops when done, so
-    # short answers stay short.) Tune/disable with REASONING_TOKEN_RESERVE.
-    # Per-model: only the actual model being sent gets the reserve.
-    # Synchronized and coding-client requests already reserve output within their total context.
-    # Hidden reasoning must share that ceiling instead of expanding it afterward.
-    context_bound = has_request_context() and (
-        getattr(g, "context_client_pool", None) is not None
-        or getattr(g, "strict_client_tools", False)
-    )
-    if not context_bound and _model_caps(provider["name"], body["model"]).get("reasoning"):
-        reserve = _int_env("REASONING_TOKEN_RESERVE", 4096)
-        if reserve > 0:
-            for field in ("max_tokens", "max_completion_tokens"):
-                if isinstance(body.get(field), int):
-                    body[field] += reserve
-
-    # Clamp the requested output length to this provider's hard ceiling. Some
-    # providers (e.g. Cohere caps output at 8192) reject the ENTIRE request with
-    # a 400 when max_tokens exceeds their limit — so a client default like
-    # max_tokens=65536 would fail every call. Capping it lets the request through;
-    # the model still produces up to its real maximum.
-    out_cap = provider.get("max_output_tokens", 0)
-    if out_cap:
-        for field in ("max_tokens", "max_completion_tokens"):
-            if isinstance(body.get(field), int) and body[field] > out_cap:
-                log.info(f"  clamping {field} {body[field]}→{out_cap} for {provider['name']}")
-                body[field] = out_cap
+    # Admission, context preflight and forwarding share one total output ceiling.
+    if output is not None:
+        fields = [f for f in ("max_tokens", "max_completion_tokens") if f in body]
+        for field in fields or ["max_tokens"]:
+            body[field] = output
 
     # Ask the provider to include usage in the final SSE chunk so _streaming_with_usage
     # can record actual tokens. Non-destructive: merges with any stream_options the
@@ -4482,15 +4557,163 @@ def _known_price(model):
             and all(math.isfinite(v) and v >= 0 for v in _price_model(model)))
 
 
+def _reasoning_snapshot(payload):
+    if has_request_context() and hasattr(g, "reasoning_control"):
+        return g.reasoning_config, g.reasoning_control
+    header = request.headers.get("X-Hermes-Reasoning") if has_request_context() else None
+    return _REASONING_CONFIG, reasoning_policy.request_control(payload, header)
+
+
+def _prepare_reasoning(payload):
+    g.context_config = _CONTEXT_CONFIG
+    g.reasoning_config = _REASONING_CONFIG
+    g.reasoning_control = reasoning_policy.request_control(payload, request.headers.get("X-Hermes-Reasoning"))
+    # Capture before format adapters discard opaque/native history blocks.
+    g.reasoning_private_input = reasoning_policy.has_private_state(payload.get("messages", payload.get("input", [])))
+
+
+def _reasoning_policy(payload, provider, model):
+    config, control = _reasoning_snapshot(payload)
+    return reasoning_policy.resolve(config, control, provider, model)
+
+
+def _reasoning_settings(payload, provider, model):
+    policy = _reasoning_policy(payload, provider, model)
+    if policy["strict"] and provider.get("protocol") == "codex" and any(
+            f in payload for f in ("max_tokens", "max_completion_tokens")):
+        raise reasoning_policy.PolicyError("Codex subscription cannot enforce an output ceiling; choose a bounded provider",
+                                           "reasoning_budget_exceeded")
+    if policy["strict"] and any(type(payload[f]) is not int or not 0 < payload[f] <= 16_000_000
+                               for f in ("max_tokens", "max_completion_tokens") if f in payload):
+        raise reasoning_policy.PolicyError("Output limits must be positive integers", "reasoning_budget_exceeded")
+    if policy["strict"] and has_request_context() and getattr(g, "reasoning_private_input", False):
+        raise reasoning_policy.PolicyError("Private reasoning history cannot be used with explicit reasoning controls",
+                                           "reasoning_continuity_unsupported")
+    return reasoning_policy.native_settings(provider, model, policy, payload,
+                                             _output_bound(payload, provider, model))
+
+
+def _reasoning_candidates(candidates, payload):
+    result, errors = [], []
+    scope = _caller_scope() if has_request_context() else None
+    models = _caller_models() if has_request_context() else None
+    for candidate in candidates:
+        provider, model = candidate["provider"], candidate["model"]
+        if (not _model_enabled(provider["name"], model)
+                or (scope is not None and provider["name"] not in scope)
+                or (models is not None and model not in models)):
+            continue
+        try:
+            _reasoning_settings(payload, provider, model)
+            result.append(candidate)
+        except reasoning_policy.PolicyError as exc:
+            errors.append(exc)
+    if not result and errors:
+        # Continuity/budget errors explain more than an unknown-model rejection.
+        raise next((e for e in errors if e.code != "reasoning_not_supported"), errors[0])
+    return result
+
+
+def _reasoning_error(exc):
+    return jsonify({"error": {"message": str(exc), "type": "invalid_request_error", "code": exc.code}}), 400
+
+
+@app.after_request
+def _reasoning_headers(response):
+    info = getattr(g, "reasoning_result", None)
+    if info and response.status_code < 400:
+        response.headers["X-Hermes-Reasoning-Requested"] = info["requested"]
+        response.headers["X-Hermes-Reasoning-Effective"] = json.dumps(info["effective"], separators=(",", ":"))
+        response.headers["X-Provider"] = info["provider"]
+        response.headers["X-Hermes-Model"] = info["model"]
+    return response
+
+
+@app.route("/v1/config/reasoning", methods=["POST"])
+@_locked_access
+def config_reasoning():
+    global _REASONING_CONFIG
+    err = _admin_check()
+    if err:
+        return err
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or not body or set(body) - {"default", "providers", "models"}:
+        return jsonify({"error": {"message": "Supply default, providers and/or models"}}), 400
+    try:
+        merged = {"default": body.get("default", _REASONING_CONFIG["default"]),
+                  "providers": dict(_REASONING_CONFIG["providers"]), "models": dict(_REASONING_CONFIG["models"])}
+        known = {"providers": {p["name"] for p in PROVIDERS},
+                 "models": {p["name"] + "::" + m for p in PROVIDERS for m in _provider_models(p)}}
+        for field in ("providers", "models"):
+            patch = body.get(field, {})
+            if not isinstance(patch, dict) or len(patch) > 1000:
+                raise ValueError("Overrides must be objects with at most 1000 entries")
+            for key, value in patch.items():
+                if key not in known[field] and not (value is None and key in merged[field]):
+                    raise ValueError("Unknown provider/model")
+                if value is None:
+                    merged[field].pop(key, None)
+                else:
+                    merged[field][key] = value
+        clean = reasoning_policy.validate_config(merged)
+    except ValueError as exc:
+        return jsonify({"error": {"message": str(exc)}}), 400
+    encoded = json.dumps(clean, separators=(",", ":"))
+    try:
+        _env_write_line("ROUTER_REASONING_CONFIG", encoded)
+    except OSError:
+        return jsonify({"error": {"message": "Could not save reasoning settings; check configuration file permissions"}}), 500
+    os.environ["ROUTER_REASONING_CONFIG"] = encoded
+    _REASONING_CONFIG = clean
+    return jsonify({**clean, "restart_required": False})
+
+
+def _reasoning_models(scoped=True):
+    scope = _caller_scope() if scoped else None
+    models = _caller_models() if scoped else None
+    config, control = _reasoning_snapshot({}) if scoped else (_REASONING_CONFIG, {})
+    return [{"provider": p["name"], "model": m, "id": p["name"] + "::" + m,
+             **reasoning_policy.capabilities(p, m),
+             "policy": reasoning_policy.resolve(config, control, p, m)["level"]}
+            for p in PROVIDERS if scope is None or p["name"] in scope
+            for m in (_enabled_provider_models(p) if scoped else _provider_models(p)) if models is None or m in models]
+
+
+@app.route("/v1/reasoning")
+def reasoning_capabilities():
+    err = _auth_check()
+    if err:
+        return err
+    try:
+        _prepare_reasoning({})
+        response = jsonify({"models": _reasoning_models()})
+    except reasoning_policy.PolicyError as exc:
+        return _reasoning_error(exc)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 def _output_bound(payload, provider=None, model=None):
+    if provider and provider.get("protocol") == "codex":
+        return None
     values = [payload[field] for field in ("max_tokens", "max_completion_tokens") if field in payload]
+    strict = provider is not None and _reasoning_policy(payload, provider, model)["strict"]
+    if not values and strict:
+        values = [8192]
     if not values or any(not isinstance(v, int) or isinstance(v, bool) or v <= 0 for v in values):
         return None
     bound = max(values)
-    if provider and _model_caps(provider["name"], model).get("reasoning"):
+    context_bound = has_request_context() and (getattr(g, "context_client_pool", None) is not None
+                                               or getattr(g, "strict_client_tools", False))
+    if provider and not strict and not context_bound and _model_caps(provider["name"], model).get("reasoning"):
         bound += max(0, _int_env("REASONING_TOKEN_RESERVE", 4096))
     if provider and provider.get("max_output_tokens"):
         bound = min(bound, provider["max_output_tokens"])
+    if provider:
+        config = getattr(g, "context_config", _CONTEXT_CONFIG) if has_request_context() else _CONTEXT_CONFIG
+        limits = _context_limits(provider, model, config)
+        if limits:
+            bound = min(bound, limits["max_output_tokens"])
     return bound
 
 
@@ -4524,6 +4747,11 @@ def _admit_request(token: str, payload=None, embedding=False):
     g.caller_scope = set(scope) if scope is not None else None
     models = KEY_MODEL_SCOPE.get(token)
     g.caller_models = set(models) if models is not None else None
+    if not embedding:
+        try:
+            _reasoning_candidates(_ordered_providers(payload), payload)
+        except reasoning_policy.PolicyError as exc:
+            return _reasoning_error(exc)
     limits = _caller_limits()
     money = bool(limits.get("cost_per_day"))
     token_limit = bool(limits.get("tokens_per_day"))
@@ -4536,7 +4764,7 @@ def _admit_request(token: str, payload=None, embedding=False):
     tokens = input_ceiling + (bound or 0)
     cost = 0.0
     if money or token_limit:
-        candidates = _ordered_providers(payload, str(payload.get("model", "")).endswith(":fast"))
+        candidates = _reasoning_candidates(_ordered_providers(payload, str(payload.get("model", "")).endswith(":fast")), payload)
         scope = _caller_scope()
         candidates = [c for c in candidates if (scope is None or c["provider"]["name"] in scope)
                       and _budget_candidate_allowed(c["provider"], c["model"], payload)]
@@ -4578,10 +4806,11 @@ def _record_request_tokens(token: str, payload: dict, result):
     if result and result[0] == "stream":
         return  # the stream finalizer owns this reservation
     failed = not result or result[0] == "error"
-    data = result[1] if result and result[0] == "json" else {}
+    data = result[1] if result and isinstance(result[1], dict) else {}
     _settle_request_usage(getattr(g, "usage_reservation", None), data.get("usage"),
                           data.get("model") or getattr(_req_ctx, "model", "") or "",
-                          cached=getattr(_req_ctx, "cache_hit", False), failed=failed)
+                          cached=getattr(_req_ctx, "cache_hit", False),
+                          failed=failed and not getattr(_req_ctx, "reasoning_billed", False))
 
 
 _DASHBOARD_HTML = Path(__file__).with_name("dashboard.html").read_text(encoding="utf-8")
@@ -4660,12 +4889,19 @@ def _context_candidates(config):
             budget = context_policy.candidate_budget(
                 _context_limits(provider, model, config), config["context_window"], provider)
             if budget:
+                try:
+                    _reasoning_settings({"tools": [{"type": "function"}], "max_tokens": budget["max_output_tokens"]}, provider, model)
+                except reasoning_policy.PolicyError:
+                    continue
                 result.append({"provider": provider, "model": model, "budget": budget})
     return result
 
 
 def _client_context(config):
-    return context_policy.client_config(ROUTER_MODEL, config, _context_candidates(config))
+    result = context_policy.client_config(ROUTER_MODEL, config, _context_candidates(config))
+    reasoning_config, control = _reasoning_snapshot({})
+    result["revision"] = hashlib.sha256((result["revision"] + reasoning_policy.revision(reasoning_config, control)).encode()).hexdigest()
+    return result
 
 
 @app.route("/v1/client-config")
@@ -4677,7 +4913,11 @@ def client_configuration():
         return err
     g.claude_only = request.path.startswith("/claude/")
     g.strict_client_tools = request.path != "/v1/client-config"
-    response = jsonify(_client_context(_CONTEXT_CONFIG))
+    try:
+        _prepare_reasoning({})
+        response = jsonify(_client_context(_CONTEXT_CONFIG))
+    except reasoning_policy.PolicyError as exc:
+        return _reasoning_error(exc)
     response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -4779,6 +5019,19 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
     _req_ctx.attempts  = 0   # total forward() calls made (cascades = attempts-1)
     _req_ctx.started = time.monotonic()
     _req_ctx.deadline = _req_ctx.started + REQUEST_TIMEOUT
+    _req_ctx.reasoning = None
+    _req_ctx.reasoning_billed = False
+    try:
+        reasoning_config, control = _reasoning_snapshot(payload)
+    except reasoning_policy.PolicyError as exc:
+        return ("error", {"error": {"message": str(exc), "code": exc.code, "type": "invalid_request_error"}}, 400)
+    ns += ":reasoning:" + reasoning_policy.revision(reasoning_config, control)
+    # Mixed/default overrides can change candidate policy. Keep diagnostics bound
+    # to the actual attempt by not caching this first strict-policy release.
+    reasoning_cache = (not control.get("native") and control.get("level", "auto") == "auto"
+                       and (control.get("level") == "auto" or
+                            all(v == "auto" for v in [reasoning_config["default"],
+                                *reasoning_config["providers"].values(), *reasoning_config["models"].values()])))
 
     # Generic routing hints on the existing completion endpoint. `:fast`
     # prefers a local model; a tool loop can request strict tool transport,
@@ -4822,7 +5075,7 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
     # semantic match. query_emb is reused to store the response so future similar
     # prompts can match it.
     query_emb = None
-    if not streaming and not tool_loop and not strict_client:
+    if not streaming and not tool_loop and not strict_client and reasoning_cache:
         cached = cache.get(payload, ns)
         if cached is not None:
             log.info("↩ cache hit")
@@ -4849,6 +5102,10 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
     ordered    = _ordered_providers(payload, prefer_local, workload_hint)
     if claude_only:
         ordered = [c for c in ordered if _claude_candidate(c["provider"], c["model"])]
+    try:
+        ordered = _reasoning_candidates(ordered, payload)
+    except reasoning_policy.PolicyError as exc:
+        return ("error", {"error": {"message": str(exc), "code": exc.code, "type": "invalid_request_error"}}, 400)
     ordered = _session_affinity_order(ordered, session_affinity_id)
 
     # Tool-aware routing: when the request carries tools, prefer (provider, model)
@@ -4923,7 +5180,7 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
             if limits is None or limits["context_window"] < context_config["context_window"]:
                 continue
         if limits:
-            requested_output = payload.get("max_tokens", payload.get("max_completion_tokens", 0))
+            requested_output = _output_bound(payload, provider, model) or 0
             if type(requested_output) is not int or requested_output < 0:
                 continue
             if requested_output > limits["max_output_tokens"] or est_tokens + requested_output > limits["context_window"]:
@@ -5053,6 +5310,12 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
                 log.info(f"  ✓ {name}/{model} {resp.status_code} ({elapsed*1000:.0f}ms)")
                 _req_ctx.provider = name
                 _req_ctx.model    = model
+                reasoning = _reasoning_settings(payload, provider, model)
+                _req_ctx.reasoning = {"requested": reasoning["requested"], "effective": reasoning["effective"],
+                                      "provider": name, "model": model, "reasoning_tokens": None, "strict": reasoning["strict"]}
+                _req_ctx.reasoning_billed = reasoning["strict"]
+                if has_request_context():
+                    g.reasoning_result = _req_ctx.reasoning
                 is_anthropic = provider.get("protocol") == "anthropic"
                 is_codex     = provider.get("protocol") == "codex"
                 if is_codex:
@@ -5062,7 +5325,7 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
                         if session_affinity_id is not None:
                             _session_affinity_set(session_affinity_id, name, model)
                         handed_off = True
-                        return ("stream", _streaming_with_usage(_with_cleanup(resp, _codex_streaming_generator(resp)), name, model), name)
+                        return ("stream", _streaming_with_usage(_with_cleanup(resp, _codex_streaming_generator(resp, strict=reasoning["strict"])), name, model), name)
                     events = []
                     for raw in resp.iter_lines():
                         if not raw:
@@ -5073,7 +5336,11 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
                             if ds and ds != "[DONE]":
                                 try: events.append(json.loads(ds))
                                 except Exception: pass
-                    data = _from_codex_response(events)
+                    data = _from_codex_response(events, strict=reasoning["strict"])
+                    data, reasoning_error = _strict_completion(data, reasoning)
+                    if reasoning_error:
+                        _add_provider_tokens(name, data, model)
+                        return reasoning_error
                     if not _completion_has_output(data):
                         stats.record_error(name)
                         stats.record_health(name, False)
@@ -5081,7 +5348,7 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
                         pool.mark_rate_limited(name, key, model, retry_after=30)
                         break
                     _add_provider_tokens(name, data, model)
-                    if not tool_loop and not strict_client and _DISABLED_MODELS is model_policy:
+                    if not tool_loop and not strict_client and reasoning_cache and _DISABLED_MODELS is model_policy:
                         cache.set(payload, data, ns, query_emb)
                     _session_affinity_set(session_affinity_id, name, model)
                     stats.record_success(name, elapsed)
@@ -5092,7 +5359,7 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
                         _session_affinity_set(session_affinity_id, name, model)
                     gen = (_anthropic_streaming_generator(resp) if is_anthropic
                            else _streaming_generator(
-                               resp, keep_reasoning=_requires_reasoning_echo(model, provider)))
+                               resp, keep_reasoning=not reasoning["strict"] and _requires_reasoning_echo(model, provider)))
                     wrapped = _streaming_with_usage(_with_cleanup(resp, gen), name, model)
                     handed_off = True
                     return ("stream", wrapped, name)
@@ -5103,6 +5370,10 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
                         raw = None
                     data = (_from_anthropic_response(raw) if (is_anthropic and isinstance(raw, dict))
                             else raw)
+                    data, reasoning_error = _strict_completion(data, reasoning)
+                    if reasoning_error:
+                        _add_provider_tokens(name, data, model)
+                        return reasoning_error
                     # Guard: a 2xx that carries no usable completion (no `choices`) — e.g.
                     # a gateway that wraps an error in an HTTP-200 body (NVIDIA NIM's gRPC
                     # "ResourceExhausted: Worker local total request limit reached"), or a
@@ -5136,9 +5407,9 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
                         break
                     if not is_anthropic:
                         _strip_response(
-                            data, keep_reasoning=_requires_reasoning_echo(model, provider))
+                            data, keep_reasoning=not reasoning["strict"] and _requires_reasoning_echo(model, provider))
                     _add_provider_tokens(name, data, model)
-                    if not tool_loop and not strict_client and _DISABLED_MODELS is model_policy:
+                    if not tool_loop and not strict_client and reasoning_cache and _DISABLED_MODELS is model_policy:
                         cache.set(payload, data, ns, query_emb)
                     _session_affinity_set(session_affinity_id, name, model)
                     stats.record_success(name, elapsed)
@@ -5180,6 +5451,11 @@ def _log_completion(token: str, endpoint: str, payload: dict, result: tuple, ela
             status = "error"
             ptok   = ctok = None
 
+        reasoning_info = None if is_cache else getattr(_req_ctx, "reasoning", None)
+        if reasoning_info is not None and result[0] == "json":
+            count = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
+            reasoning_info["reasoning_tokens"] = count if type(count) is int and count >= 0 else None
+
         request_log.append({
             "ts":               time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "endpoint":         endpoint,
@@ -5194,6 +5470,7 @@ def _log_completion(token: str, endpoint: str, payload: dict, result: tuple, ela
             "status":           status,
             "prompt_tokens":    ptok,
             "completion_tokens": ctok,
+            "reasoning": reasoning_info,
         })
     except Exception:
         pass   # logging must never break the response path
@@ -5210,6 +5487,10 @@ def chat():
         return jsonify({"error": {"message": "request body must be a JSON object",
                                   "type": "invalid_request_error"}}), 400
 
+    try:
+        _prepare_reasoning(payload)
+    except reasoning_policy.PolicyError as exc:
+        return _reasoning_error(exc)
     context_error = _check_client_context(payload)
     if context_error:
         return context_error
@@ -5242,7 +5523,13 @@ def responses():
     if err:
         return err
     try:
-        payload, custom = responses_api.to_chat(request.get_json(silent=True), ROUTER_MODEL)
+        raw_body = request.get_json(silent=True)
+        if not isinstance(raw_body, dict):
+            raise ValueError("request body must be an object")
+        _prepare_reasoning(raw_body)
+        payload, custom = responses_api.to_chat(raw_body, ROUTER_MODEL)
+    except reasoning_policy.PolicyError as exc:
+        return _reasoning_error(exc)
     except ValueError as exc:
         return jsonify({"error": {"message": str(exc), "type": "invalid_request_error"}}), 400
     except (TypeError, AttributeError):
@@ -5295,7 +5582,10 @@ def anthropic_messages():
         return jsonify(_anthropic_error("request body must be a JSON object with a 'messages' field")), 400
 
     try:
+        _prepare_reasoning(body)
         payload = _anthropic_request_to_openai(body)
+    except reasoning_policy.PolicyError as exc:
+        return _reasoning_error(exc)
     except (ValueError, TypeError, KeyError, AttributeError):
         return jsonify(_anthropic_error("Invalid Messages request")), 400
     token  = _caller_token()
@@ -6477,6 +6767,8 @@ def status():
 
     return jsonify({
         "providers": provider_stats,
+        "reasoning_config": _REASONING_CONFIG,
+        "reasoning_models": _reasoning_models(scoped=False),
         "context_window": _CONTEXT_CONFIG["context_window"],
         "context_models": [
             {"id": p["name"] + "::" + m, "provider": p["name"], "model": m,

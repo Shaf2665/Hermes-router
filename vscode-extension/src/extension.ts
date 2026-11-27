@@ -10,7 +10,8 @@ function makeClient(): RouterClient {
   const cfg = vscode.workspace.getConfiguration("hermesRouter");
   return new RouterClient(
     cfg.get<string>("baseUrl", "http://localhost:8319"),
-    cfg.get<string>("apiKey", "")
+    cfg.get<string>("apiKey", ""),
+    cfg.get<string>("reasoning", "server")
   );
 }
 
@@ -197,7 +198,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("hermesRouter")) {
-        if (e.affectsConfiguration("hermesRouter.baseUrl") || e.affectsConfiguration("hermesRouter.apiKey")) {
+        if (e.affectsConfiguration("hermesRouter.baseUrl") || e.affectsConfiguration("hermesRouter.apiKey") || e.affectsConfiguration("hermesRouter.reasoning")) {
           modelProvider.invalidate();
           void modelProvider.refreshConfiguration().catch(error => out.appendLine("Context sync: " + error.message));
         }

@@ -9,6 +9,7 @@ import hashlib
 import json
 import time
 import uuid
+import reasoning_policy
 
 MAX_BUFFER = 16 * 1024 * 1024
 
@@ -111,6 +112,8 @@ def to_chat(body, default_model):
         raise ValueError("stream must be a boolean")
     payload = {"model": _string(body.get("model", default_model), "model"),
                "stream": body.get("stream", False), "messages": []}
+    reasoning_policy.request_control(body, None)
+    payload.update(reasoning_policy.native_fields(body))
     if body.get("instructions") is not None:
         payload["messages"].append({"role": "system", "content": _string(body["instructions"], "instructions", True)})
     items = body.get("input")
@@ -273,8 +276,12 @@ class ResponseBuilder:
                 return value if type(value) is int and value >= 0 else 0
             pt, ct = count("prompt_tokens"), count("completion_tokens")
             self.response["usage"] = {"input_tokens": pt, "output_tokens": ct, "total_tokens": pt + ct,
-                "input_tokens_details": {"cached_tokens": usage.get("prompt_tokens_details", {}).get("cached_tokens", 0)},
-                "output_tokens_details": {"reasoning_tokens": usage.get("completion_tokens_details", {}).get("reasoning_tokens", 0)}}
+                "input_tokens_details": {"cached_tokens": usage.get("prompt_tokens_details", {}).get("cached_tokens", 0)}}
+            details = usage.get("completion_tokens_details") or {}
+            reasoning = details.get("reasoning_tokens") if isinstance(details, dict) else None
+            # Unknown stays absent, not zero; Codex requires reasoning_tokens when the object exists.
+            if type(reasoning) is int and reasoning >= 0:
+                self.response["usage"]["output_tokens_details"] = {"reasoning_tokens": reasoning}
         choices = chunk.get("choices") or []
         if not choices:
             return

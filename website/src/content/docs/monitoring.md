@@ -37,8 +37,15 @@ The following capabilities remain available within those pages:
 - **Add-ons** — toggle optional features on/off, plus live cache stats
 - **Context length** — choose a minimum context and confirm actual model capacities;
   extension 0.9.10 refreshes its limits automatically. See [Context synchronization](/context-sync/).
+- **Reasoning / Thinking** — set the global default and optional provider/model
+  overrides in Settings. Choose Inherit to remove an override. Saves apply to new
+  requests without a restart. See [Reasoning controls](/reasoning/) for model support.
 - **Request Log** — the last requests (endpoint, provider, model, latency, complexity score,
   cascade count, tokens, status), filterable by status and endpoint
+
+The Live Log also shows requested and effective reasoning settings and reported
+reasoning-token counts. Missing counts stay unknown; private reasoning text is
+not displayed.
 
 Context settings and application-key changes apply to new requests immediately.
 For changes that show a **Restart Required** banner, use the supported restart

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Add `hermesRouter.reasoning`: follow server by default, or explicitly request
+  Auto / Off / Low / Medium / High on both context discovery and inference.
+- Refresh context metadata when reasoning preferences change. Requires the
+  matching issue #46 router source build; unsupported models/tool combinations
+  fail explicitly. No Marketplace release is implied.
+
 ## 0.9.10
 
 - Add **Check Context Sync** with the connected URL, effective budget, and actionable authentication errors. Never silently advertise a 40K fallback.
