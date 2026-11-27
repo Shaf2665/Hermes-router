@@ -260,8 +260,16 @@ provider adapter.
 
 Run a model on your **own machine** and route to it — free, private, and fast, with the cloud
 providers as automatic fallback. Any OpenAI-compatible local server works (Ollama, LM Studio,
-llama.cpp's server, vLLM…). It's **keyless**, so there's nothing to add with `hr auth add` —
-just point the router at it:
+llama.cpp's server, vLLM…). It's **keyless**, so there's nothing to add with `hr auth add`.
+
+The quickest way is the dashboard: **Providers → Local model (Ollama / LM Studio)**. Enter
+the server's base URL, tick **No API key** (or paste one), choose models, then **Save
+provider**. It applies immediately, without a restart. `localhost` means the machine or
+container running Hermes, not your browser's computer, and the model server must already be
+running. A dashboard-saved local entry is stored in `auth.json` and takes precedence over the
+`LOCAL_*` settings below.
+
+From the command line, point the router at it:
 
 ```bash
 # e.g. with Ollama:  ollama serve  &&  ollama pull llama3.1
@@ -283,6 +291,21 @@ The provider turns on as soon as `LOCAL_BASE_URL` or `LOCAL_MODEL` is set.
 prefers your local model for short/casual turns,
 falling back to the cloud pool for heavier requests. Plain `hermes-router` keeps the normal
 smart routing across every provider.
+
+## Custom OpenAI-compatible providers
+
+Any other server that speaks the OpenAI chat API (a self-hosted gateway, vLLM, a company
+proxy) can be added from **Providers → Custom provider**: give it a name, base URL, optional
+API key and model IDs. Each entry gets an ID such as `custom_lab_server`, which you can use
+in application-key provider scopes. Changes apply immediately and are stored in `auth.json`
+under `custom_providers`.
+
+- A saved key is only sent to the address it was saved for. Changing the URL requires the key
+  again, or **No API key**. Keyless servers receive no `Authorization` header.
+- Requests and catalog lookups to custom servers do not follow redirects, and Hermes never
+  auto-discovers or substitutes models for them.
+- The dashboard never returns a saved key. To remove an entry, delete it from
+  `custom_providers` in `auth.json` and restart.
 
 ## Valid provider names
 
