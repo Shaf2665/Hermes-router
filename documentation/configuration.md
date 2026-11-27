@@ -22,7 +22,7 @@ hermes-router splits its behavior into two groups:
 hr features list                      # core features + every add-on, with on/off
 hr features enable persistent_cache   # writes the backing var to .env
 hr features disable semantic_cache
-hr restart                            # apply
+hr restart                            # CLI edits apply after a restart
 ```
 
 | Add-on | Backing setting | Default | What it does |
@@ -40,6 +40,11 @@ hr restart                            # apply
 `hr features enable/disable` toggles the simple **flag** add-ons by writing their variable to
 `.env`. The last two are richer config, so `hr features` shows their status and points you to
 the command that manages them. The live state is also in `/v1/status` under `features`.
+
+Flag add-ons switched from **Settings** in the dashboard apply immediately, without a restart.
+Turning **Persistent cache** on copies the current in-memory cache to disk and needs
+**Response cache** on; turning it off stops mirroring but keeps rows already on disk.
+Turning **Request log** off clears the in-memory history.
 
 Dashboard feature saves show confirmation above the add-ons. A failed or timed-out
 save releases the control so you can retry; use Refresh to check the saved state
@@ -77,6 +82,7 @@ subscription) logins are stored separately under `codex_accounts` (via
 | `ADMIN_API_KEY` | *(auto-generated)* | Separate owner credential for dashboard and global/config APIs. Never give this to an application. |
 | `HR_ENV_FILE` | `.env` | Private environment file, also used for generated credentials. |
 | `HR_USAGE_DB` | `usage.db` | Durable per-key usage/reservation SQLite database; preserve it across upgrades. |
+| `HR_CONTAINER_RESTART` | unset | Set to `1` in a Docker container whose restart policy is `unless-stopped` or `always` to let the dashboard's Restart action exit the container's main process so Docker starts a fresh one. Ignored outside Docker or when the router is not PID 1. Restarting ends admin sessions and in-flight requests. |
 | `HR_TRUST_PROXY` | `0` | Trust one proxy-provided scheme header only when behind a trusted reverse proxy with no direct public backend access. |
 | `ROUTER_AUTH_FILE` | `./auth.json` | Where keys are stored |
 | `ROUTER_CONTEXT_CONFIG` | `{"context_window":0,"model_limits":{}}` | Persisted minimum context and confirmed per-model capacities. Prefer **Settings → Context length**; dashboard saves apply to new requests without a restart. See [Context synchronization](context-sync.md). |
@@ -339,13 +345,14 @@ and a warning is logged at startup.
 ## Key rotation mode
 
 When a provider holds several keys (or several accounts), `ROTATION_MODE` decides how the
-router picks among them. Set it in the dashboard's Configuration panel or with:
+router picks among them. Changing it in the dashboard's Configuration panel applies
+immediately (cooldowns and usage counters are kept). From the command line:
 
 ```bash
 hr mode                # show the current mode
 hr mode round-robin    # default — spread requests evenly across all keys
 hr mode sequential     # drain one key fully before moving to the next
-hr restart             # apply the change
+hr restart             # CLI edits apply after a restart
 ```
 
 - **`round-robin`** (default) — every request goes to the next key in turn, so all keys

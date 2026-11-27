@@ -42,7 +42,7 @@ tags are not a guarantee that a specific source change is included.
 For a fresh install without building source, run this single command in PowerShell or Bash:
 
 ```bash
-docker run -d --name hermes-router --restart unless-stopped -p 127.0.0.1:8319:8319 -v hermes-data:/app/data shafiq735/hermes-router:providers-20261103
+docker run -d --name hermes-router --restart unless-stopped -e HR_CONTAINER_RESTART=1 -p 127.0.0.1:8319:8319 -v hermes-data:/app/data shafiq735/hermes-router:providers-20261103
 ```
 
 Use `providers-20261103-cli` instead if you need `docker exec hermes-router hr status`. Open `http://localhost:8319` and retrieve the administrator credential with:
@@ -118,7 +118,7 @@ The named volume `hermes-data` persists credentials, configuration, usage and op
 
 1. Sign in with the **administrator key**. Existing application keys now authenticate inference only.
 2. Open **Providers**, add your provider key and check the selected model. For a local model, configure `LOCAL_BASE_URL` and `LOCAL_MODEL` in the environment file instead (see below).
-3. If the dashboard says a restart is required, restart the actual hosting process. Windows: Ctrl+C and run `start.ps1` again. Docker: `docker compose restart`. Native Linux/macOS foreground: Ctrl+C and start again. For a systemd service or CLI-managed background process, use `hr restart`. Browser restart is supported only for a verified CLI-managed standalone process; other hosts show instructions.
+3. If the dashboard says a restart is required, restart the actual hosting process. Windows: Ctrl+C and run `start.ps1` again. Docker: `docker compose restart`. Native Linux/macOS foreground: Ctrl+C and start again. For a systemd service or CLI-managed background process, use `hr restart`. Browser restart works for a verified CLI-managed standalone process, and for Docker containers started with `HR_CONTAINER_RESTART=1` and a restart policy (`unless-stopped` or `always`); the bundled `docker-compose.yml` and the `docker run` example above set both. Other hosts show instructions.
 4. Open **Connect**, create an **application key**, and save it when it is shown. This is the key for your coding tool or SDK, not the administrator key.
 5. Choose **Send test message**. It sends a real, small request through the selected provider and may consume quota. A successful `/health` response alone does not prove inference works.
 6. Copy the endpoint, model and application key into your client. On the same computer: OpenAI base URL `http://localhost:8319/v1`, model `hermes-router`. Anthropic clients use `http://localhost:8319`.
@@ -239,6 +239,8 @@ Open the dashboard on the server (for example through an RDP session), or use an
 Use Task Scheduler **End**, then **Run** to restart after a configuration change. End stops this foreground Python task; confirm the port is released before starting again. Recheck its running state and `/health` after a reboot. Task history and Event Viewer help diagnose startup failures. Keep `.env`, `auth.json`, and the usage database private to the service account and administrators.
 
 ### Optional: HTTPS address for a team
+
+For an InstaBox VM, follow the [InstaBox hosting guide](/instabox/) for a public HTTPS dashboard and persistent storage.
 
 Use a domain you control and a trusted reverse proxy. For example, with Caddy installed on the host, a DNS record pointing at the server, and ports 80/443 directed to Caddy:
 

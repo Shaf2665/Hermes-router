@@ -30,6 +30,7 @@ export default defineConfig({
 					label: 'Set It Up',
 					items: [
 						{ label: 'Deployment', slug: 'deployment' },
+						{ label: 'InstaBox Hosting', slug: 'instabox' },
 						{ label: 'Providers', slug: 'providers' },
 						{ label: 'Free Model Rankings', slug: 'free-model-rankings' },
 						{ label: 'Configuration', slug: 'configuration' },

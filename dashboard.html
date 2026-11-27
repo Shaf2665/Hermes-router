@@ -403,13 +403,17 @@ body{font-size:16px;line-height:1.5}button,input,select,textarea{font-family:inh
               <p id="cfg-provider-access" class="field-hint"></p>
               <a id="cfg-provider-key-link" target="_blank" rel="noopener noreferrer">Get API key ↗</a>
               <p id="cfg-provider-note" class="field-hint"></p>
-              <label for="cfg-provider-url">Preset base URL</label>
+              <div id="cfg-custom-name-row" hidden><label for="cfg-custom-name">Provider name</label>
+              <input id="cfg-custom-name" maxlength="80" placeholder="My model server"></div>
+              <label for="cfg-provider-url" id="cfg-provider-url-label">Preset base URL</label>
               <input id="cfg-provider-url" readonly>
               <label for="cfg-key-value">2. Paste your API key</label>
               <input id="cfg-key-value" type="password" placeholder="paste provider API key" autocomplete="off">
-              <label for="cfg-auto-free">3. Model selection</label>
+              <p id="cfg-provider-key-help" class="field-hint" hidden></p>
+              <label id="cfg-no-key-row" hidden><input id="cfg-no-key" type="checkbox" style="width:auto"> No API key (local or unauthenticated server)</label>
+              <label for="cfg-auto-free" id="cfg-auto-free-label">3. Model selection</label>
               <select id="cfg-auto-free" onchange="onDiscoveryModeChange()"><option value="auto">Automatically add free chat models</option><option value="manual">Choose models manually</option></select>
-              <p class="field-hint">Automatic discovery adds every confirmed free chat model from the provider catalog. Unknown prices are skipped. Existing model switches are kept.</p>
+              <p class="field-hint" id="cfg-auto-free-hint">Automatic discovery adds every confirmed free chat model from the provider catalog. Unknown prices are skipped. Existing model switches are kept.</p>
               <label id="cfg-free-tier-label" hidden><input id="cfg-free-tier" type="checkbox" style="width:auto"> My Groq account uses the Free plan</label>
               <p id="cfg-free-tier-note" class="field-hint" hidden>Groq does not report your billing plan in its model list. Confirm only for a Free account; Developer accounts are billed. Uncheck and save again if your plan changes.</p>
               <div id="cfg-manual-models" hidden>
@@ -1958,6 +1962,37 @@ function setWarnMsg(id, text) {
     el.className = 'config-msg warn';
 }
 let providerSelectionGeneration = 0;
+async function saveCustomProvider(provider, key, models, generation, session) {
+    const body = {key, model: models.join(','), base_url: document.getElementById('cfg-provider-url').value.trim(),
+                  clear_key: document.getElementById('cfg-no-key').checked,
+                  label: configProviders.presets[provider].label};
+    let target = provider;
+    if (provider === 'custom') {
+        body.label = document.getElementById('cfg-custom-name').value.trim();
+        const slug = body.label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 48);
+        if (!slug) { setMsg('cfg-key-msg', 'Enter a provider name using letters or numbers.', false); return; }
+        target = 'custom_' + slug;
+        body.create = true;
+    }
+    try {
+        const r = await adminFetch('/v1/config/custom-providers/' + encodeURIComponent(target), {
+            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+        });
+        const d = await r.json();
+        if (session !== sessionGeneration || !authenticated) return;
+        if (!r.ok) { setMsg('cfg-key-msg', apiError(d) || 'Failed.', false); return; }
+        await loadConfigProviders();
+        if (session !== sessionGeneration || generation !== providerSelectionGeneration || !authenticated) return;
+        document.getElementById('cfg-key-provider').value = target;
+        onKeyProviderChange();
+        setMsg('cfg-key-msg', `Saved — ${body.label}: ${models.length} model(s), ${d.total_keys} key(s). ` +
+            (d.restart_required ? 'Restart Hermes to apply.' : 'Applied immediately.'), true);
+        void refresh();
+    }
+    catch (e) {
+        if (session === sessionGeneration) setMsg('cfg-key-msg', 'Save interrupted. Check the provider list and retry.', false);
+    }
+}
 function selectedProviderModels() {
     return [...document.querySelectorAll('#cfg-provider-models input:checked')].map(el => el.value);
 }
@@ -1992,6 +2027,24 @@ function onKeyProviderChange() {
     document.getElementById('cfg-free-tier').checked = configProviders?.free_tier_confirmed?.[provider] === true;
     onDiscoveryModeChange();
     if (!preset) return;
+    const editable = !!preset.editable;
+    document.getElementById('cfg-custom-name-row').hidden = provider !== 'custom';
+    document.getElementById('cfg-custom-name').value = '';
+    document.getElementById('cfg-provider-url').readOnly = !editable;
+    document.getElementById('cfg-provider-url').placeholder = editable ? 'https://your-server.example/v1' : '';
+    document.getElementById('cfg-provider-url-label').textContent = editable ? 'Base URL' : 'Preset base URL';
+    document.getElementById('cfg-provider-key-link').hidden = editable;
+    document.getElementById('cfg-no-key-row').hidden = !editable;
+    document.getElementById('cfg-no-key').checked = false;
+    const keyHelp = document.getElementById('cfg-provider-key-help');
+    keyHelp.hidden = !editable;
+    keyHelp.textContent = preset.has_key ? 'Leave blank to keep the saved key at the same address. Paste a key to replace it.'
+        : 'Optional for local servers. Keys are stored only on your router.';
+    // Custom servers are never auto-discovered: models are always chosen manually.
+    const mode = document.getElementById('cfg-auto-free');
+    for (const id of ['cfg-auto-free', 'cfg-auto-free-label', 'cfg-auto-free-hint'])
+        document.getElementById(id).hidden = editable;
+    if (editable) { mode.value = 'manual'; onDiscoveryModeChange(); }
     document.getElementById('cfg-provider-access').textContent = preset.access;
     document.getElementById('cfg-provider-note').textContent = preset.note;
     document.getElementById('cfg-provider-url').value = preset.base_url;
@@ -2009,7 +2062,9 @@ async function loadProviderModels() {
     try {
         const response = await adminFetch('/v1/config/providers/' + encodeURIComponent(provider) + '/models', {
             method: 'POST', headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({key:document.getElementById('cfg-key-value').value.trim()})
+            body: JSON.stringify({key:document.getElementById('cfg-key-value').value.trim(),
+                base_url:document.getElementById('cfg-provider-url').value.trim(),
+                clear_key:document.getElementById('cfg-no-key').checked})
         });
         const data = await response.json();
         if (generation !== providerSelectionGeneration || session !== sessionGeneration || !authenticated) return;
@@ -2024,17 +2079,19 @@ async function loadProviderModels() {
 async function addKey() {
     const provider = document.getElementById('cfg-key-provider').value;
     const key = document.getElementById('cfg-key-value').value.trim();
-    if (!key) {
+    const editable = !!configProviders?.presets?.[provider]?.editable;
+    if (!key && !editable) {
         setMsg('cfg-key-msg', 'Enter a key first.', false);
         return;
     }
     const models = [...new Set([...selectedProviderModels(), ...document.getElementById('cfg-provider-custom-models').value.split(',').map(m=>m.trim()).filter(Boolean)])];
-    const automatic = document.getElementById('cfg-auto-free').value === 'auto';
+    const automatic = !editable && document.getElementById('cfg-auto-free').value === 'auto';
     if (!automatic && (!models.length || models.some(m => !/^[A-Za-z0-9@+._:/-]+$/.test(m)))) {
         setMsg('cfg-key-msg', 'Select at least one model or enter valid model IDs.', false);
         return;
     }
     const generation = providerSelectionGeneration, session = sessionGeneration;
+    if (editable) return saveCustomProvider(provider, key, models, generation, session);
     try {
         const r = await adminFetch('/v1/config/keys/'  + encodeURIComponent(provider), {
             method: 'POST',
@@ -2064,7 +2121,9 @@ async function addKey() {
             return;
         }
         configProviders.configured_models[provider] = models.join(',');
-        setMsg('cfg-key-msg', `Saved — ${provider}: ${models.length} model(s), ${d.total_keys} key(s). Restart Hermes to apply.`, true);
+        const restart = d.restart_required || modelData.restart_required;
+        setMsg('cfg-key-msg', `Saved — ${provider}: ${models.length} model(s), ${d.total_keys} key(s). ` + (restart ? 'Restart Hermes to apply.' : 'Applied immediately.'), true);
+        if (!restart) void refresh();
     }
     catch (e) {
         if (session === sessionGeneration && generation === providerSelectionGeneration) setMsg('cfg-key-msg', 'Save interrupted. The key may already be saved; retry to finish saving models.', false);
@@ -2088,8 +2147,9 @@ async function setModel() {
             setMsg('cfg-model-msg', apiError(d) || 'Failed.', false);
             return;
         }
-        setMsg('cfg-model-msg', `Set ${provider} → ${model}`, true);
-        showRestartBanner();
+        setMsg('cfg-model-msg', `Set ${provider} → ${model}. ` + (d.restart_required ? 'Restart to apply.' : 'Applied immediately.'), true);
+        if (d.restart_required) showRestartBanner();
+        void refresh();
     }
     catch (e) {
         setMsg('cfg-model-msg', 'Network error: ' + e.message, false);
@@ -2108,8 +2168,9 @@ async function resetModel() {
             return;
         }
         document.getElementById('cfg-model-value').value = '';
-        setMsg('cfg-model-msg', `Reset ${provider} to default.`, true);
-        showRestartBanner();
+        setMsg('cfg-model-msg', `Reset ${provider} to default. ` + (d.restart_required ? 'Restart to apply.' : 'Applied immediately.'), true);
+        if (d.restart_required) showRestartBanner();
+        void refresh();
     }
     catch (e) {
         setMsg('cfg-model-msg', 'Network error: ' + e.message, false);
@@ -2128,8 +2189,10 @@ async function setRotation() {
             setMsg('cfg-rotation-msg', apiError(d) || 'Failed.', false);
             return;
         }
-        setMsg('cfg-rotation-msg', 'Saved rotation mode.', true);
-        showRestartBanner();
+        setMsg('cfg-rotation-msg', 'Saved rotation mode. ' + (d.restart_required ? 'Restart to apply.' : 'Applied immediately.'), true);
+        delete document.getElementById('cfg-rotation-value').dataset.edited;
+        if (d.restart_required) showRestartBanner();
+        refresh();
     }
     catch (e) {
         setMsg('cfg-rotation-msg', 'Network error: ' + e.message, false);

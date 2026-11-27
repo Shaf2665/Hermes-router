@@ -6,6 +6,9 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: 8319
+      # Lets the dashboard's Restart button restart this container (needs the
+      # restart policy below). Remove it to make restarts host-managed only.
+      HR_CONTAINER_RESTART: "1"
     volumes:
       - hermes-data:/app/data
     restart: unless-stopped
