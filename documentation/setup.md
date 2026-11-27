@@ -236,6 +236,8 @@ Use Task Scheduler **End**, then **Run** to restart after a configuration change
 
 ### Optional: HTTPS address for a team
 
+For an InstaBox VM, follow the [InstaBox hosting guide](instabox.md) for a public HTTPS dashboard and persistent storage.
+
 Use a domain you control and a trusted reverse proxy. For example, with Caddy installed on the host, a DNS record pointing at the server, and ports 80/443 directed to Caddy:
 
 ```text

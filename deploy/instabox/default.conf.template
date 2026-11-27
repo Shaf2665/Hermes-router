@@ -1,0 +1,16 @@
+server {
+    listen 8080;
+    server_name _;
+    client_max_body_size 20m;
+    location / {
+        proxy_pass http://hermes:8319;
+        proxy_http_version 1.1;
+        # InstaBox terminates HTTPS and rewrites Host; use our configured public origin.
+        proxy_set_header Host ${HERMES_PUBLIC_HOST};
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 600s;
+    }
+}
