@@ -1,31 +1,91 @@
-# VS Code Extension
+# Hermes Router for VS Code
 
-Context synchronization in this source checkout is **extension 0.9.10**, paired with the matching router. Marketplace 0.9.9 uses a separate legacy sync path and can display a 40K fallback when its application-key lookup fails. Do not downgrade to the Marketplace 0.9.8 build. Build/install the source VSIX below for explicit sync diagnostics; a GitHub merge does not publish or install an extension.
+Use your own AI providers in **Copilot Chat** through one Hermes Router connection.
+Choose **hermes-router (provider pool)** in the model picker; Hermes selects a
+model from your configured providers and tries another eligible model if it fails.
 
-The Hermes Router extension connects Copilot Chat to your provider pool and offers optional owner controls: provider status, remote restart and the browser dashboard. Hermes routes model requests and tool calls; Copilot owns terminal commands, file edits and MCP tools.
+The extension also shows router status and opens your browser dashboard. You can
+connect to Hermes on your computer, in Docker, or on a server.
 
-Use the router and extension from the same current source checkout. Keep your application key for chat and the separate administrator credential for owner controls. See [Context synchronization](context-sync.md) for the coordinated upgrade and verification steps.
+**The extension connects to a router; it does not install or host one.** Hermes
+handles AI requests. Copilot handles agent actions such as file edits, terminal
+commands and tools. Provider charges and quotas still apply.
 
-## Install from source
+## Before you start
 
-You need VS Code 1.104 or later and the GitHub Copilot Chat extension for the model picker. Start the router first using [Setup](setup.md).
+You need:
 
-From this checkout:
+- **VS Code 1.104 or newer**, with Copilot Chat available and enabled for your account.
+- A running Hermes Router with at least one working provider/model.
+- An **application key** created in that router's **Connect** page.
 
-```bash
-cd vscode-extension
-npm ci
-npm run check
-npm test
-npm run compile
-npm run package
-```
+New to Hermes? Follow [Local setup](setup.md) or [Server setup](deployment.md) first. Send a test
+message in the browser dashboard before connecting the extension.
 
-In VS Code, run **Extensions: Install from VSIX…**, choose `hermes-router-0.9.10.vsix`, then run **Developer: Reload Window**. For a published release, use the [Marketplace listing](https://marketplace.visualstudio.com/items?itemName=MohammedShafiq.hermes-router) or [GitHub releases](https://github.com/Shaf2665/Hermes-router/releases); check that release's migration notes before mixing versions.
+## 1. Install the extension
 
-## Connect chat with an application key
+In VS Code, open **Extensions** (`Ctrl+Shift+X` on Windows/Linux, `Cmd+Shift+X` on Mac),
+search for **hermes-router** by **MohammedShafiq**, and select **Install**.
+The [Marketplace listing](https://marketplace.visualstudio.com/items?itemName=MohammedShafiq.hermes-router)
+also has an Install button.
 
-Open the router's browser dashboard, sign in using `ADMIN_API_KEY` from your local configuration, and open **Connect**. Create an application key, copy it, and optionally send the explicit small test request. An upstream charge may apply. Existing `PROXY_API_KEYS` remain valid for inference.
+For a downloaded package, open the Command Palette (`Ctrl+Shift+P`, or `Cmd+Shift+P`
+on Mac), run **Extensions: Install from VSIX…**, and select the `.vsix` file.
+[GitHub releases](https://github.com/Shaf2665/Hermes-router/releases) list published
+packages. Version **0.9.7** fixes the dashboard getting stuck on “Loading…”.
+
+**Context sync needs extension 0.9.10**, which is built from source (see
+[Build from source](#build-from-source-developers)). Marketplace 0.9.9 uses an older
+sync path that can show a 40K fallback; do not downgrade to 0.9.8.
+
+If prompted, reload VS Code. You do not need Node.js or to build source to install a VSIX.
+
+## 2. Enter your router address and application key
+
+Open **Settings** (`Ctrl+,` or `Cmd+,`) and search for **hermesRouter**.
+Use your **User** settings so a key is not saved in a shared project's settings file.
+
+| Setting | What to enter |
+| --- | --- |
+| **Hermes Router: Base Url** (`hermesRouter.baseUrl`) | `http://localhost:8319` for a router on this computer; your tunnel or HTTPS address for a server |
+| **Hermes Router: Api Key** (`hermesRouter.apiKey`) | The application key from **Connect** |
+
+Use the **application key**, not your provider key or administrator key. A trailing
+`/v1` in Base Url is accepted, but you can leave it off.
+
+For a server reached through SSH, keep the tunnel open. If VS Code runs an extension
+inside WSL, a container or Remote SSH, `localhost` means that extension's machine.
+Use an address reachable from where the extension runs.
+
+## 3. Choose Hermes in Copilot Chat
+
+1. Open **Chat** in VS Code.
+2. Open the model picker beside the chat input.
+3. Select **hermes-router (provider pool)**.
+4. Send a short message, such as “Reply with hello.”
+
+If it replies, your connection works. You can then use Agent mode when your chosen
+providers support tool calling. Adding providers is optional; one working provider
+is enough to start.
+
+## 4. Enable the status panel (optional)
+
+Chat can work even if the Hermes status panel asks for an administrator credential.
+The panel needs owner access to display all providers and usage.
+
+1. Open the Command Palette.
+2. Run **Hermes Router: Set Administrator Credential**.
+3. Enter the same **administrator key** you use for the browser dashboard.
+4. Run **hermes-router: Refresh Status** or open the Hermes sidebar.
+
+The extension keeps this credential in **VS Code SecretStorage**, separately for
+each router address. It does not replace the application key. Run the same command
+with an empty value to remove it; set it again if you change router addresses.
+
+Use **hermes-router: Open Web Dashboard (browser)** to add providers, create keys,
+change settings or inspect activity. The browser has its own sign-in session.
+
+## All extension settings
 
 In VS Code Settings, search for `hermesRouter`:
 
@@ -36,8 +96,6 @@ In VS Code Settings, search for `hermesRouter`:
 | `hermesRouter.hrPath` | `hr`, or the path to the Bash CLI for Linux/macOS/WSL host controls. |
 | `hermesRouter.dockerContainer` | Optional container name for controls through the host's Docker CLI. |
 | `hermesRouter.refreshSeconds` | Context limits and status refresh interval; default 10 seconds, minimum 3. Each new chat request also checks context settings. |
-
-Before opening the model picker, confirm model capacities as described below. Open Copilot Chat, open its model picker, and select **hermes-router**. Text streams through your configured providers. Tool calling in agent mode requires a compatible configured model; provider prices and limits still apply.
 
 ## Context synchronization (0.9.10+)
 
@@ -78,7 +136,7 @@ Provider credentials, model overrides, key rotation, optional features, applicat
 
 With a router in Docker, set `hermesRouter.dockerContainer` to its container name. **Restart Router** then runs `docker restart <container>` on the host. Doctor and Codex import require the `:cli` image and the host Docker CLI. Updating an image requires pulling/rebuilding and recreating the container; the extension reports this instead of running an in-container update.
 
-The browser/remote restart endpoint only reports success on an installation with a supported restart helper. Native Windows and a minimal Docker image can return **409** with a remedy; a container restart policy does not make a missing helper supported. Use `docker restart <container>` on the host, or stop the native Windows router and rerun `start.ps1` in PowerShell. See [Setup](setup.md) for the persistent Compose configuration and native Windows installation.
+The browser/remote restart endpoint only reports success where Hermes can restart itself: a CLI-managed process, or a Docker container started with `HR_CONTAINER_RESTART=1` and a restart policy (the bundled `docker-compose.yml` sets both). Native Windows and other containers return **409** with a remedy; use `docker restart <container>` on the host, or stop the native Windows router and rerun `start.ps1` in PowerShell. See [Setup](setup.md) for the persistent Compose configuration and native Windows installation.
 
 Native Windows supports browser configuration and chat. The extension's local `hr` controls still require Linux/macOS/WSL, or Docker controls through the host Docker CLI. A remote owner credential does not grant SSH or host command access.
 
@@ -92,6 +150,26 @@ Native Windows supports browser configuration and chat. The extension's local `h
 - **Model missing from Copilot's picker:** check VS Code/Copilot Chat requirements, the application key's scope, and confirmed context/output limits in the browser dashboard. At least one eligible model must fit the minimum; lower the minimum or add a compatible model if necessary.
 - **Dashboard stuck on “Loading…”:** reload after installing the current VSIX, which retains the published 0.9.7 dashboard fix. Owner status still requires **Set Administrator Credential**.
 - **`hr` not found:** use the documented native Windows start/stop commands, WSL, or configure Docker controls. Browser configuration and inference do not require `hr` on the editor's host.
+- **Chat prints `<invoke ...>` or stops after a file-reading instruction:** update the router. Older Anthropic adapters dropped tool definitions, native `tool_use` responses, and tool results. The fix preserves them for streamed and ordinary requests, so Copilot can run its selected tools and continue. Start a new chat after updating to avoid reusing the broken conversation. XML-looking text is never executed as a tool call. Ask mode supports read-only codebase research; choose Agent when you want edits or commands. See [VS Code agent harnesses](https://code.visualstudio.com/docs/agents/run/agent-harnesses) and [Anthropic tool use](https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools).
+- **Three ready providers, but only one receives requests:** context size, tool support, access scopes and health determine eligibility. At a 1M minimum, a 131K model is excluded even for a short prompt. Unknown capacities are also excluded. Save documented capacities in Settings, or choose a smaller minimum if you want smaller models in the pool. See [verified model limits](context-sync.md#verified-capacities-for-the-configured-models).
+- **Forced tool use rejected by Claude:** Hermes preserves `required`/named tool choices; model support varies. Sonnet 5.5 rejects forced tool use, so use `auto` for that model. Hermes does not silently weaken a required tool call to an optional one. See [Anthropic tool choice restrictions](https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools#forcing-tool-use).
 - **Restart rejected:** follow the returned remedy. Success is only reported after a successful API response; a network failure is not treated as a completed restart.
 
 See [Setup](setup.md), [Providers](providers.md) and [Monitoring](monitoring.md) for router configuration.
+
+## Build from source (developers)
+
+You need VS Code 1.104 or later and the GitHub Copilot Chat extension for the model picker. Start the router first using [Setup](setup.md).
+
+From this checkout:
+
+```bash
+cd vscode-extension
+npm ci
+npm run check
+npm test
+npm run compile
+npm run package
+```
+
+In VS Code, run **Extensions: Install from VSIX…**, choose `hermes-router-0.9.10.vsix`, then run **Developer: Reload Window**. For a published release, use the [Marketplace listing](https://marketplace.visualstudio.com/items?itemName=MohammedShafiq.hermes-router) or [GitHub releases](https://github.com/Shaf2665/Hermes-router/releases); check that release's migration notes before mixing versions.

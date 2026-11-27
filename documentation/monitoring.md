@@ -37,6 +37,14 @@ The following capabilities remain available within those pages:
   cascade count, tokens, status), filterable by status and endpoint
 
 Context settings and application-key changes apply to new requests immediately.
+So do Settings switches (response and semantic caching, disk persistence, fast routing,
+model discovery, currency conversion, request history), key rotation, model changes,
+custom and local providers, and provider keys saved with automatic model selection.
+All of them are saved for future starts. Active responses finish with their original
+settings. Turning **Persistent cache** on requires **Response cache**; turning it off
+keeps rows already on disk. Turning **Request log** off clears its in-memory history.
+A new provider key saved with manual model selection still needs a restart, and so do
+direct `.env` edits and `hr` CLI changes.
 For changes that show a **Restart Required** banner, use the supported restart
 action or restart the hosting process as described in [Setup](setup.md).
 Restarting signs browser sessions out and may interrupt in-flight requests.
@@ -44,11 +52,12 @@ Restarting signs browser sessions out and may interrupt in-flight requests.
 It's pure HTML/JS (no framework, no external CDN) and reads/writes only the router's own
 `/v1/*` endpoints — so it adds essentially no memory or CPU to the router itself.
 
-> **Accessing it remotely.** By default the router binds to `0.0.0.0` (all interfaces). If you
-> set `HOST=127.0.0.1` (localhost-only, recommended on a shared/VPS host), reach the dashboard
-> over an SSH tunnel: `ssh -L 8319:127.0.0.1:8319 user@server`, then open
-> `http://localhost:8319/` locally. With **Docker** the mapped port (`-p 8319:8319`) exposes it
-> to your host automatically. The raw API endpoints stay key-protected either way.
+> **Accessing it remotely.** The router's built-in default is `HOST=0.0.0.0`, but the native
+> installers write `HOST=127.0.0.1` and the documented Docker setups publish the port on
+> `127.0.0.1` only. Reach a remote router through an SSH tunnel
+> (`ssh -L 8319:127.0.0.1:8319 user@server`, then open `http://localhost:8319/`) or an
+> HTTPS reverse proxy, as shown in [Server setup](deployment.md). `localhost` always means the
+> machine running the client. The API endpoints stay key-protected either way.
 
 From **VS Code**, the extension's dashboard panel has a **⬈ Web dashboard** button (and a globe
 icon in the panel header) that opens this page in your browser.
