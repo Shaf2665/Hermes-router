@@ -82,6 +82,7 @@ subscription) logins are stored separately under `codex_accounts` (via
 | `ADMIN_API_KEY` | *(auto-generated)* | Separate owner credential for dashboard and global/config APIs. Never give this to an application. |
 | `HR_ENV_FILE` | `.env` | Private environment file, also used for generated credentials. |
 | `HR_USAGE_DB` | `usage.db` | Durable per-key usage/reservation SQLite database; preserve it across upgrades. |
+| `HR_CONTAINER_RESTART` | unset | Set to `1` in a Docker container whose restart policy is `unless-stopped` or `always` to let the dashboard's Restart action exit the container's main process so Docker starts a fresh one. Ignored outside Docker or when the router is not PID 1. Restarting ends admin sessions and in-flight requests. |
 | `HR_TRUST_PROXY` | `0` | Trust one proxy-provided scheme header only when behind a trusted reverse proxy with no direct public backend access. |
 | `ROUTER_AUTH_FILE` | `./auth.json` | Where keys are stored |
 | `ROUTER_CONTEXT_CONFIG` | `{"context_window":0,"model_limits":{}}` | Persisted minimum context and confirmed per-model capacities. Prefer **Settings → Context length**; dashboard saves apply to new requests without a restart. See [Context synchronization](context-sync.md). |
