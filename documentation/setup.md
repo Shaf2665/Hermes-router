@@ -154,16 +154,28 @@ These steps are the same for native, Docker and server installations.
 2. Open **Providers** and choose a provider.
 3. Click **Get API key** to open its website. Sign in/create your provider account
    and obtain a key. Check the available models and any billing requirements.
-4. Paste the key into Hermes. Keep **Model selection** on *Automatically add free
-   chat models*, or choose *Choose models manually*, click **Refresh model list**
-   (or use the suggestions) and select at least one model your account can use.
+4. Paste the key into Hermes. For a provider with free models (such as Gemini,
+   OpenRouter or Groq), keep **Model selection** on *Automatically add free chat
+   models*. For a paid account (OpenAI, Anthropic and most others), choose
+   *Choose models manually*, click **Refresh model list** (or use the suggestions)
+   and select at least one model your account can use.
 5. Click **Save provider**.
 
-With automatic model selection, Hermes looks up the provider's free chat models in
-the background and uses them without a restart. Changing models, rotation and
-settings later also applies immediately. One case still needs a restart: saving a
-**new key with models chosen manually**. The dashboard then shows a banner; click
-**Restart Now**, or restart Hermes the way you started it.
+With automatic model selection, Hermes looks up the provider's **free** chat models in
+the background and uses them without a restart. It skips anything it cannot confirm
+as free, so a paid-only key ends up with no models; the provider card then tells you
+to choose models manually. Changing models, rotation and settings later applies
+immediately.
+
+One case still needs a restart: saving a **new key with models chosen manually**. The
+dashboard then shows a banner. How to restart depends on how you started Hermes:
+
+| Started with | Restart |
+| --- | --- |
+| `start.ps1` on Windows | **Ctrl+C**, then run `start.ps1` again |
+| `./hermes-router start` on Mac/Linux | **Ctrl+C**, then run it again |
+| Docker Compose | **Restart Now** in the banner, or `docker compose restart` |
+| A service (`./hermes-router service install`) | `./hermes-router restart` |
 
 Saving a provider can send small background checks, so it may use provider quota.
 Hermes is free software; the selected provider/model may charge for requests.
@@ -250,8 +262,8 @@ in that roadmap.
 | Browser cannot open localhost:8319 | Check the terminal for errors, or run `docker compose logs --tail 30`. Keep the native process running. |
 | Dashboard says unauthorized | Use `ADMIN_API_KEY` from this installation, not a provider/application key. |
 | No model replies | Check the provider card in Providers (discovery result, selected models), its key and quota, then retry the Connect test. |
-| Dashboard shows a restart banner | Click **Restart Now**. Saved settings are kept; browser sessions end, so sign in again. |
-| Restart Now says restart is unsupported | Restart using your terminal (`start.ps1` / `./hermes-router start`), `docker compose restart`, or your service manager. A Docker container needs `HR_CONTAINER_RESTART=1` and a restart policy for the button; the Compose file sets both. |
+| Dashboard shows a restart banner | Restart as shown in [the restart table](#1-add-your-ai-provider). Saved settings are kept; browser sessions end, so sign in again. |
+| Restart Now says restart is unsupported | Expected for `start.ps1`, a foreground `./hermes-router start` and services: restart from the terminal or with `./hermes-router restart`. The button works for Docker Compose installs (`HR_CONTAINER_RESTART=1` with a restart policy). |
 | App says 401 | Copy a current application key from Connect into the app. |
 | App says 429 | Check its limits in Application access and wait for the retry period. |
 | Context-length error | Lower the extension's setting or configure a model with sufficient known capacity. See [context settings](configuration.md#context-length-and-the-vs-code-extension). |

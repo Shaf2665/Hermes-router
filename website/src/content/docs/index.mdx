@@ -65,13 +65,15 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
   <span>OPEN SOURCE</span><span>SELF-HOSTED</span><span>PROVIDER-AGNOSTIC</span>
 </div>
 
-<p class="hero-supporting-copy">Self-hosted OpenAI/Anthropic-compatible AI gateway with smart routing, key rotation, local-model fallback, tool/vision-aware routing, caching, budgets, and observability.</p>
+<p class="hero-supporting-copy">Connect your app or VS Code to your own AI providers through one address. Run Hermes on your computer or a server, add a provider, and send your first message from the browser dashboard.</p>
 
-<p><strong>Foundation preview:</strong> a simpler dashboard, separate administrator access, persistent usage, and a native Windows starter. <a href="/setup/">Read the local and server setup guide</a>. Use the tested preview source; published older images may still have the previous behavior.</p>
+<p>Hermes is free software. You bring a provider account/API key or a local model; provider charges and limits still apply. This website explains setup. Your private dashboard runs on the machine where you install Hermes.</p>
 
-<div class="hero-install" aria-label="Install Hermes Router">
-  <span aria-hidden="true">$</span><code>curl -fsSL https://raw.githubusercontent.com/Shaf2665/Hermes-router/main/get.sh | bash</code>
-</div>
+<CardGrid>
+  <LinkCard title="On your computer" href="/setup/" description="Windows, macOS or Linux. Choose Python or Docker, then follow the numbered steps." />
+  <LinkCard title="On a server" href="/deployment/" description="Keep Hermes running with private remote access, automatic startup and backups." />
+  <LinkCard title="In VS Code" href="/vscode-extension/" description="Connect Copilot Chat to your router using an application key." />
+</CardGrid>
 
 <nav class="social-proof" aria-label="Hermes Router project links">
   <a href="https://github.com/Shaf2665/Hermes-router">Open Source</a>
@@ -108,7 +110,7 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
       <span>P95 LATENCY</span><strong>284ms</strong><small>− 31ms</small>
     </div>
     <div class="dashboard-log">
-      <p id="dashboard-preview-title"><span>LIVE ROUTE LOG</span><small>DEMO DATA</small></p>
+<p id="dashboard-preview-title"><span>EXAMPLE ROUTE LOG</span><small>DEMO DATA</small></p>
       <code><i>200</i> /v1/chat/completions <b>gemini-2.5-flash</b> 184ms</code>
       <code><i>200</i> /v1/messages <b>openrouter/claude</b> 291ms</code>
       <code><em>↻</em> provider retry <b>groq → codex</b> 422ms</code>
@@ -155,7 +157,7 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 ## Pick your entry point
 
 <CardGrid>
-  <LinkCard title="Install" href="/getting-started/" description="Start a router locally in minutes." />
+  <LinkCard title="Start here" href="/getting-started/" description="Choose an installation method and learn which key goes where." />
   <LinkCard title="Configure Providers" href="/providers/" description="Add cloud providers, Codex, or local models." />
   <LinkCard title="Use the API" href="/usage/" description="Connect OpenAI or Anthropic-compatible clients." />
   <LinkCard title="Monitor" href="/monitoring/" description="Inspect health, requests, limits, cost, and metrics." />
@@ -177,4 +179,4 @@ resp = client.chat.completions.create(
 print(resp.choices[0].message.content)
 ```
 
-On Windows or hosting in the cloud? See **[Deployment](/deployment/)**.
+New to setup? Follow **[Start here](/getting-started/)** before using the API example.

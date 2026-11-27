@@ -46,11 +46,12 @@ After starting Hermes:
 
 1. Open your router's dashboard. On the same computer, use `http://localhost:8319`.
 2. Sign in with its **administrator key**.
-3. Open **Providers**, choose your provider and paste its provider key. Keep **Model
-   selection** on *Automatically add free chat models*, or choose models yourself.
-4. Click **Save provider**. With automatic model selection the provider is used
-   immediately. If you choose models manually, a new key needs a restart: use
-   **Restart Now** in the banner, or restart Hermes the way you started it.
+3. Open **Providers**, choose your provider and paste its provider key. For a provider
+   with free models, keep **Model selection** on *Automatically add free chat models*.
+   For a paid account (such as OpenAI or Anthropic), choose models manually.
+4. Click **Save provider**. Automatic selection applies immediately. A new key with
+   manually chosen models needs a restart; the [setup guide](/setup/#1-add-your-ai-provider)
+   shows how for your installation.
 5. Open **Connect**, create an **application key**, and copy it when shown.
 6. Click **Send test request**. A reply confirms that your provider and model work.
 

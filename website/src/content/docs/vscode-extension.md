@@ -70,6 +70,10 @@ Use an address reachable from where the extension runs.
 3. Select **hermes-router (provider pool)**.
 4. Send a short message, such as “Reply with hello.”
 
+If **hermes-router** is missing from the picker, confirm your models' context and output
+limits in the dashboard first: 0.9.10 hides models with unknown capacity. See
+[Context synchronization](#context-synchronization-0910).
+
 If it replies, your connection works. You can then use Agent mode when your chosen
 providers support tool calling. Adding providers is optional; one working provider
 is enough to start.
