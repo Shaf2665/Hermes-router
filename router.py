@@ -2355,7 +2355,7 @@ def _readiness():
 class CredentialPool:
     """Thread-safe key pool with per-key cooldown tracking.
 
-    Two selection modes (set once via ROTATION_MODE):
+    Two selection modes (initialized from ROTATION_MODE, changeable live):
       round-robin — advance every call so load spreads evenly across keys
       sequential  — keep returning the same key until it cools, then advance;
                     this drains one account at a time and keeps the rest fresh"""
@@ -5786,21 +5786,34 @@ def config_feature(name):
 
 
 @app.route("/v1/config/rotation", methods=["POST"])
+@_locked_access
 def config_rotation():
-    """Set key rotation mode from the dashboard. Body: {"mode": "round-robin"|"sequential"}."""
+    """Set key rotation mode live. Body: {"mode": "round-robin"|"sequential"}.
+    Saves first; the running pool keeps its keys, cooldowns and counters."""
+    global ROTATION_MODE
     err = _admin_check()
     if err:
         return err
-    body = request.get_json(force=True, silent=True) or {}
-    mode = (body.get("mode") or "").strip().lower()
+    body = request.get_json(force=True, silent=True)
+    mode = body.get("mode") if isinstance(body, dict) else None
+    if not isinstance(mode, str):
+        return jsonify({"error": {"message": "mode must be 'round-robin' or 'sequential'",
+                                  "type": "invalid_request_error"}}), 400
+    mode = mode.strip().lower()
     aliases = {"roundrobin": "round-robin", "round_robin": "round-robin", "rr": "round-robin",
                "seq": "sequential"}
     mode = aliases.get(mode, mode)
     if mode not in ("round-robin", "sequential"):
         return jsonify({"error": {"message": "mode must be 'round-robin' or 'sequential'",
                                   "type": "invalid_request_error"}}), 400
-    _env_write_line("ROTATION_MODE", mode)
-    return jsonify({"mode": mode, "restart_required": True})
+    try:
+        _env_write_line("ROTATION_MODE", mode)
+    except OSError:
+        return jsonify({"error": {"message": "Could not save rotation mode. Check file permissions and retry."}}), 500
+    with pool.lock:
+        pool.mode = ROTATION_MODE = mode
+    os.environ["ROTATION_MODE"] = mode
+    return jsonify({"mode": mode, "restart_required": False})
 
 
 @app.route("/v1/config/restart", methods=["POST"])
