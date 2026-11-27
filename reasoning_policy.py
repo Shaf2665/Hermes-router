@@ -56,9 +56,12 @@ def request_control(payload, header):
         efforts.append(payload["reasoning_effort"])
     if "reasoning" in payload:
         value = payload["reasoning"]
-        if not isinstance(value, dict) or set(value) != {"effort"}:
-            invalid("reasoning supports only effort; summaries are not supported")
-        efforts.append(value["effort"])
+        # Codex CLI always sends summary. Hermes never returns summaries, so it is
+        # accepted as a display hint and dropped by native_fields().
+        if not isinstance(value, dict) or not value or set(value) - {"effort", "summary"}:
+            invalid("reasoning supports only effort and summary")
+        if "effort" in value:
+            efforts.append(value["effort"])
     if "output_config" in payload:
         value = payload["output_config"]
         if not isinstance(value, dict) or set(value) != {"effort"}:
@@ -100,6 +103,16 @@ def request_control(payload, header):
     if any(word in json.dumps(payload.get("extra_body", {})).lower() for word in ("thinking", "reasoning")):
         invalid("Use the Hermes reasoning header or top-level supported native controls")
     return control
+
+
+def native_fields(body):
+    """Validated native controls to carry into a chat payload, without reasoning.summary."""
+    fields = {field: body[field] for field in NATIVE_FIELDS if field in body}
+    if isinstance(fields.get("reasoning"), dict):
+        fields["reasoning"] = {k: v for k, v in fields["reasoning"].items() if k != "summary"}
+        if not fields["reasoning"]:
+            del fields["reasoning"]
+    return fields
 
 
 def resolve(config, control, provider, model):

@@ -28,8 +28,10 @@ global default. Supported native controls also count as explicit requests:
 chat `reasoning_effort`, Responses `reasoning.effort`, and Anthropic
 `thinking` / `output_config.effort`. Conflicting header and native settings return
 400. Native budgets/adaptive modes stay bound to their compatible transport;
-Hermes does not guess an effort level from an arbitrary budget. Native summaries,
-unknown fields and nested thinking controls in `extra_body` are not supported.
+Hermes does not guess an effort level from an arbitrary budget. Responses
+`reasoning.summary` (sent by Codex CLI) is accepted and ignored because Hermes never
+returns reasoning summaries; unknown fields and nested thinking controls in
+`extra_body` are not supported.
 
 ```python
 from openai import OpenAI

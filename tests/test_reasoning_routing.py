@@ -115,6 +115,14 @@ def test_native_responses_effort_survives_translation(setup):
     assert sent[0]["reasoning_effort"] == "low"
 
 
+def test_summary_only_reasoning_hint_never_reaches_upstream(setup):
+    # Codex sends reasoning.summary; Hermes never returns summaries, so it stays Auto and is dropped.
+    client, sent, _ = setup
+    assert chat(client, reasoning={"summary": "auto"}).status_code == 200
+    assert client.post("/v1/responses", headers=APP, json={"input": "hi", "reasoning": {"summary": "auto"}}).status_code == 200
+    assert len(sent) == 2 and not any("reasoning" in body or "reasoning_effort" in body for body in sent)
+
+
 def test_streaming_strips_private_state(setup):
     client, _, _ = setup
     response = chat(client, {"X-Hermes-Reasoning": "low"}, stream=True)

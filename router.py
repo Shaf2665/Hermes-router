@@ -3624,7 +3624,7 @@ def _anthropic_request_to_openai(body: dict) -> dict:
 
     payload: dict = {"model": ROUTER_MODEL, "messages": messages}
     reasoning_policy.request_control(body, None)
-    payload.update({field: body[field] for field in reasoning_policy.NATIVE_FIELDS if field in body})
+    payload.update(reasoning_policy.native_fields(body))
     if body.get("stream"):
         payload["stream"] = True
     for field in ("max_tokens", "temperature", "top_p"):
@@ -4199,6 +4199,9 @@ def forward(provider: dict, key: str, payload: dict, streaming: bool,
         body.update(reasoning["fields"])
         if provider["name"] == "groq":
             body["include_reasoning"] = False
+    else:
+        # Non-strict means no native effort: only a summary hint can remain, never forwarded.
+        body.pop("reasoning", None)
 
     # Admission, context preflight and forwarding share one total output ceiling.
     if output is not None:

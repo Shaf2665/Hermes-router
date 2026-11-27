@@ -65,11 +65,20 @@ def test_native_constraints_are_not_dropped_or_reinterpreted():
     assert rp.native_settings(provider("anthropic", "anthropic"), "claude-sonnet-4-5", policy, payload, 4096)["fields"] == payload
     with pytest.raises(rp.PolicyError):
         rp.native_settings(provider("openai"), "o3", policy, payload, 4096)
-    for payload in [{"reasoning": []}, {"reasoning": {"summary": "auto"}},
+    for payload in [{"reasoning": []}, {"reasoning": {}}, {"reasoning": {"summary": "auto", "extra": 1}},
                     {"thinking": {"type": "enabled", "budget_tokens": True}},
                     {"reasoning_effort": "garbage"}]:
         with pytest.raises(rp.PolicyError):
             rp.request_control(payload, None)
+
+
+def test_codex_summary_hint_is_accepted_and_never_forwarded():
+    # Codex CLI always sends reasoning.summary; Hermes never returns summaries.
+    assert rp.request_control({"reasoning": {"summary": "auto"}}, None) == {}
+    assert rp.native_fields({"reasoning": {"summary": "auto"}}) == {}
+    payload = {"reasoning": {"effort": "low", "summary": "detailed"}}
+    assert rp.request_control(payload, None) == {"level": "low", "native": True}
+    assert rp.native_fields(payload) == {"reasoning": {"effort": "low"}}
 
 
 @pytest.mark.parametrize("field", ["reasoning_effort", "output_config"])

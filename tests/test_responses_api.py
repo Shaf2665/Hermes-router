@@ -24,7 +24,8 @@ def chunk(delta=None, finish=None, **kwargs):
 def test_unknown_reasoning_usage_is_not_zero():
     builder = api.ResponseBuilder("model")
     list(builder.feed({"choices": [], "usage": {"prompt_tokens": 3, "completion_tokens": 5}}))
-    assert "reasoning_tokens" not in builder.response["usage"]["output_tokens_details"]
+    # Codex rejects output_tokens_details without reasoning_tokens; omit the object.
+    assert "output_tokens_details" not in builder.response["usage"]
     list(builder.feed({"choices": [], "usage": {"prompt_tokens": 3, "completion_tokens": 5,
                      "completion_tokens_details": {"reasoning_tokens": 0}}}))
     assert builder.response["usage"]["output_tokens_details"]["reasoning_tokens"] == 0
@@ -232,3 +233,13 @@ def test_tool_namespaces_round_trip_without_colliding():
     assert call["name"] == "apply_patch" and call["namespace"] == "files" and call["input"] == "patch"
     next_payload, _ = api.to_chat({"input": [call, {"type": "custom_tool_call_output", "call_id": "a", "output": "done"}], "tools": tools}, "hermes-router")
     assert next_payload["messages"][0]["tool_calls"][0]["function"]["name"] == names[2]
+
+
+def test_codex_cli_reasoning_summary_and_include_are_accepted():
+    # Shape captured from codex-cli 0.166 against the bridge.
+    body = {"model": "hermes-router", "input": "hi", "stream": True, "store": False,
+            "reasoning": {"summary": "auto"}, "include": ["reasoning.encrypted_content"]}
+    payload, _ = api.to_chat(body, "hermes-router")
+    assert "reasoning" not in payload
+    payload, _ = api.to_chat({**body, "reasoning": {"effort": "high", "summary": "auto"}}, "hermes-router")
+    assert payload["reasoning"] == {"effort": "high"}
