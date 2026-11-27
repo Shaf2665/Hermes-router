@@ -1080,7 +1080,13 @@ def _resolve_proxy_key_by_tail(tail: str, keys: list[str]) -> str | None:
 
 
 def _trigger_restart(delay_s: float = 1.2) -> bool:
-    """Schedule a restart only for a verified standalone process managed by the CLI."""
+    """Restart an opted-in container's main process or a verified CLI-managed process."""
+    if (os.environ.get("HR_CONTAINER_RESTART") == "1" and os.getpid() == 1
+            and Path("/.dockerenv").exists()):
+        # Exiting PID 1 stops the container; its restart policy (unless-stopped or
+        # always) starts a fresh process that reloads the saved configuration.
+        threading.Timer(delay_s, lambda: os._exit(0)).start()
+        return True
     script = Path(__file__).resolve().parent / "scripts" / "restart.sh"
     if os.name == "nt" or not script.exists() or not shutil.which("bash"):
         return False

@@ -101,3 +101,41 @@ def test_browser_restart_requires_own_tracked_standalone_process(monkeypatch, tm
     timer.return_value.start.assert_called_once()
     router.os.environ['INVOCATION_ID'] = 'service-id'
     assert not router._trigger_restart()
+
+
+def test_container_restart_requires_opt_in_pid_one_and_docker(monkeypatch, tmp_path):
+    marker = tmp_path/'container-marker'
+    marker.touch()
+    exit_process = Mock()
+    env = {}
+    process = SimpleNamespace(name='nt', environ=env, getpid=lambda: 1, _exit=exit_process)
+    monkeypatch.setattr(router, 'os', process)
+    monkeypatch.setattr(router, 'Path', lambda p: marker if str(p) == '/.dockerenv' else Path(p))
+    timer = Mock()
+    monkeypatch.setattr(router.threading, 'Timer', timer)
+    assert not router._trigger_restart()            # no opt-in
+    env['HR_CONTAINER_RESTART'] = '1'
+    process.getpid = lambda: 22
+    assert not router._trigger_restart()            # not the container's main process
+    process.getpid = lambda: 1
+    marker.unlink()
+    assert not router._trigger_restart()            # not inside Docker
+    marker.touch()
+    assert router._trigger_restart()
+    timer.return_value.start.assert_called_once()
+    exit_process.assert_not_called()                # the HTTP response goes out first
+    delay, callback = timer.call_args.args
+    assert delay >= 1
+    callback()
+    exit_process.assert_called_once_with(0)
+
+
+def test_container_restart_endpoint_is_admin_only(monkeypatch):
+    trigger = Mock(return_value=True)
+    monkeypatch.setattr(router, '_trigger_restart', trigger)
+    client = router.app.test_client()
+    assert client.post('/v1/config/restart').status_code == 401
+    assert client.post('/v1/config/restart', headers=APP).status_code in (401, 403)
+    trigger.assert_not_called()
+    assert client.post('/v1/config/restart', headers=ADMIN).status_code == 200
+    trigger.assert_called_once()
