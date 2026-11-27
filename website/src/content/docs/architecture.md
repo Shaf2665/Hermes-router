@@ -223,11 +223,13 @@ The same `router.py` engine runs everywhere; you choose how to launch it and how
 **Run it:**
 
 - **`hr` CLI** *(Linux/macOS/WSL)* — `hr setup`, `hr auth add`, `hr status`, `hr restart`. The
-  friendly day-to-day way to manage a local router. See [Deployment](/deployment/#path-2--linux--macos-the-hr-way).
-- **Docker image** — the prebuilt multi-arch [`shafiq735/hermes-router`](https://hub.docker.com/r/shafiq735/hermes-router)
-  runs the same on Windows, macOS, and Linux: `docker run -p 8319:8319 …`. See [Deployment](/deployment/#path-1--docker-easiest-any-os).
+  friendly day-to-day way to manage a local router. See [Mac or Linux setup](/setup/#mac-or-linux-without-docker).
+- **Docker** — the bundled Compose file builds the image from source and runs the same on
+  Windows, macOS, and Linux: `docker compose up -d --build`. Prebuilt multi-arch
+  [`shafiq735/hermes-router`](https://hub.docker.com/r/shafiq735/hermes-router) images exist but can lag
+  behind the source. See [Docker setup](/setup/#docker-on-your-computer).
 - **Hugging Face Space** — host it on a Space; plan eligibility and sleeping behavior depend
-  on the selected hardware/account. See [Deployment](/deployment/#path-4--hugging-face-space-host-it-online).
+  on the selected hardware/account. See [Other hosting services](/deployment/#other-hosting-services).
 
 **Connect to it:**
 

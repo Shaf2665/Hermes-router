@@ -216,7 +216,7 @@ The `./install.sh` step puts `hr` (and the full name `hermes-router`) on your PA
 | `hr start` | Run the router (same as `python router.py`) |
 | `hr service install` | Run as a service that **survives reboots** (systemd; `status`/`uninstall` too) |
 | `hr status` | Live dashboard — per-provider health, latency, cache stats |
-| `hr restart` | Restart the router so key/config changes take effect |
+| `hr restart` | Restart the router so `hr`/`.env` changes take effect (most dashboard changes apply live) |
 | `hr doctor` | Diagnose installation issues (Python, venv, keys, PATH, router health) |
 | `hr update` | Update to the latest version (safe; auto-rolls-back on failure) |
 | `hr version` | Show the installed version |
@@ -241,7 +241,9 @@ your own in `.env` and run `hr restart`.
 unhealthy and is cooling off; it'll be re-probed automatically. If it shows `no keys`, add
 some with `hr auth add`.
 
-**Keys not picked up after adding** — you must `hr restart` for new keys to load.
+**Keys not picked up after adding** — keys added with `hr auth add` (or saved in the dashboard with
+manual model selection) load after `hr restart`. Dashboard keys saved with automatic model selection
+apply immediately.
 
 **Port already in use** — something else is on `8319`. Set `PORT=8320` in `.env` (and point
 your app at the new port), then `hr restart`.

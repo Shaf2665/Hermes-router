@@ -1,300 +1,274 @@
 ---
-title: Local and server setup
-description: Install Hermes Router on Windows, Windows Server, or Linux, with or without Docker, connect a provider, and verify your first request.
+title: "Set up on your computer"
+description: "Install Hermes Router on Windows, macOS, Linux or Docker, connect a provider, and verify your first request."
 ---
-# Set up Hermes locally or on a server
 
-These instructions apply to the **current `main` source checkout**. Published Docker images and extension packages may lag behind source changes. Update the router's dashboard and Python modules together; do not copy individual new files into an older install.
+This guide gets you from a fresh install to your first AI reply. For a machine
+you connect to remotely, use [Server setup](/deployment/).
 
-Get the current source from GitHub into a new directory:
+Choose **one** method below. Docker users do not need Python or Node.js.
+Native users need Python; Git is optional. Every method serves the dashboard and
+API together on port **8319**.
 
-```bash
-git clone --branch main --single-branch https://github.com/Shaf2665/Hermes-router.git Hermes-router
+- [Windows without Docker](#windows-without-docker)
+- [Mac or Linux without Docker](#mac-or-linux-without-docker)
+- [Docker on your computer](#docker-on-your-computer)
+
+## Windows without Docker
+
+### 1. Install Python
+
+Install [Python](https://www.python.org/downloads/windows/) **3.10 or newer**.
+If the installer offers **Add Python to PATH**, enable it. Open a new PowerShell
+window and run `python --version`. Continue when it shows a version such as
+`Python 3.12.x`, not a Store prompt or “command not found”.
+
+### 2. Download Hermes
+
+Download the [source ZIP](https://github.com/Shaf2665/Hermes-router/archive/refs/heads/main.zip),
+right-click it and choose **Extract All**. Open the extracted folder containing
+`install.ps1`, `start.ps1` and `router.py`. Right-click inside that folder and
+choose **Open in Terminal**. Use a PowerShell tab.
+
+If you prefer Git, run this instead of downloading the ZIP:
+
+```powershell
+git clone https://github.com/Shaf2665/Hermes-router.git Hermes-router
 cd Hermes-router
 ```
 
-Without Git, download the [main source ZIP](https://github.com/Shaf2665/Hermes-router/archive/refs/heads/main.zip) and extract it. Run the platform instructions below from that folder.
+### 3. Install and start
 
-For dashboard-to-extension context sync, use the router from this source and build
-**extension 0.9.10** as described in [VS Code Extension](/vscode-extension/).
-Confirm your model capacities after upgrading, then verify synchronization using
-the [context guide](/context-sync/). Published 0.9.7 fixes dashboard loading but
-does not contain context sync; restarting an old container does not install new code.
-
-Hermes runs the API and dashboard together. The Vercel website is documentation, not your private router. You need Python 3.10+ for a native installation, or Docker with Compose. You also need one provider account/key or a running local model. Provider usage may cost money; Hermes does not supply a subscription.
-
-| Where you run it | Installation | Starts after reboot |
-| --- | --- | --- |
-| Windows 10/11 | Native PowerShell or Docker Desktop in Linux-container mode | Task Scheduler for native; Docker after Desktop starts |
-| Windows Server | Native PowerShell | Task Scheduler at startup |
-| Linux computer/server | Native Python or Docker Engine + Compose | systemd for native; Docker restart policy |
-| macOS | Native Python or Docker Desktop | launchd guidance or Docker after Desktop starts |
-
-The images use Linux containers. Docker Desktop is [not supported on Windows Server](https://docs.docker.com/desktop/troubleshoot-and-support/faqs/windowsfaqs/); use the native instructions there, or a Linux VM running Docker. For Windows 10/11 with Docker already installed, start Desktop and select Linux containers. Check [Docker's current Windows requirements](https://docs.docker.com/desktop/setup/install/windows-install/) for supported Windows builds and WSL versions.
-
-## Published packages (2026-11-03)
-
-The earlier `shafiq735/hermes-router:providers-20261103` and `:providers-20261103-cli`
-images are for Linux AMD64 and ARM64. These dated images predate context sync.
-Use the source-based Docker setup below for this feature; moving `latest` and `cli`
-tags are not a guarantee that a specific source change is included.
-
-For a fresh install without building source, run this single command in PowerShell or Bash:
-
-```bash
-docker run -d --name hermes-router --restart unless-stopped -e HR_CONTAINER_RESTART=1 -p 127.0.0.1:8319:8319 -v hermes-data:/app/data shafiq735/hermes-router:providers-20261103
-```
-
-Use `providers-20261103-cli` instead if you need `docker exec hermes-router hr status`. Open `http://localhost:8319` and retrieve the administrator credential with:
-
-```bash
-docker exec hermes-router python -c "from pathlib import Path; print(next(x.split('=',1)[1] for x in Path('/app/data/.env').read_text().splitlines() if x.startswith('ADMIN_API_KEY=')))"
-```
-
-The published [VS Code 0.9.7 VSIX](https://github.com/Shaf2665/Hermes-router/releases/download/vscode-v0.9.7/hermes-router-0.9.7.vsix) includes administrator controls and the dashboard-loading fix. For context sync, build 0.9.10 from this checkout and install it using **Extensions: Install from VSIX…**.
-
-Before upgrading an existing container, back up its configuration and mounted data. Pulling an image does not upgrade a running container: recreate it with the same volume, environment variables, ports and restart policy. Old installs that stored `.env` or `auth.json` only inside `/app` must copy them into the mounted data directory before recreation. Keep application keys for inference; retrieve the separate administrator key for dashboard access. See the backup section below.
-
-## 1. Run on your computer
-
-### Windows (PowerShell)
-
-Install Python 3.10+ with its PATH option enabled. Extract the source archive to a folder you can write to, then open PowerShell there. For example:
+Run these commands one at a time:
 
 ```powershell
-cd D:\Hermes-router
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 powershell -ExecutionPolicy Bypass -File .\start.ps1
 ```
 
-The execution-policy override applies only to that invocation. The installer creates `venv`, installs requirements and preserves existing settings. `start.ps1` listens only on localhost. Keep that terminal open; Ctrl+C stops Hermes. Use `-Port 8320` if 8319 is occupied.
+The first installs Python libraries into Hermes's own `venv` folder. The second
+starts Hermes. Leave this terminal open. **Ctrl+C** stops it. The execution-policy
+option affects only that command, not your system policy.
 
-Open [http://localhost:8319](http://localhost:8319). In another PowerShell window, read your locally stored administrator key:
+### 4. Sign in
+
+Open [http://localhost:8319](http://localhost:8319). In a **second PowerShell tab**,
+open the same Hermes folder and run:
 
 ```powershell
 Get-Content .env | Select-String '^ADMIN_API_KEY='
 ```
 
-Copy only the value after `=` into the dashboard sign-in. This is a local secret; do not put it in an SDK, screenshot or shared workspace settings. Restarting signs browser sessions out.
+Copy only the value after `=` into the dashboard sign-in. Keep this key private.
+Continue to [Connect a provider and test it](#connect-a-provider-and-test-it).
 
-### macOS / Linux / WSL
+## Mac or Linux without Docker
 
-From the source folder:
+### 1. Check Python
+
+Open Terminal and run `python3 --version`. You need **Python 3.10 or newer**.
+On a Mac, install it from [python.org](https://www.python.org/downloads/macos/).
+On Ubuntu/Debian, install Python and its environment tools with:
 
 ```bash
+sudo apt update
+sudo apt install python3 python3-venv python3-pip git
+```
+
+### 2. Download, install and start
+
+```bash
+git clone https://github.com/Shaf2665/Hermes-router.git Hermes-router
+cd Hermes-router
 bash install.sh
 ./hermes-router start
 ```
 
-Open [http://localhost:8319](http://localhost:8319). In a second terminal, in the same folder:
+Without Git, download and extract the [source ZIP](https://github.com/Shaf2665/Hermes-router/archive/refs/heads/main.zip),
+open Terminal in the folder containing `install.sh`, then run the last two commands.
+Leave the terminal open; **Ctrl+C** stops Hermes. The optional `hr` shortcut added
+by the installer may need a new terminal before it is available.
+
+These steps also work in **WSL** on Windows, which gives you the full `hr` command set.
+
+### 3. Sign in
+
+Open [http://localhost:8319](http://localhost:8319). In a **second terminal**, open
+the same Hermes folder and run:
 
 ```bash
 sed -n 's/^ADMIN_API_KEY=//p' .env
 ```
 
-Paste that value into the dashboard. `install.sh` provides the optional `hr` shortcut; the explicit `./hermes-router` command also works before opening a new shell. Ctrl+C stops a foreground router.
+Paste the value into the dashboard. Continue below to connect a provider.
 
-For a native installation that should survive reboot, follow the Linux systemd or Windows Task Scheduler steps below. On macOS, `hr service` prints launchd guidance.
+## Docker on your computer
 
-### Docker on your computer
+### 1. Start Docker
 
-Start Docker Desktop (or Docker Engine), then run from the source folder:
+Use [Docker Desktop](https://docs.docker.com/desktop/) on a supported Windows PC or
+Mac, or [Docker Engine](https://docs.docker.com/engine/install/) on Linux. Wait for
+Docker to start, then run `docker info`. Continue when it shows server information
+rather than a connection error.
+
+Hermes uses **Linux containers**. Check Docker's [Windows requirements](https://docs.docker.com/desktop/setup/install/windows-install/).
+Docker Desktop is [not supported on Windows Server](https://docs.docker.com/desktop/troubleshoot-and-support/faqs/windowsfaqs/);
+use [native Windows Server setup](/deployment/#windows-server) there.
+
+### 2. Start Hermes
+
+Download the source as in the [Windows](#2-download-hermes) or
+[Mac/Linux](#2-download-install-and-start) steps (the ZIP or `git clone`; you do not
+need to run the installer). Then, in the folder containing `docker-compose.yml`:
 
 ```bash
 docker compose up -d --build
 docker compose ps
-docker compose logs --tail 30
 ```
 
-No pre-existing `.env` is required. Open [http://localhost:8319](http://localhost:8319). Retrieve the generated administrator key locally:
+Docker builds Hermes from that source, so it always matches the code you downloaded.
+Look for a running `hermes-router` service. The Compose volume keeps keys, settings
+and usage when the container is replaced, and the port is available only on your
+computer. The dashboard's **Restart Now** button works too: the Compose file lets
+Hermes restart its own container.
+
+Published Docker Hub images can lag behind the source. Use one only if its release
+notes list the features you need, and keep its `-v hermes-data:/app/data` volume.
+
+### 3. Sign in
+
+Open [http://localhost:8319](http://localhost:8319). In the same folder, get the
+generated administrator key with this one-line command:
 
 ```bash
 docker compose exec hermes-router python -c "from pathlib import Path; print(next(x.split('=',1)[1] for x in Path('/app/data/.env').read_text().splitlines() if x.startswith('ADMIN_API_KEY=')))"
 ```
 
-The named volume `hermes-data` persists credentials, configuration, usage and optional cache. The host port is bound to `127.0.0.1`, so it is not publicly exposed. `docker compose stop` stops the service; `docker compose start` resumes it. Do not use `down -v` if you want to keep your data.
+Paste it into the sign-in screen. Continue below. No initial `.env` is required;
+settings are saved in the mounted `/app/data`.
 
-## 2. Connect a provider and send your first request
+## Connect a provider and test it
 
-1. Sign in with the **administrator key**. Existing application keys now authenticate inference only.
-2. Open **Providers**, add your provider key and check the selected model. For a local model, configure `LOCAL_BASE_URL` and `LOCAL_MODEL` in the environment file instead (see below).
-3. If the dashboard says a restart is required, restart the actual hosting process. Windows: Ctrl+C and run `start.ps1` again. Docker: `docker compose restart`. Native Linux/macOS foreground: Ctrl+C and start again. For a systemd service or CLI-managed background process, use `hr restart`. Browser restart works for a verified CLI-managed standalone process, and for Docker containers started with `HR_CONTAINER_RESTART=1` and a restart policy (`unless-stopped` or `always`); the bundled `docker-compose.yml` and the `docker run` example above set both. Other hosts show instructions.
-4. Open **Connect**, create an **application key**, and save it when it is shown. This is the key for your coding tool or SDK, not the administrator key.
-5. Choose **Send test message**. It sends a real, small request through the selected provider and may consume quota. A successful `/health` response alone does not prove inference works.
-6. Copy the endpoint, model and application key into your client. On the same computer: OpenAI base URL `http://localhost:8319/v1`, model `hermes-router`. Anthropic clients use `http://localhost:8319`.
+These steps are the same for native, Docker and server installations.
 
-For a simple terminal request on Linux/macOS:
+### 1. Add your AI provider
 
-```bash
-read -rs -p 'Application key: ' HERMES_KEY
-echo
-curl --fail-with-body http://localhost:8319/v1/chat/completions \
-  -H "Authorization: Bearer $HERMES_KEY" \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"hermes-router","messages":[{"role":"user","content":"Say hello in one short sentence."}],"max_tokens":64}'
-unset HERMES_KEY
-```
+1. Sign in to the dashboard with your **administrator key**.
+2. Open **Providers** and choose a provider.
+3. Click **Get API key** to open its website. Sign in/create your provider account
+   and obtain a key. Check the available models and any billing requirements.
+4. Paste the key into Hermes. For a provider with free models (such as Gemini,
+   OpenRouter or Groq), keep **Model selection** on *Automatically add free chat
+   models*. For a paid account (OpenAI, Anthropic and most others), choose
+   *Choose models manually*, click **Refresh model list** (or use the suggestions)
+   and select at least one model your account can use.
+5. Click **Save provider**.
 
-Use the dashboard test on Windows, or these PowerShell commands (the key is prompted rather than embedded in your shell history):
+With automatic model selection, Hermes looks up the provider's **free** chat models in
+the background and uses them without a restart. It skips anything it cannot confirm
+as free, so a paid-only key ends up with no models; the provider card then tells you
+to choose models manually. Changing models, rotation and settings later applies
+immediately.
 
-```powershell
-$applicationKey = Read-Host 'Application key'
-$body = @{ model='hermes-router'; messages=@(@{role='user'; content='Say hello in one short sentence.'}); max_tokens=64 } | ConvertTo-Json -Depth 4
-Invoke-RestMethod -Method Post -Uri 'http://localhost:8319/v1/chat/completions' -Headers @{Authorization="Bearer $applicationKey"} -ContentType 'application/json' -Body $body
-Remove-Variable applicationKey
-```
+One case still needs a restart: saving a **new key with models chosen manually**. The
+dashboard then shows a banner. How to restart depends on how you started Hermes:
 
-In VS Code, keep the application key for chat. Use the extension's dedicated administrator connection command only if you want global status or remote management. Admin credentials are stored separately in VS Code SecretStorage.
-
-### Local model instead of a cloud provider
-
-For a native Hermes process and a local OpenAI-compatible server, add the actual URL/model ID to `.env`, then restart:
-
-```dotenv
-LOCAL_BASE_URL=http://127.0.0.1:11434/v1
-LOCAL_MODEL=your-installed-model-id
-```
-
-Inside Docker, `127.0.0.1` means the container. Docker Desktop can use `http://host.docker.internal:11434/v1` if the model server accepts that connection. On Linux, use a reachable private host address or configure a host-gateway mapping explicitly. Local-first routing can still fall back to cloud providers; do not interpret it as a local-only privacy guarantee.
-
-## 3. Run on a server
-
-### Linux with Docker
-
-The simplest server path uses Docker Compose and SSH access. Install Docker Engine and the Compose plugin using [Docker's instructions for your distribution](https://docs.docker.com/engine/install/); for Ubuntu use the [official Ubuntu guide](https://docs.docker.com/engine/install/ubuntu/).
-
-For a first install, connect by SSH and clone `main` into a new directory:
-
-```bash
-ssh USER@SERVER
-git clone --branch main --single-branch https://github.com/Shaf2665/Hermes-router.git ~/hermes-router
-cd ~/hermes-router
-docker compose up -d --build
-docker compose ps
-curl --fail http://127.0.0.1:8319/health
-```
-
-Replace `USER` and `SERVER` with your SSH account and server address. Git must be installed; alternatively transfer and extract the main source ZIP. For an existing installation, use the backup/update section below. Docker commands require an account authorized to use the daemon; follow your server's administration policy rather than changing socket permissions.
-
-On your **own computer**, open an SSH tunnel:
-
-```bash
-ssh -N -L 8319:127.0.0.1:8319 USER@SERVER
-```
-
-Leave the tunnel open and visit [http://localhost:8319](http://localhost:8319). If a local Hermes already uses that port, use `-L 8320:127.0.0.1:8319` and visit `http://localhost:8320`. Retrieve the administrator key with the Docker command above in your SSH session, then follow the provider/test steps. Your client base URL uses the **local tunnel port**.
-
-This needs no public router port or domain. `restart: unless-stopped` restarts the container with Docker after a reboot unless you explicitly stopped it; verify the Docker service starts at boot.
-
-### Linux directly (without Docker)
-
-Clone or extract the same current source to a permanent directory owned by the account that will run Hermes, such as `~/hermes-router`. Use a Python 3.10+ installation with its `venv` module and Bash; on Ubuntu/Debian, install the `python3-venv` package if creating the environment fails.
-
-```bash
-cd ~/hermes-router
-bash install.sh
-./hermes-router start
-```
-
-Use the SSH tunnel above, retrieve `ADMIN_API_KEY` from this directory's `.env`, and complete the provider/test flow. Once that works, stop the foreground process with Ctrl+C and install the existing systemd service:
-
-```bash
-./hermes-router service install
-./hermes-router service status
-curl --fail http://127.0.0.1:8319/health
-```
-
-Run the installer as the intended non-root service account. It may request sudo to install the system unit; the unit runs as that account. Without sudo, it uses a user unit and attempts to enable lingering for startup without an interactive login. If that fails, an administrator must enable lingering before relying on boot startup. Keep the source directory in place: the service runs from it.
-
-Use `./hermes-router restart` after settings changes. For a system unit, inspect logs with `sudo journalctl -u hermes-router -n 50 --no-pager`; for a user unit, use `journalctl --user -u hermes-router -n 50 --no-pager`. Check the service and a request after the next reboot. Keep `HOST=127.0.0.1`; use the tunnel or HTTPS proxy for remote clients.
-
-### Windows Server directly (also works on Windows 10/11)
-
-Use a regular dedicated account with access to Python 3.10+ and write access to the extracted source directory. Follow the PowerShell install/start instructions above and complete a local dashboard test first. Hermes does not require WSL, Git Bash, Docker, Node, or an administrator account to run.
-
-For unattended startup, use Windows **Task Scheduler → Create Task**. The [Microsoft task scheduling reference](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/schtasks-create) covers startup triggers and account options.
-
-| Task field | Value |
+| Started with | Restart |
 | --- | --- |
-| Name | `Hermes Router` |
-| User account | The dedicated account that owns the installation |
-| Security option | Run whether user is logged on or not; leave highest privileges unchecked |
-| Trigger | At startup, with a 30-second delay |
-| Action/program | Full path to `venv\Scripts\python.exe`, for example `D:\Hermes-router\venv\Scripts\python.exe` |
-| Action/arguments | `"D:\Hermes-router\router.py"` (replace with your actual source path) |
-| Action/start in | `D:\Hermes-router` (your source directory, without quotes) |
-| Conditions | Disable the AC-power condition if running on a laptop |
-| Settings | Allow on-demand run; restart on failure after 1 minute; do not start a new instance if already running |
-| Execution time limit | Disable "Stop the task if it runs longer than" |
+| `start.ps1` on Windows | **Ctrl+C**, then run `start.ps1` again |
+| `./hermes-router start` on Mac/Linux | **Ctrl+C**, then run it again |
+| Docker Compose | **Restart Now** in the banner, or `docker compose restart` |
+| A service (`./hermes-router service install`) | `./hermes-router restart` |
 
-Save with the account's Windows credentials when prompted. The account may need the "Log on as a batch job" right under your server's policy. Stop the foreground copy before selecting **Run** on the task; only one process should use the port and data directory. Verify:
+Saving a provider can send small background checks, so it may use provider quota.
+Hermes is free software; the selected provider/model may charge for requests.
 
-```powershell
-Get-ScheduledTask -TaskName 'Hermes Router' | Select-Object TaskName, State
-Invoke-RestMethod 'http://127.0.0.1:8319/health'
-```
+**Using Ollama or LM Studio?** Start the model server and load/download a model there
+first. In **Providers**, choose **Local model (Ollama / LM Studio)**. Enter its
+OpenAI-compatible URL, tick **No API key** if appropriate, select the model and
+save; it applies immediately. Native Hermes on the same computer can usually use
+`http://localhost:11434/v1` for Ollama or `http://localhost:1234/v1` for LM Studio.
+Any other OpenAI-compatible server can be added as a **Custom provider**. See the
+[provider guide](/providers/#custom-openai-compatible-providers).
 
-Open the dashboard on the server (for example through an RDP session), or use an SSH tunnel if Windows OpenSSH Server is already configured. For shared remote access, configure an HTTPS reverse proxy as below. The default router port remains loopback-only; opening a firewall rule alone will not expose it.
+Inside Docker, `localhost` is the container. Docker Desktop can use
+`host.docker.internal` to reach a model on the host if its server accepts that
+connection. Linux Docker needs a reachable host address or host-gateway setup.
+A remote Hermes server cannot reach your PC's model through its own `localhost`.
 
-Use Task Scheduler **End**, then **Run** to restart after a configuration change. End stops this foreground Python task; confirm the port is released before starting again. Recheck its running state and `/health` after a reboot. Task history and Event Viewer help diagnose startup failures. Keep `.env`, `auth.json`, and the usage database private to the service account and administrators.
+### 2. Create an application key
 
-### Optional: HTTPS address for a team
+Open **Connect**, enter an application name such as `My VS Code`, and create a key.
+Copy it while it is shown. This key goes into your app; the administrator key stays
+with the owner. Manage keys under **Settings → Application access**.
 
-For an InstaBox VM, follow the [InstaBox hosting guide](/instabox/) for a public HTTPS dashboard and persistent storage.
+### 3. Send a test message
 
-Use a domain you control and a trusted reverse proxy. For example, with Caddy installed on the host, a DNS record pointing at the server, and ports 80/443 directed to Caddy:
+Click **Send test request** in Connect. It sends a real, small AI request.
+**A reply means setup is working.** If it fails, check the provider key, model and
+quota. A green `/health` response alone does not test your AI provider.
+
+### 4. Connect VS Code or another app
+
+Follow the [VS Code tutorial](/vscode-extension/), or use the values in Connect.
+On the same computer, an OpenAI-compatible app uses:
 
 ```text
-ai.example.com {
-    reverse_proxy 127.0.0.1:8319
-}
+Base URL: http://localhost:8319/v1
+Model: hermes-router
+API key: your application key
 ```
 
-See [Caddy's reverse-proxy guide](https://caddyserver.com/docs/quick-starts/reverse-proxy) for certificate and service setup. Keep port 8319 loopback-only. Enable `HR_TRUST_PROXY=1` in the router's persisted `/app/data/.env` and restart before using browser sessions through HTTPS. Enable that setting only when the router is reachable exclusively through a trusted proxy which overwrites forwarding headers. Native installs use their own `.env`.
+The extension's Base URL is `http://localhost:8319` (a trailing `/v1` is accepted).
+Anthropic clients use `http://localhost:8319` without `/v1`. See [API examples](/usage/).
 
-Application base URL: `https://ai.example.com/v1`; administrator dashboard: `https://ai.example.com/dashboard`. Give each client its own application key and limits. Share neither the admin key nor one common app key with the entire team. Key labels identify applications; this release is not an SSO/user-invitation service.
+## Stop, start and run after a reboot
 
-Money budgets are estimated-spend controls. Under a money limit, candidates with unknown pricing or an unbounded output budget are rejected. They do not guarantee that a provider's invoice exactly matches Hermes's estimates.
+| Installation | Stop | Start again |
+| --- | --- | --- |
+| Windows native | Ctrl+C in its terminal | Run `start.ps1` as shown above |
+| Mac/Linux native | Ctrl+C in its terminal | `./hermes-router start` in the source folder |
+| Docker Compose | `docker compose stop` | `docker compose start` in the source folder |
+| Docker run (prebuilt image) | `docker stop hermes-router` | `docker start hermes-router` |
 
-## 4. Backup, update and recover
+Docker's restart policy works when Docker starts; Docker Desktop must be running.
+An explicitly stopped container stays stopped until you start it. For native
+startup, see [Linux service](/deployment/#linux-without-docker),
+[Windows Task Scheduler](/deployment/#windows-server), or
+[macOS login startup](/deployment/#macos-login-startup).
 
-For Docker, stop the service briefly and copy its data directory to a private backup directory on the host:
+## Version notes
 
-```bash
-docker compose stop
-mkdir -p ../hermes-backup
-chmod 700 ../hermes-backup
-docker compose cp hermes-router:/app/data/. ../hermes-backup/
-docker compose start
-```
+These steps use the current `main` source. Update the router's dashboard and Python
+modules together; do not copy individual new files into an older install.
+Restarting an old container does not install new code: rebuild it from new source.
 
-The backup contains secrets; keep it private. Before an update, retain the previous source version/image and this backup. Apply the new tested source, then run `docker compose up -d --build`; verify `/health`, admin sign-in and a user-triggered message. Roll back by restoring the previous source/image and, if the storage format changed, its matching backup while the router is stopped. Do not overwrite live SQLite files.
+The published [VS Code 0.9.7 VSIX](https://github.com/Shaf2665/Hermes-router/releases/download/vscode-v0.9.7/hermes-router-0.9.7.vsix)
+includes administrator controls and the dashboard-loading fix, but not context sync.
+For dashboard-to-extension context sync, build **extension 0.9.10** from this source
+as described in [VS Code Extension](/vscode-extension/), confirm your model
+capacities, then follow [Verify after upgrading](/context-sync/#verify-after-upgrading).
+**Settings → Context length** sets a minimum context; choose **Auto** to keep
+ordinary routing until you want one.
 
-For dashboard-managed Docker instances, the launcher uses the named `<container-name>-data` volume mounted at `/data`. New containers keep `.env`, `auth.json`, `usage.db`, `instances.json`, `cache.db` and `router_state.json` there. Containers created with the initial foundation image may instead have `.env`, `usage.db` and `instances.json` in a separate `/app/data` volume. Before removing or recreating one, stop it and privately back up **both** `/data` and `/app/data`; preserve the administrator credential and SQLite ledger when migrating to `/data`. Do not overwrite existing files blindly or copy a live SQLite database. Updating the launcher does not migrate or modify existing containers.
-
-For native installs, stop Hermes and back up `.env`, `auth.json`, `usage.db`, `instances.json`, and optional `cache.db`/`router_state.json` where present. Run the installer again after updating source, then restart. Existing settings are preserved.
-
-For context sync, keep the persisted environment file containing `ROUTER_CONTEXT_CONFIG`.
-If the server has custom changes, preserve and reconcile them before applying `main`.
-Build/install the matching extension and follow [Verify after upgrading](/context-sync/#verify-after-upgrading).
-The merge, router deployment, VSIX installation, and package publication are separate steps.
-
-Lost admin credential: retrieve `ADMIN_API_KEY` from the local environment file using filesystem/SSH access. To rotate it, replace its value with a new strong random value and restart. If the value is supplied by a service/container environment variable, rotate that source too. Never reset all client keys merely to recover dashboard access.
-
-Application key revoked or replaced: create a new key through the authenticated dashboard and update that client. Revocation rejects new requests immediately; an already admitted response may finish. Use the usage screen to distinguish current, estimated and reported amounts.
+The broader OmniRoute parity work remains staged. This source does not claim support
+for every provider, Responses/Gemini/media endpoint, memory engine or agent protocol
+in that roadmap.
 
 ## Troubleshooting
 
-| Symptom | Next action |
+| What you see | What to do |
 | --- | --- |
-| Docker cannot connect to its engine | Start Docker Desktop/Engine and rerun `docker compose ps`. |
-| Port already occupied | Stop the other process or choose another host port; update the browser/client URL too. |
-| Dashboard rejects an old proxy key | Use the separate `ADMIN_API_KEY`; your app keeps its inference key. |
-| No configured/compatible provider | Add a provider or local model, apply pending restart, and check tools/vision/model eligibility. |
-| Provider key saved but test still fails | Check the restart banner and model ID, then read the request error; saving a key is not a connectivity test. |
-| 429 from Hermes | Check this application's request/token/money limit and the retry delay. |
-| Everything is unavailable | Check provider credentials, quotas and network access; failover needs another eligible provider. |
-| Remote dashboard works, client cannot connect | Use the server's HTTPS address or the client's own SSH tunnel; `localhost` always means the machine running that client. |
-| Restart is unsupported in the dashboard | Restart using `start.ps1`, the service manager or `docker compose restart` on the host. |
+| Python opens the Store or is not found | Install Python, enable PATH if offered, and open a new terminal. |
+| Docker cannot connect to its engine | Start Docker Desktop/Engine; retry `docker info`. |
+| Port already in use | Stop the other copy. On Windows use `start.ps1 -Port 8320`; for Docker Compose put `PORT=8320` in a `.env` file next to `docker-compose.yml` and run `docker compose up -d` again. Use port 8320 in the browser and app too. |
+| Browser cannot open localhost:8319 | Check the terminal for errors, or run `docker compose logs --tail 30`. Keep the native process running. |
+| Dashboard says unauthorized | Use `ADMIN_API_KEY` from this installation, not a provider/application key. |
+| No model replies | Check the provider card in Providers (discovery result, selected models), its key and quota, then retry the Connect test. |
+| Dashboard shows a restart banner | Restart as shown in [the restart table](#1-add-your-ai-provider). Saved settings are kept; browser sessions end, so sign in again. |
+| Restart Now says restart is unsupported | Expected for `start.ps1`, a foreground `./hermes-router start` and services: restart from the terminal or with `./hermes-router restart`. The button works for Docker Compose installs (`HR_CONTAINER_RESTART=1` with a restart policy). |
+| App says 401 | Copy a current application key from Connect into the app. |
+| App says 429 | Check its limits in Application access and wait for the retry period. |
+| Context-length error | Lower the extension's setting or configure a model with sufficient known capacity. See [context settings](/configuration/#context-length-and-the-vs-code-extension). |
 
-The broader OmniRoute parity work remains staged. This source does not claim support for every provider, Responses/Gemini/media endpoint, memory engine or agent protocol in that roadmap.
+Before changing versions, follow [Backup and update](/deployment/#backup-and-update).

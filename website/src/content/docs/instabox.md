@@ -2,7 +2,6 @@
 title: InstaBox hosting
 description: Deploy Hermes on an InstaBox VM with a public HTTPS address and persistent settings.
 ---
-# Host Hermes Router on InstaBox
 
 This deployment runs the dashboard and API on an existing Docker-capable InstaBox VM,
 behind a small Nginx gateway and InstaBox's public HTTPS address. The router image is

@@ -20,8 +20,10 @@ export default defineConfig({
 					label: 'Start Here',
 					items: [
 						{ label: 'Introduction', slug: 'index' },
-						{ label: 'Getting Started', slug: 'getting-started' },
-						{ label: 'Local and Server Setup', slug: 'setup' },
+						{ label: 'Start Here', slug: 'getting-started' },
+						{ label: 'Set Up on Your Computer', slug: 'setup' },
+						{ label: 'Set Up on a Server', slug: 'deployment' },
+						{ label: 'Connect VS Code', slug: 'vscode-extension' },
 						{ label: 'Core Concepts', slug: 'concepts' },
 						{ label: 'Routing Features', slug: 'routing' },
 					],
@@ -29,7 +31,6 @@ export default defineConfig({
 				{
 					label: 'Set It Up',
 					items: [
-						{ label: 'Deployment', slug: 'deployment' },
 						{ label: 'InstaBox Hosting', slug: 'instabox' },
 						{ label: 'Providers', slug: 'providers' },
 						{ label: 'Free Model Rankings', slug: 'free-model-rankings' },
@@ -65,7 +66,6 @@ export default defineConfig({
 				{
 					label: 'Tools',
 					items: [
-						{ label: 'VS Code Extension', slug: 'vscode-extension' },
 						{ label: 'Context Synchronization', slug: 'context-sync' },
 					],
 				},
