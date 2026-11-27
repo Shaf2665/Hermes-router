@@ -148,6 +148,10 @@ def _model_enabled(provider, model):
     return (provider, model) not in _DISABLED_MODELS
 
 
+# Bumped by live model-list edits; part of the response-cache namespace.
+_PROVIDER_ROSTER_GENERATION = 0
+
+
 def _model_policy_revision(policy=None):
     return hashlib.sha256(json.dumps(sorted(_DISABLED_MODELS if policy is None else policy)).encode()).hexdigest()
 
@@ -4707,7 +4711,7 @@ def _route_completion(payload: dict, streaming: bool, ns: str = ""):
     # Retain this exact snapshot: even an A→B→A edit must not cache a response
     # routed through the temporary pool under the original pool's namespace.
     model_policy = _DISABLED_MODELS
-    ns += ":models:" + _model_policy_revision(model_policy)
+    ns += ":models:" + _model_policy_revision(model_policy) + ":roster:" + str(_PROVIDER_ROSTER_GENERATION)
     claude_only = has_request_context() and getattr(g, "claude_only", False)
     if claude_only:
         ns += ":claude-only"
@@ -5725,9 +5729,14 @@ def config_model(provider):
                                   "type": "invalid_request_error"}}), 400
 
     if request.method == "DELETE":
-        _env_write_line(env_var, None)
+        try:
+            _env_write_line(env_var, None)
+        except OSError:
+            return jsonify({"error": {"message": "Could not save model. Routing is unchanged."}}), 500
+        os.environ.pop(env_var, None)
         _cancel_free_discovery(provider)
-        return jsonify({"provider": provider, "reset": True, "restart_required": True})
+        _apply_live_models(provider)
+        return jsonify({"provider": provider, "reset": True, "restart_required": False})
 
     body = request.get_json(force=True, silent=True)
     if not isinstance(body, dict):
@@ -5743,9 +5752,34 @@ def config_model(provider):
     if not re.fullmatch(r"[A-Za-z0-9@+._\-:/, ]+", model):
         return jsonify({"error": {"message": "model contains unsupported characters",
                                   "type": "invalid_request_error"}}), 400
-    _env_write_line(env_var, model)
+    try:
+        _env_write_line(env_var, model)
+    except OSError:
+        return jsonify({"error": {"message": "Could not save model. Routing is unchanged."}}), 500
+    os.environ[env_var] = model
     _cancel_free_discovery(provider)
-    return jsonify({"provider": provider, "model": model, "restart_required": True})
+    _apply_live_models(provider)
+    return jsonify({"provider": provider, "model": model, "restart_required": False})
+
+
+def _apply_live_models(name):
+    """Give a running provider the model list a restart would build. Keys, pool
+    cooldowns and counters stay; new models use optimistic capabilities until the
+    next probe. Providers without usable keys are only saved."""
+    global _PROVIDER_ROSTER_GENERATION
+    current = next((p for p in PROVIDERS if p["name"] == name), None)
+    fresh = next((p for p in _build_providers() if p["name"] == name), None)
+    if current is None or fresh is None:
+        return
+    for model in fresh["models"]:
+        pool.ensure_model(name, model, current["keys"])
+    current["models"], current["model"] = fresh["models"], fresh["model"]
+    current["_manual_models"] = fresh["_manual_models"]
+    _provider_state.setdefault(name, {})["model"] = current["model"]
+    # Cached answers came from the old roster; a fresh namespace never reads them.
+    _PROVIDER_ROSTER_GENERATION += 1
+    if _free_discovery_enabled(current):
+        _queue_free_discovery(current)
 
 
 def _cancel_free_discovery(name):

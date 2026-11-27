@@ -24,8 +24,9 @@ The suggestions are dated snapshots, not a guarantee of availability or price.
 The live catalog may contain paid models. No model checkbox is selected for a new provider.
 
 You can repeat this for many providers, multiple keys and multiple models. Saving an
-existing key again is safe and lets you change the selected models. Provider credentials
-and model changes still require a restart; application access keys are managed separately.
+existing key again is safe and lets you change the selected models. Model changes for a
+provider that is already running apply immediately; a provider's first key still requires a
+restart unless automatic discovery activates it. Application access keys are managed separately.
 
 There are **65 API-key presets** (48 additions on 2026-11-03). Access labels distinguish
 free-model offers, trial/credit allowances and paid subscriptions. For newly added

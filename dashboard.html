@@ -1992,7 +1992,9 @@ async function addKey() {
             return;
         }
         configProviders.configured_models[provider] = models.join(',');
-        setMsg('cfg-key-msg', `Saved — ${provider}: ${models.length} model(s), ${d.total_keys} key(s). Restart Hermes to apply.`, true);
+        const restart = d.restart_required || modelData.restart_required;
+        setMsg('cfg-key-msg', `Saved — ${provider}: ${models.length} model(s), ${d.total_keys} key(s). ` + (restart ? 'Restart Hermes to apply.' : 'Applied immediately.'), true);
+        if (!restart) void refresh();
     }
     catch (e) {
         if (session === sessionGeneration && generation === providerSelectionGeneration) setMsg('cfg-key-msg', 'Save interrupted. The key may already be saved; retry to finish saving models.', false);
@@ -2016,8 +2018,9 @@ async function setModel() {
             setMsg('cfg-model-msg', apiError(d) || 'Failed.', false);
             return;
         }
-        setMsg('cfg-model-msg', `Set ${provider} → ${model}`, true);
-        showRestartBanner();
+        setMsg('cfg-model-msg', `Set ${provider} → ${model}. ` + (d.restart_required ? 'Restart to apply.' : 'Applied immediately.'), true);
+        if (d.restart_required) showRestartBanner();
+        void refresh();
     }
     catch (e) {
         setMsg('cfg-model-msg', 'Network error: ' + e.message, false);
@@ -2036,8 +2039,9 @@ async function resetModel() {
             return;
         }
         document.getElementById('cfg-model-value').value = '';
-        setMsg('cfg-model-msg', `Reset ${provider} to default.`, true);
-        showRestartBanner();
+        setMsg('cfg-model-msg', `Reset ${provider} to default. ` + (d.restart_required ? 'Restart to apply.' : 'Applied immediately.'), true);
+        if (d.restart_required) showRestartBanner();
+        void refresh();
     }
     catch (e) {
         setMsg('cfg-model-msg', 'Network error: ' + e.message, false);
