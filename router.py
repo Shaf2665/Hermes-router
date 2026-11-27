@@ -2712,17 +2712,15 @@ class RequestRingBuffer:
         self.maxlen = maxlen
 
     def append(self, entry: dict) -> None:
-        if self._buf is None:
-            return
+        # _buf is checked under the lock: resize() can switch it off at any time.
         with self._lock:
-            self._buf.append(entry)
+            if self._buf is not None:
+                self._buf.append(entry)
 
     def snapshot(self, limit: int = 100, provider: str | None = None,
                  status: str | None = None, endpoint: str | None = None) -> list:
-        if self._buf is None:
-            return []
         with self._lock:
-            items = list(self._buf)
+            items = list(self._buf) if self._buf is not None else []
         if provider:
             items = [e for e in items if e.get("provider") == provider]
         if status:
@@ -2733,17 +2731,20 @@ class RequestRingBuffer:
         return items[:limit]
 
     def clear(self) -> None:
-        if self._buf is None:
-            return
         with self._lock:
-            self._buf.clear()
+            if self._buf is not None:
+                self._buf.clear()
+
+    def resize(self, maxlen: int) -> None:
+        """Live on/off switch; 0 disables and drops the in-memory history."""
+        with self._lock:
+            self.maxlen = maxlen
+            self._buf = deque(self._buf or [], maxlen=maxlen) if maxlen > 0 else None
 
     @property
     def size(self) -> int:
-        if self._buf is None:
-            return 0
         with self._lock:
-            return len(self._buf)
+            return len(self._buf) if self._buf is not None else 0
 
     @property
     def enabled(self) -> bool:
@@ -2812,7 +2813,28 @@ class ResponseCache:
                      f"{'y' if len(rows)==1 else 'ies'}")
         except Exception as e:
             log.warning(f"Cache: could not open persistent store {db_path}: {e} — in-memory only")
+            if self._db is not None:
+                self._db.close()
             self._db = None
+
+    def open_store(self, db_path: str) -> bool:
+        """Live switch-on: open the mirror, then copy entries already in memory.
+        Requires ttl > 0: _init_db prunes rows older than ttl."""
+        with self.lock:
+            if self._db is None and self.ttl > 0:
+                self._init_db(db_path)
+                while len(self._store) > self.max_size:   # memory + preloaded rows
+                    self._db_delete(self._store.popitem(last=False)[0])
+                for key, (data, ts, ns, emb) in self._store.items():
+                    self._db_upsert(key, data, ts, ns, emb)
+            return self._db is not None
+
+    def close_store(self) -> None:
+        """Live switch-off: stop mirroring; rows already on disk are kept."""
+        with self.lock:
+            if self._db is not None:
+                self._db.close()
+                self._db = None
 
     def _db_upsert(self, key, data, ts, ns, emb):
         if self._db is None:
@@ -5967,6 +5989,7 @@ def _cancel_free_discovery(name):
 
 
 @app.route("/v1/config/features/<name>", methods=["POST"])
+@_locked_access
 def config_feature(name):
     """Toggle a flag-kind add-on on/off. Body: {"enabled": true|false}. Config-kind
     add-ons (per-key budgets, local model) aren't simple flag writes — use their
@@ -5981,19 +6004,49 @@ def config_feature(name):
         return jsonify({"error": {"message": f"'{name}' isn't a simple toggle — manage it with: {addon.get('manage', '(see docs)')}",
                                   "type": "invalid_request_error"}}), 400
 
-    global AUTO_DISCOVER_MODELS
+    global AUTO_DISCOVER_MODELS, CACHE_TTL, CACHE_PERSIST, SEMANTIC_CACHE, FAST_ROUTE_TOKENS
+    global COST_FX_RATE, REQUEST_LOG_SIZE
     body = request.get_json(silent=True)
     if not isinstance(body, dict) or type(body.get("enabled")) is not bool:
         return jsonify({"error": {"message": "enabled must be true or false"}}), 400
     enabled = body["enabled"]
-    _env_write_line(addon["env"], addon["on"] if enabled else addon["off"])
+    value = addon["on"] if enabled else addon["off"]
+    if name == "persistent_cache" and enabled and not cache.persistent:
+        # Opening with the response cache off would prune every stored row.
+        if cache.ttl <= 0:
+            return jsonify({"error": {"message": "Turn on Response cache first; the disk cache mirrors it."}}), 400
+        if not cache.open_store(CACHE_DB_PATH):
+            return jsonify({"error": {"message": "Could not open the cache store. Check CACHE_DB_PATH permissions."}}), 500
+    try:
+        _env_write_line(addon["env"], value)
+    except OSError:
+        if name == "persistent_cache" and enabled and not CACHE_PERSIST:
+            cache.close_store()   # undo the open above; runtime matches the saved file
+        return jsonify({"error": {"message": "Could not save this setting. Check file permissions and retry."}}), 500
     if name == "model_discovery":
         AUTO_DISCOVER_MODELS = enabled
         for provider in list(PROVIDERS):
             if _provider_model_discovery_enabled(provider) and _free_discovery_enabled(provider):
                 _queue_free_discovery(provider)
-        return jsonify({"name": name, "enabled": enabled, "restart_required": False})
-    return jsonify({"name": name, "enabled": enabled, "restart_required": True})
+    elif name == "response_cache":
+        with cache.lock:
+            cache.ttl = CACHE_TTL = int(value)
+    elif name == "persistent_cache":
+        if not enabled:
+            cache.close_store()
+        CACHE_PERSIST = enabled
+    elif name == "semantic_cache":
+        SEMANTIC_CACHE = enabled
+    elif name == "fast_routing":
+        FAST_ROUTE_TOKENS = int(value)
+    elif name == "cost_currency":
+        COST_FX_RATE = float(value)
+    elif name == "request_log":
+        REQUEST_LOG_SIZE = int(value) or REQUEST_LOG_SIZE
+        request_log.resize(int(value))
+    else:
+        return jsonify({"name": name, "enabled": enabled, "restart_required": True})
+    return jsonify({"name": name, "enabled": enabled, "restart_required": False})
 
 
 @app.route("/v1/config/rotation", methods=["POST"])
