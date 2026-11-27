@@ -357,13 +357,14 @@ and a warning is logged at startup.
 ## Key rotation mode
 
 When a provider holds several keys (or several accounts), `ROTATION_MODE` decides how the
-router picks among them. Set it in the dashboard's Configuration panel or with:
+router picks among them. Changing it in the dashboard's Configuration panel applies
+immediately (cooldowns and usage counters are kept). From the command line:
 
 ```bash
 hr mode                # show the current mode
 hr mode round-robin    # default — spread requests evenly across all keys
 hr mode sequential     # drain one key fully before moving to the next
-hr restart             # apply the change
+hr restart             # CLI edits apply after a restart
 ```
 
 - **`round-robin`** (default) — every request goes to the next key in turn, so all keys
